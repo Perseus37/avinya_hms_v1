@@ -1,17 +1,32 @@
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials,OAuth2PasswordBearer
-from sqlalchemy.orm import Session
-from sqlalchemy import select
-from jose import JWTError, jwt
-from models import User, Role
-from database import get_db, get_redis
+"""Shared authentication and authorization dependencies.
 
+These helpers belong to the identity and access domain. They validate bearer
+JWTs and enforce permission-based access control before any healthcare workflow
+can continue.
+"""
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError, jwt
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from database import get_db
+from models import Permission, Role, User
+
+# -----------------------------------------------------------------------------
+# Identity and security configuration
+# -----------------------------------------------------------------------------
 security = HTTPBearer()
-# oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 SECRET_KEY = "super_secret_key"
 ALGORITHM = "HS256"
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)) -> User:
-# def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+) -> User:
+    """Validate an incoming bearer token and return the active authenticated user."""
     token = credentials.credentials
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -20,17 +35,20 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
             raise HTTPException(status_code=401, detail="Invalid token payload")
     except JWTError:
         raise HTTPException(status_code=401, detail="Could not validate credentials")
-        
+
     user = db.execute(select(User).where(User.id == int(user_id))).scalar_one_or_none()
-    if not user :# or not user.is_active:
+    if not user:
         raise HTTPException(status_code=401, detail="User not found or inactive")
     return user
 
+
 def RequirePermission(permission_code: str):
+    """Factory that verifies a user has the required permission before access is granted."""
+
     def dependency(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
         if current_user.is_superuser:
             return True
-            
+
         stmt = (
             select(Permission)
             .join(Role.permissions)
@@ -42,7 +60,8 @@ def RequirePermission(permission_code: str):
         if not perm:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied: Required permission '{permission_code}' missing."
+                detail=f"Access denied: Required permission '{permission_code}' missing.",
             )
         return True
+
     return dependency

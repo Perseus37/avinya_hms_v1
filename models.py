@@ -1,21 +1,31 @@
+"""Core SQLAlchemy models for the Avinya HMS domain.
+
+The model layer is grouped by functional responsibility so the healthcare data
+model reads like an application domain model instead of a flat list of tables.
+"""
+
 from datetime import datetime
 from typing import List, Optional
-from sqlalchemy import String, Integer, Numeric, Boolean, DateTime, ForeignKey, func, Text, Table, Column
+from sqlalchemy import String, Integer, DateTime, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from enum import Enum as PyEnum
 from database import Base
 
-# --- GLOBAL ENUMS ---
+# -----------------------------------------------------------------------------
+# Shared enums
+# -----------------------------------------------------------------------------
 class GenderEnum(str, PyEnum):
     MALE = "MALE"
     FEMALE = "FEMALE"
     OTHER = "OTHER"
+
 
 class UserStatusEnum(str, PyEnum):
     ACTIVE = "ACTIVE"
     SUSPENDED = "SUSPENDED"
     LOCKED = "LOCKED"
     DEACTIVATED = "DEACTIVATED"
+
 
 class WardTypeEnum(str, PyEnum):
     GENERAL = "GENERAL"
@@ -24,11 +34,13 @@ class WardTypeEnum(str, PyEnum):
     NICU = "NICU"
     EMERGENCY = "EMERGENCY"
 
+
 class RoomTypeEnum(str, PyEnum):
     SINGLE = "SINGLE"
     DOUBLE = "DOUBLE"
     DELUXE = "DELUXE"
     DORMITORY = "DORMITORY"
+
 
 class BedTypeEnum(str, PyEnum):
     STANDARD = "STANDARD"
@@ -36,16 +48,19 @@ class BedTypeEnum(str, PyEnum):
     PEDIATRIC = "PEDIATRIC"
     MOTORIZED = "MOTORIZED"
 
+
 class BedStatusEnum(str, PyEnum):
     AVAILABLE = "AVAILABLE"
     OCCUPIED = "OCCUPIED"
     HOUSEKEEPING = "HOUSEKEEPING"
     MAINTENANCE = "MAINTENANCE"
 
+
 class ShiftTypeEnum(str, PyEnum):
     MORNING = "MORNING"
     EVENING = "EVENING"
     NIGHT = "NIGHT"
+
 
 class AllergyCategoryEnum(str, PyEnum):
     DRUG = "DRUG"
@@ -53,11 +68,13 @@ class AllergyCategoryEnum(str, PyEnum):
     ENVIRONMENTAL = "ENVIRONMENTAL"
     OTHER = "OTHER"
 
+
 class AllergySeverityEnum(str, PyEnum):
     MILD = "MILD"
     MODERATE = "MODERATE"
     SEVERE = "SEVERE"
     ANAPHYLACTIC = "ANAPHYLACTIC"
+
 
 class BodySystemEnum(str, PyEnum):
     CARDIOVASCULAR = "CARDIOVASCULAR"
@@ -68,45 +85,53 @@ class BodySystemEnum(str, PyEnum):
     DERMATOLOGICAL = "DERMATOLOGICAL"
 
 
-# ==========================================
-# PHASE 1: IDENTITY & IAM (7 tables)
-# ==========================================
-
+# -----------------------------------------------------------------------------
+# Identity and IAM domain
+# -----------------------------------------------------------------------------
 class Department(Base):
     __tablename__ = "departments"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     ndhm_speciality_code: Mapped[Optional[str]] = mapped_column(String(50))
     is_active: Mapped[bool] = mapped_column(default=True)
 
+
 class Role(Base):
     __tablename__ = "roles"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(String(255))
     is_system_role: Mapped[bool] = mapped_column(default=False)
-    
+
     permissions: Mapped[List["Permission"]] = relationship(secondary="role_permissions", back_populates="roles")
     users: Mapped[List["User"]] = relationship(secondary="user_roles", back_populates="roles")
 
+
 class Permission(Base):
     __tablename__ = "permissions"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(String(255))
     module: Mapped[str] = mapped_column(String(50), nullable=False)
-    
+
     roles: Mapped[List[Role]] = relationship(secondary="role_permissions", back_populates="permissions")
+
 
 class RolePermission(Base):
     __tablename__ = "role_permissions"
+
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
     permission_id: Mapped[int] = mapped_column(ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True)
 
+
 class User(Base):
     __tablename__ = "users"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     login_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     email: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
@@ -119,18 +144,22 @@ class User(Base):
     failed_login_attempts: Mapped[int] = mapped_column(default=0)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     password_changed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    
+
     roles: Mapped[List[Role]] = relationship(secondary="user_roles", back_populates="users")
     doctor_profile: Mapped[Optional["DoctorProfile"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
+
 class UserRole(Base):
     __tablename__ = "user_roles"
+
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
     department_id: Mapped[Optional[int]] = mapped_column(ForeignKey("departments.id", ondelete="SET NULL"))
 
+
 class DoctorProfile(Base):
     __tablename__ = "doctor_profiles"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
     clinical_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
@@ -141,26 +170,28 @@ class DoctorProfile(Base):
     medical_registration_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     registration_valid_till: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     consultation_fee_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    
+
     user: Mapped[User] = relationship(back_populates="doctor_profile")
     department: Mapped[Department] = relationship()
 
 
-# ==========================================
-# PHASE 2: ASSET & WARD MANAGEMENT (5 tables)
-# ==========================================
-
+# -----------------------------------------------------------------------------
+# Facility and ward management domain
+# -----------------------------------------------------------------------------
 class Floor(Base):
     __tablename__ = "floors"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     floor_number: Mapped[int] = mapped_column(unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True)
-    
+
     wards: Mapped[List["Ward"]] = relationship(back_populates="floor")
+
 
 class Ward(Base):
     __tablename__ = "wards"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     floor_id: Mapped[int] = mapped_column(ForeignKey("floors.id"), nullable=False)
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
@@ -168,37 +199,43 @@ class Ward(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     ward_type: Mapped[WardTypeEnum] = mapped_column(nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True)
-    
+
     floor: Mapped[Floor] = relationship(back_populates="wards")
     department: Mapped[Department] = relationship()
     rooms: Mapped[List["PhysicalRoom"]] = relationship(back_populates="ward")
 
+
 class PhysicalRoom(Base):
     __tablename__ = "physical_rooms_master"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     ward_id: Mapped[int] = mapped_column(ForeignKey("wards.id", ondelete="CASCADE"), nullable=False)
     room_number: Mapped[str] = mapped_column(String(20), nullable=False)
     room_type: Mapped[RoomTypeEnum] = mapped_column(nullable=False)
     bed_capacity: Mapped[int] = mapped_column(Integer, nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True)
-    
+
     ward: Mapped[Ward] = relationship(back_populates="rooms")
     beds: Mapped[List["Bed"]] = relationship(back_populates="room")
 
+
 class Bed(Base):
     __tablename__ = "beds_master"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     room_id: Mapped[int] = mapped_column(ForeignKey("physical_rooms_master.id", ondelete="CASCADE"), nullable=False)
     bed_number: Mapped[str] = mapped_column(String(20), nullable=False)
     bed_type: Mapped[BedTypeEnum] = mapped_column(nullable=False)
     status: Mapped[BedStatusEnum] = mapped_column(default=BedStatusEnum.AVAILABLE, nullable=False)
     base_daily_rate_paise: Mapped[int] = mapped_column(Integer, nullable=False)
-    current_admission_id: Mapped[Optional[int]] = mapped_column(Integer) # Unconstrained foreign key for future admissions table
-    
+    current_admission_id: Mapped[Optional[int]] = mapped_column(Integer)  # Future admissions table hook
+
     room: Mapped[PhysicalRoom] = relationship(back_populates="beds")
+
 
 class NursingShiftAssignment(Base):
     __tablename__ = "nursing_shift_assignments"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     ward_id: Mapped[int] = mapped_column(ForeignKey("wards.id"), nullable=False)
     nurse_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
@@ -208,20 +245,22 @@ class NursingShiftAssignment(Base):
     handed_off_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
-# ==========================================
-# PHASE 3: EMR CORE & TAXONOMIES (7 tables)
-# ==========================================
-
+# -----------------------------------------------------------------------------
+# Clinical and EMR master data
+# -----------------------------------------------------------------------------
 class ChiefComplaintMaster(Base):
     __tablename__ = "chief_complaints_master"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
     code: Mapped[str] = mapped_column(String(50), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True)
 
+
 class ComorbidityMaster(Base):
     __tablename__ = "comorbidities_master"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
     code: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -229,8 +268,10 @@ class ComorbidityMaster(Base):
     icd10_code: Mapped[Optional[str]] = mapped_column(String(20))
     is_active: Mapped[bool] = mapped_column(default=True)
 
+
 class AllergyMaster(Base):
     __tablename__ = "allergies_master"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
     code: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -239,8 +280,10 @@ class AllergyMaster(Base):
     default_severity: Mapped[AllergySeverityEnum] = mapped_column(nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True)
 
+
 class DiagnosisMaster(Base):
     __tablename__ = "diagnoses_master"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
     icd10_code: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
@@ -250,8 +293,10 @@ class DiagnosisMaster(Base):
     parent_diagnosis_id: Mapped[Optional[int]] = mapped_column(ForeignKey("diagnoses_master.id"))
     is_active: Mapped[bool] = mapped_column(default=True)
 
+
 class PhysicalExaminationMaster(Base):
     __tablename__ = "physical_examinations_master"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
     body_system: Mapped[BodySystemEnum] = mapped_column(nullable=False)
@@ -259,8 +304,10 @@ class PhysicalExaminationMaster(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True)
 
+
 class Patient(Base):
     __tablename__ = "patients"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     mrn: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -268,8 +315,10 @@ class Patient(Base):
     gender: Mapped[GenderEnum] = mapped_column(nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True)
 
+
 class PatientAllergy(Base):
     __tablename__ = "patient_allergies"
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
     allergy_id: Mapped[int] = mapped_column(ForeignKey("allergies_master.id", ondelete="CASCADE"), nullable=False)
@@ -277,7 +326,7 @@ class PatientAllergy(Base):
     reaction_description: Mapped[Optional[str]] = mapped_column(Text)
     recorded_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True)
-    
+
     patient: Mapped[Patient] = relationship()
     allergy: Mapped[AllergyMaster] = relationship()
     recorded_by: Mapped[User] = relationship()
