@@ -37,6 +37,16 @@ wheels/
 *.egg
 
 # ==========================================
+# ⚗️ Database & Alembic Migrations
+# ==========================================
+# Ignore compiled migration files (but keep the .py scripts)
+alembic/__pycache__/
+alembic/versions/__pycache__/
+
+# If you want to keep your migration history local-only, uncomment the line below:
+# alembic/versions/
+
+# ==========================================
 # 📦 Node.js / Frontend (Vue.js & React)
 # ==========================================
 # Dependency directories
