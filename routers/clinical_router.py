@@ -160,3 +160,21 @@ def deactivate_diagnosis(diagnosis_id: int, db: Session = Depends(get_db), redis
     db.commit()
     invalidate_department_taxonomy_cache(redis, "diagnoses", item.department_id)
     return {"status": "success", "message": f"Diagnosis ID {diagnosis_id} deactivated."}
+
+@router.get("/diagnoses/{department_id}", response_model=TaxonomyResponse)
+def get_department_diagnoses(department_id: int, db: Session = Depends(get_db), redis=Depends(get_redis)):
+    """Retrieves all active ICD-10 diagnoses for a department (cached via Redis)."""
+    items = get_department_taxonomy(redis, db, "diagnoses", department_id)
+    return {"items": items}
+
+@router.get("/comorbidities/{department_id}", response_model=TaxonomyResponse)
+def get_department_comorbidities(department_id: int, db: Session = Depends(get_db), redis=Depends(get_redis)):
+    """Retrieves all active comorbidities for a department (cached via Redis)."""
+    items = get_department_taxonomy(redis, db, "comorbidities", department_id)
+    return {"items": items}
+
+@router.get("/physical-exams/{department_id}", response_model=TaxonomyResponse)
+def get_department_physical_exams(department_id: int, db: Session = Depends(get_db), redis=Depends(get_redis)):
+    """Retrieves all active physical examination taxonomies for a department (cached via Redis)."""
+    items = get_department_taxonomy(redis, db, "physical_exams", department_id)
+    return {"items": items}

@@ -24,8 +24,8 @@ def get_department_taxonomy(redis_client, session: Session, taxonomy: str, depar
         stmt = select(ComorbidityMaster.id, ComorbidityMaster.code, ComorbidityMaster.name, ComorbidityMaster.icd10_code).where(ComorbidityMaster.department_id == department_id, ComorbidityMaster.is_active == True)
         results = [{"id": r.id, "code": r.code, "name": r.name, "icd10_code": r.icd10_code} for r in session.execute(stmt)]
     elif taxonomy == "diagnoses":
-        stmt = select(DiagnosisMaster.id, DiagnosisMaster.icd10_code, DiagnosisMaster.short_description).where(DiagnosisMaster.department_id == department_id, DiagnosisMaster.is_active == True)
-        results = [{"id": r.id, "code": r.icd10_code, "name": r.short_description} for r in session.execute(stmt)]
+        stmt = select(DiagnosisMaster.id, DiagnosisMaster.icd10_code, DiagnosisMaster.short_description, DiagnosisMaster.full_description).where(DiagnosisMaster.department_id == department_id, DiagnosisMaster.is_active == True)
+        results = [{"id": r.id, "icd10_code": r.icd10_code, "short_description": r.short_description, "full_description": r.full_description} for r in session.execute(stmt)]
     elif taxonomy == "physical_exams":
         stmt = select(PhysicalExaminationMaster.id, PhysicalExaminationMaster.code, PhysicalExaminationMaster.name, PhysicalExaminationMaster.body_system).where(PhysicalExaminationMaster.department_id == department_id, PhysicalExaminationMaster.is_active == True)
         results = [{"id": r.id, "code": r.code, "name": r.name, "body_system": r.body_system} for r in session.execute(stmt)]

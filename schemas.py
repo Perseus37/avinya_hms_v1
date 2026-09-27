@@ -76,32 +76,7 @@ class WardUpdate(BaseModel):
     name: Optional[str] = None
     ward_type: Optional[WardTypeEnum] = None
     is_active: Optional[bool] = None
-
-class WardResponse(BaseModel):
-    id: int
-    code: str
-    name: str
-    ward_type: WardTypeEnum
-    model_config = ConfigDict(from_attributes=True)
-
-class RoomCreate(BaseModel):
-    ward_id: int
-    room_number: str
-    room_type: RoomTypeEnum
-    bed_capacity: int
-
-class RoomUpdate(BaseModel):
-    room_number: Optional[str] = None
-    room_type: Optional[RoomTypeEnum] = None
-    bed_capacity: Optional[int] = None
-    is_active: Optional[bool] = None
     
-class BedCreate(BaseModel):
-    room_id: int
-    bed_number: str
-    bed_type: BedTypeEnum
-    base_daily_rate_paise: int
-
 class BedSchema(BaseModel):
     id: int
     bed_number: str
@@ -121,6 +96,31 @@ class WardMapResponse(BaseModel):
     ward_type: WardTypeEnum
     rooms: List[RoomSchema]
     model_config = ConfigDict(from_attributes=True)
+
+class WardResponse(BaseModel):
+    id: int
+    code: str
+    name: str
+    ward_type: WardTypeEnum
+    model_config = ConfigDict(from_attributes=True)
+
+class RoomCreate(BaseModel):
+    ward_id: int
+    room_number: str
+    room_type: RoomTypeEnum
+    bed_capacity: int
+
+class RoomUpdate(BaseModel):
+    room_number: Optional[str] = None
+    room_type: Optional[RoomTypeEnum] = None
+    bed_capacity: Optional[int] = None
+    is_active: Optional[bool] = None
+
+class BedCreate(BaseModel):
+    room_id: int
+    bed_number: str
+    bed_type: BedTypeEnum
+    base_daily_rate_paise: int
 
 class BedStatusUpdate(BaseModel):
     status: BedStatusEnum
