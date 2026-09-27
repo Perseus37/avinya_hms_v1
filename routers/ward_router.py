@@ -115,3 +115,25 @@ def list_wards(db: Session = Depends(get_db), _: bool = Depends(get_current_user
 def list_ward_rooms(ward_id: int, db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
     """Lists all physical rooms associated with a specific ward."""
     return db.query(PhysicalRoom).filter(PhysicalRoom.ward_id == ward_id, PhysicalRoom.is_active == True).all()
+
+@router.put("/floors/{floor_id}", status_code=200)
+def update_floor(floor_id: int, payload: FloorUpdate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    floor = db.get(Floor, floor_id)
+    if not floor:
+        raise HTTPException(status_code=404, detail="Floor not found")
+    if payload.name is not None: floor.name = payload.name
+    if payload.is_active is not None: floor.is_active = payload.is_active
+    db.commit()
+    return {"status": "success", "message": f"Floor ID {floor_id} updated."}
+
+@router.put("/rooms/{room_id}", status_code=200)
+def update_room(room_id: int, payload: RoomUpdate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    room = db.get(PhysicalRoom, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if payload.room_number is not None: room.room_number = payload.room_number
+    if payload.room_type is not None: room.room_type = payload.room_type
+    if payload.bed_capacity is not None: room.bed_capacity = payload.bed_capacity
+    if payload.is_active is not None: room.is_active = payload.is_active
+    db.commit()
+    return {"status": "success", "message": f"Room ID {room_id} updated."}

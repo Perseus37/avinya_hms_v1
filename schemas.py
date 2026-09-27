@@ -61,6 +61,9 @@ class UserMeResponse(BaseModel):
 class FloorCreate(BaseModel):
     floor_number: int
     name: str
+class FloorUpdate(BaseModel):
+    name: Optional[str] = None
+    is_active: Optional[bool] = None
 
 class WardCreate(BaseModel):
     floor_id: int
@@ -87,6 +90,12 @@ class RoomCreate(BaseModel):
     room_type: RoomTypeEnum
     bed_capacity: int
 
+class RoomUpdate(BaseModel):
+    room_number: Optional[str] = None
+    room_type: Optional[RoomTypeEnum] = None
+    bed_capacity: Optional[int] = None
+    is_active: Optional[bool] = None
+    
 class BedCreate(BaseModel):
     room_id: int
     bed_number: str
@@ -129,6 +138,12 @@ class PatientCreate(BaseModel):
     full_name: str
     date_of_birth: datetime
     gender: GenderEnum
+    
+class PatientUpdate(BaseModel):
+    full_name: Optional[str] = None
+    date_of_birth: Optional[datetime] = None
+    gender: Optional[GenderEnum] = None
+    is_active: Optional[bool] = None
 
 class PatientResponse(BaseModel):
     id: int
