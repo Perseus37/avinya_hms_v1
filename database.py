@@ -3,7 +3,8 @@ from sqlalchemy.orm import sessionmaker, DeclarativeBase
 import redis
 
 # Database Configurations
-DATABASE_URL = "postgresql://user:password@localhost:5432/avinya_hms"
+DATABASE_URL = "postgresql://user:password@127.0.0.1:5432/avinya_hms"
+# DATABASE_URL = "postgresql://user:password@localhost:5432/avinya_hms"
 REDIS_URL = "redis://localhost:6379/0"
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=20)

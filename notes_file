@@ -1,0 +1,18 @@
+docker exec -it avinya_hms-db-1 psql -U user -d avinya_hms
+
+INSERT INTO roles
+VALUES (1, 'Administrator','Admistartive privilages', TRUE, TRUE, TRUE);
+
+select * from users;
+
+
+{
+  "email": "admin@avinya.com",
+  "password": "secure",
+  "name": "Super Admin",
+  "role_id": 1,
+  "doctor_profile": {
+    "department_id": 0,
+    "doctor_code": "string"
+  }
+}
