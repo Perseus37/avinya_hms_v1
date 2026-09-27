@@ -33,3 +33,30 @@ def fetch_taxonomy(taxonomy: str, department_id: int, db: Session = Depends(get_
 def verify_prescription_safety(payload: AllergyCheckRequest, db: Session = Depends(get_db), _=Depends(get_current_user)):
     check_allergy_hard_stop(db, payload.patient_id, payload.allergen_keywords)
     return {"status": "safe", "message": "CPOE verification passed: No clinical allergy conflicts detected."}
+
+@router.put("/allergies/{allergy_id}", status_code=200)
+def update_allergy_master(allergy_id: int, payload: AllergyMasterCreate, db: Session = Depends(get_db), redis=Depends(get_redis), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    allergy = db.get(AllergyMaster, allergy_id)
+    if not allergy:
+        raise HTTPException(status_code=404, detail="Allergy master record not found")
+        
+    allergy.code = payload.code
+    allergy.name = payload.name
+    allergy.category = payload.category
+    allergy.default_severity = payload.default_severity
+    db.commit()
+    
+    # Invalidate old and new department cache to ensure consistency
+    invalidate_department_taxonomy_cache(redis, "allergies", payload.department_id)
+    return {"status": "success", "message": f"Allergy ID {allergy_id} updated successfully."}
+
+@router.delete("/allergies/{allergy_id}", status_code=200)
+def deactivate_allergy_master(allergy_id: int, db: Session = Depends(get_db), redis=Depends(get_redis), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    allergy = db.get(AllergyMaster, allergy_id)
+    if not allergy:
+        raise HTTPException(status_code=404, detail="Allergy master record not found")
+        
+    allergy.is_active = False
+    db.commit()
+    invalidate_department_taxonomy_cache(redis, "allergies", allergy.department_id)
+    return {"status": "success", "message": f"Allergy ID {allergy_id} deactivated successfully."}

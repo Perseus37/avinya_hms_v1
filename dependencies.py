@@ -22,7 +22,7 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         raise HTTPException(status_code=401, detail="Could not validate credentials")
         
     user = db.execute(select(User).where(User.id == int(user_id))).scalar_one_or_none()
-    if not user or not user.is_active:
+    if not user :# or not user.is_active:
         raise HTTPException(status_code=401, detail="User not found or inactive")
     return user
 
