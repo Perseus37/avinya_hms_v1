@@ -1,7 +1,7 @@
 import json
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-from models import AllergyMaster
+from models import AllergyMaster, ChiefComplaintMaster, ComorbidityMaster
 
 def get_department_taxonomy(redis_client, session: Session, taxonomy: str, department_id: int):
     cache_key = f"taxonomy:{taxonomy}:{department_id}"
@@ -10,13 +10,17 @@ def get_department_taxonomy(redis_client, session: Session, taxonomy: str, depar
     if cached_data:
         return json.loads(cached_data)
         
+    results = []
     if taxonomy == "allergies":
-        stmt = select(AllergyMaster.id, AllergyMaster.name).where(AllergyMaster.is_active == True)
-        results = [{"id": row.id, "name": row.name} for row in session.execute(stmt)]
-        redis_client.setex(cache_key, 3600, json.dumps(results))
-        return results
+        stmt = select(AllergyMaster.id, AllergyMaster.code, AllergyMaster.name).where(AllergyMaster.department_id == department_id, AllergyMaster.is_active == True)
+        results = [{"id": r.id, "code": r.code, "name": r.name} for r in session.execute(stmt)]
+    elif taxonomy == "complaints":
+        stmt = select(ChiefComplaintMaster.id, ChiefComplaintMaster.code, ChiefComplaintMaster.name).where(ChiefComplaintMaster.department_id == department_id, ChiefComplaintMaster.is_active == True)
+        results = [{"id": r.id, "code": r.code, "name": r.name} for r in session.execute(stmt)]
         
-    return []
+    if results:
+        redis_client.setex(cache_key, 3600, json.dumps(results))
+    return results
 
 def invalidate_department_taxonomy_cache(redis_client, taxonomy: str, department_id: int):
     cache_key = f"taxonomy:{taxonomy}:{department_id}"

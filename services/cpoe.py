@@ -9,13 +9,13 @@ def check_allergy_hard_stop(session: Session, patient_id: int, allergen_keywords
         select(AllergyMaster.name)
         .join(PatientAllergy, PatientAllergy.allergy_id == AllergyMaster.id)
         .where(PatientAllergy.patient_id == patient_id)
+        .where(PatientAllergy.is_active == True)
         .where(AllergyMaster.name.in_(allergen_keywords))
     )
-    
     conflicts = session.execute(stmt).scalars().all()
     if conflicts:
         raise HTTPException(
             status_code=409, 
-            detail=f"CPOE HARD STOP: Patient has severe allergy to {', '.join(conflicts)}"
+            detail=f"CPOE SAFETY HARD STOP: Patient has active recorded allergy to {', '.join(conflicts)}"
         )
     return True

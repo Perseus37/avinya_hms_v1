@@ -4,6 +4,7 @@ import redis
 
 # Database Configurations
 DATABASE_URL = "postgresql://user:password@127.0.0.1:5432/avinya_hms"
+# DATABASE_URL = "postgresql+psycopg2://user:password@127.0.0.1:5432/avinya_hms"
 # DATABASE_URL = "postgresql://user:password@localhost:5432/avinya_hms"
 REDIS_URL = "redis://localhost:6379/0"
 

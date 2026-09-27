@@ -19,11 +19,13 @@ if config.config_file_name is not None:
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
 # target_metadata = None
+
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from models import Base
+# target_metadata = None  <-- Find and replace this line with the one below
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
