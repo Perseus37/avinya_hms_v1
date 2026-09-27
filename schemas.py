@@ -6,7 +6,7 @@ and response payloads stay easy to follow and maintain.
 
 from pydantic import BaseModel, EmailStr, ConfigDict
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, Generic, TypeVar, List
 from models import (
     GenderEnum,
     UserStatusEnum,
@@ -20,6 +20,17 @@ from models import (
     ShiftTypeEnum,
 )
 
+# -----------------------------------------------------------------------------
+# Shared generic schemas
+# -----------------------------------------------------------------------------
+T = TypeVar("T")
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    success: bool = True
+    total: int
+    page: int
+    size: int
+    items: List[T]
 # -----------------------------------------------------------------------------
 # Authentication and IAM schemas
 # -----------------------------------------------------------------------------

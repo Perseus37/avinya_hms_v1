@@ -11,9 +11,11 @@ from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from database import get_db
-from dependencies import ALGORITHM, SECRET_KEY, RequirePermission, get_current_user
+from dependencies import RequirePermission, get_current_user
 from models import DoctorProfile, Role, User, UserRole, UserStatusEnum
 from schemas import RoleCreate, RoleResponse, TokenResponse, UserCreate, UserLogin, UserMeResponse
+
+from config import settings
 
 router = APIRouter(prefix="/api/auth", tags=["IAM & Auth"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -28,7 +30,7 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
     if not user or not pwd_context.verify(payload.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    token = jwt.encode({"sub": str(user.id)}, SECRET_KEY, algorithm=ALGORITHM)
+    token = jwt.encode({"sub": str(user.id)}, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return {"access_token": token, "token_type": "bearer"}
 
 

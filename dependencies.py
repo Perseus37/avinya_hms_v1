@@ -13,14 +13,12 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Permission, Role, User
+from config import settings
 
 # -----------------------------------------------------------------------------
 # Identity and security configuration
 # -----------------------------------------------------------------------------
 security = HTTPBearer()
-SECRET_KEY = "super_secret_key"
-ALGORITHM = "HS256"
-
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -29,7 +27,7 @@ def get_current_user(
     """Validate an incoming bearer token and return the active authenticated user."""
     token = credentials.credentials
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         user_id = payload.get("sub")
         if not isinstance(user_id, str) or not user_id:
             raise HTTPException(status_code=401, detail="Invalid token payload")
@@ -48,7 +46,7 @@ def RequirePermission(permission_code: str):
     def dependency(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
         if current_user.is_superuser:
             return True
-
+                     
         stmt = (
             select(Permission)
             .join(Role.permissions)
@@ -60,8 +58,7 @@ def RequirePermission(permission_code: str):
         if not perm:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied: Required permission '{permission_code}' missing.",
+                detail=f"Access denied: Required permission '{permission_code}' missing."
             )
         return True
-
     return dependency

@@ -10,6 +10,9 @@ from sqlalchemy import String, Integer, DateTime, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from enum import Enum as PyEnum
 from database import Base
+from datetime import datetime, timezone
+from sqlalchemy import DateTime, func
+from sqlalchemy.orm import Mapped, mapped_column
 
 # -----------------------------------------------------------------------------
 # Shared enums
@@ -84,6 +87,21 @@ class BodySystemEnum(str, PyEnum):
     MUSCULOSKELETAL = "MUSCULOSKELETAL"
     DERMATOLOGICAL = "DERMATOLOGICAL"
 
+# -----------------------------------------------------------------------------
+# Auditing mixin for timestamp fields
+# -----------------------------------------------------------------------------
+class TimestampMixin:
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        server_default=func.now(), 
+        nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        server_default=func.now(), 
+        onupdate=lambda: datetime.now(timezone.utc), 
+        nullable=False
+    )
 
 # -----------------------------------------------------------------------------
 # Identity and IAM domain
