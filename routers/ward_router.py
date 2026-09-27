@@ -5,6 +5,8 @@ from database import get_db
 from dependencies import RequirePermission
 from schemas import WardMapResponse, BedStatusUpdate, FloorCreate, WardUpdate, RoomCreate, BedCreate, ShiftAssignmentCreate
 from models import Ward, PhysicalRoom, Bed, BedStatusEnum,NursingShiftAssignment,Floor, NursingShiftAssignment
+from datetime import timezone
+
 router = APIRouter(prefix="/api/ip", tags=["Ward & Asset Management"])
 
 @router.get("/beds/map-view", response_model=list[WardMapResponse])
@@ -88,3 +90,21 @@ def create_bed(payload: BedCreate, db: Session = Depends(get_db), _: bool = Depe
     db.add(bed)
     db.commit()
     return {"status": "success", "bed_id": bed.id}
+
+@router.get("/wards/{ward_id}/shifts", status_code=200)
+def get_ward_shifts(ward_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("view_ward_map"))):
+    """Retrieves all nursing shift assignments for a specific ward."""
+    shifts = db.query(NursingShiftAssignment).filter(NursingShiftAssignment.ward_id == ward_id).all()
+    return shifts
+
+@router.patch("/shifts/{shift_id}/handoff", status_code=200)
+def complete_shift_handoff(shift_id: int, handoff_notes: str, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("view_ward_map"))):
+    """Completes a nursing shift handoff by recording handover notes and timestamp."""
+    shift = db.get(NursingShiftAssignment, shift_id)
+    if not shift:
+        raise HTTPException(status_code=404, detail="Nursing shift assignment not found.")
+        
+    shift.handoff_notes = handoff_notes
+    shift.handed_off_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"status": "success", "message": f"Shift ID {shift_id} handoff completed."}

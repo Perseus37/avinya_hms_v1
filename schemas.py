@@ -158,3 +158,24 @@ class PhysicalExamCreate(BaseModel):
     body_system: BodySystemEnum
     code: str
     name: str
+# --- PATIENT & CLINICAL CHARTING SCHEMAS ---
+class PatientCreate(BaseModel):
+    mrn: str
+    full_name: str
+    date_of_birth: datetime
+    gender: GenderEnum
+
+class PatientResponse(BaseModel):
+    id: int
+    mrn: str
+    full_name: str
+    date_of_birth: datetime
+    gender: GenderEnum
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
+
+class PatientAllergyCreate(BaseModel):
+    patient_id: int
+    allergy_id: int
+    severity: AllergySeverityEnum
+    reaction_description: Optional[str] = None
