@@ -48,7 +48,6 @@ def run_seed():
         db.add_all([admin_role, doctor_role])
         db.flush()
 
-        # Map admin to all permissions
         admin_role.permissions.extend([p1, p2, p3])
         doctor_role.permissions.extend([p1, p3])
         db.flush()
@@ -79,11 +78,9 @@ def run_seed():
         db.add_all([admin_user, doctor_user])
         db.flush()
 
-        # Link users to roles and departments via user_roles
         db.add(UserRole(user_id=admin_user.id, role_id=admin_role.id, department_id=dept_emergency.id))
         db.add(UserRole(user_id=doctor_user.id, role_id=doctor_role.id, department_id=dept_cardio.id))
         
-        # Add Doctor Profile extension
         doc_profile = DoctorProfile(
             user_id=doctor_user.id,
             clinical_id="DOC-CARD-001",
@@ -93,13 +90,13 @@ def run_seed():
             medical_council_name="State Medical Council",
             medical_registration_number="SMC-994821",
             registration_valid_till=datetime(2030, 12, 31, tzinfo=timezone.utc),
-            consultation_fee_paise=150000 # 1500.00 currency units
+            consultation_fee_paise=150000
         )
         db.add(doc_profile)
         db.flush()
         logger.info("Users and doctor profiles seeded successfully.")
 
-        # 5. Seed Infrastructure (Floors, Wards, Rooms, Beds)
+        # 5. Seed Infrastructure
         logger.info("Seeding physical ward infrastructure...")
         floor_3 = Floor(floor_number=3, name="Third Floor - Critical Care", is_active=True)
         db.add(floor_3)
@@ -131,20 +128,20 @@ def run_seed():
             bed_number="301-A",
             bed_type=BedTypeEnum.MOTORIZED,
             status=BedStatusEnum.AVAILABLE,
-            base_daily_rate_paise=500000 # 5000.00
+            base_daily_rate_paise=500000
         )
         bed_b = Bed(
             room_id=room_301.id,
             bed_number="301-B",
             bed_type=BedTypeEnum.ICU,
             status=BedStatusEnum.AVAILABLE,
-            base_daily_rate_paise=750000 # 7500.00
+            base_daily_rate_paise=750000
         )
         db.add_all([bed_a, bed_b])
         db.flush()
         logger.info("Infrastructure hierarchy seeded successfully.")
 
-        # 6. Seed Clinical Taxonomies & CPOE Test Data
+        # 6. Seed Clinical Taxonomies & Patient Safety Profiles
         logger.info("Seeding clinical taxonomies and sample patient safety profiles...")
         allergy_penicillin = AllergyMaster(
             department_id=dept_cardio.id,
@@ -177,7 +174,6 @@ def run_seed():
         )
         db.add(patient_allergy)
         db.commit()
-        logger.info("Clinical taxonomies and safety interceptor test profiles seeded successfully.")
         logger.info("Database seeding completed with status: SUCCESS")
 
     except Exception as e:

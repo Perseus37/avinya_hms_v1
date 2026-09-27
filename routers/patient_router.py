@@ -9,7 +9,6 @@ router = APIRouter(prefix="/api/patients", tags=["Patient Management & EMR"])
 
 @router.post("", response_model=PatientResponse, status_code=status.HTTP_201_CREATED)
 def register_patient(payload: PatientCreate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
-    """Registers a new patient into the hospital system."""
     existing = db.query(Patient).filter(Patient.mrn == payload.mrn).first()
     if existing:
         raise HTTPException(status_code=409, detail="Patient with this MRN already exists.")
@@ -28,12 +27,10 @@ def register_patient(payload: PatientCreate, db: Session = Depends(get_db), _: b
 
 @router.get("", response_model=list[PatientResponse])
 def list_patients(db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
-    """Retrieves all active hospital patients."""
     return db.query(Patient).filter(Patient.is_active == True).all()
 
 @router.post("/allergies", status_code=status.HTTP_201_CREATED)
 def chart_patient_allergy(payload: PatientAllergyCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Charts an active allergy relation for a patient (triggers CPOE safety checks later)."""
     patient_allergy = PatientAllergy(
         patient_id=payload.patient_id,
         allergy_id=payload.allergy_id,

@@ -87,3 +87,29 @@ def assign_user_department(user_id: int, department_id: int, role_id: int, db: S
     
     db.commit()
     return {"status": "success", "message": f"User ID {user_id} mapped to Department ID {department_id}"}
+
+from schemas import RoleCreate, RoleResponse
+from models import Role
+
+@router.post("/roles", response_model=RoleResponse, status_code=status.HTTP_201_CREATED)
+def create_role(payload: RoleCreate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    """Creates a new enterprise system role."""
+    existing = db.query(Role).filter(Role.name == payload.name).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Role name already exists.")
+    
+    role = Role(
+        code=f"ROLE_{payload.name.upper().replace(' ', '_')}",
+        name=payload.name,
+        description=payload.description,
+        is_system_role=False
+    )
+    db.add(role)
+    db.commit()
+    db.refresh(role)
+    return role
+
+@router.get("/roles", response_model=list[RoleResponse])
+def list_roles(db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
+    """Lists all available system roles."""
+    return db.query(Role).all()

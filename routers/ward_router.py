@@ -1,11 +1,11 @@
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select
 from database import get_db
 from dependencies import RequirePermission
 from schemas import WardMapResponse, BedStatusUpdate, FloorCreate, WardUpdate, RoomCreate, BedCreate, ShiftAssignmentCreate
-from models import Ward, PhysicalRoom, Bed, BedStatusEnum,NursingShiftAssignment,Floor, NursingShiftAssignment
-from datetime import timezone
+from models import Ward, PhysicalRoom, Bed, BedStatusEnum, NursingShiftAssignment, Floor
 
 router = APIRouter(prefix="/api/ip", tags=["Ward & Asset Management"])
 
@@ -33,19 +33,6 @@ def update_bed_status(bed_id: int, payload: BedStatusUpdate, db: Session = Depen
         db.rollback()
         raise HTTPException(status_code=409, detail="Bed record is currently locked by a concurrent admission transaction.")
 
-@router.post("/shifts", status_code=201)
-def assign_nursing_shift(payload: ShiftAssignmentCreate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("view_ward_map"))):
-    assignment = NursingShiftAssignment(
-        ward_id=payload.ward_id,
-        nurse_user_id=payload.nurse_user_id,
-        shift_type=payload.shift_type,
-        shift_date=payload.shift_date,
-        handoff_notes=payload.handoff_notes
-    )
-    db.add(assignment)
-    db.commit()
-    return {"status": "success", "message": "Nursing shift assigned and handoff log initialized."}
-
 @router.post("/floors", status_code=201)
 def create_floor(payload: FloorCreate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
     floor = Floor(floor_number=payload.floor_number, name=payload.name, is_active=True)
@@ -58,7 +45,7 @@ def update_ward(ward_id: int, payload: WardUpdate, db: Session = Depends(get_db)
     ward = db.get(Ward, ward_id)
     if not ward:
         raise HTTPException(status_code=404, detail="Ward not found")
-    
+        
     if payload.name is not None: ward.name = payload.name
     if payload.ward_type is not None: ward.ward_type = payload.ward_type
     if payload.is_active is not None: ward.is_active = payload.is_active
@@ -91,15 +78,25 @@ def create_bed(payload: BedCreate, db: Session = Depends(get_db), _: bool = Depe
     db.commit()
     return {"status": "success", "bed_id": bed.id}
 
+@router.post("/shifts", status_code=201)
+def assign_nursing_shift(payload: ShiftAssignmentCreate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("view_ward_map"))):
+    assignment = NursingShiftAssignment(
+        ward_id=payload.ward_id,
+        nurse_user_id=payload.nurse_user_id,
+        shift_type=payload.shift_type,
+        shift_date=payload.shift_date,
+        handoff_notes=payload.handoff_notes
+    )
+    db.add(assignment)
+    db.commit()
+    return {"status": "success", "message": "Nursing shift assigned and handoff log initialized."}
+
 @router.get("/wards/{ward_id}/shifts", status_code=200)
 def get_ward_shifts(ward_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("view_ward_map"))):
-    """Retrieves all nursing shift assignments for a specific ward."""
-    shifts = db.query(NursingShiftAssignment).filter(NursingShiftAssignment.ward_id == ward_id).all()
-    return shifts
+    return db.query(NursingShiftAssignment).filter(NursingShiftAssignment.ward_id == ward_id).all()
 
 @router.patch("/shifts/{shift_id}/handoff", status_code=200)
 def complete_shift_handoff(shift_id: int, handoff_notes: str, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("view_ward_map"))):
-    """Completes a nursing shift handoff by recording handover notes and timestamp."""
     shift = db.get(NursingShiftAssignment, shift_id)
     if not shift:
         raise HTTPException(status_code=404, detail="Nursing shift assignment not found.")
@@ -108,3 +105,13 @@ def complete_shift_handoff(shift_id: int, handoff_notes: str, db: Session = Depe
     shift.handed_off_at = datetime.now(timezone.utc)
     db.commit()
     return {"status": "success", "message": f"Shift ID {shift_id} handoff completed."}
+
+@router.get("/wards", response_model=list[WardResponse])
+def list_wards(db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
+    """Lists all active hospital wards."""
+    return db.query(Ward).filter(Ward.is_active == True).all()
+
+@router.get("/wards/{ward_id}/rooms", status_code=200)
+def list_ward_rooms(ward_id: int, db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
+    """Lists all physical rooms associated with a specific ward."""
+    return db.query(PhysicalRoom).filter(PhysicalRoom.ward_id == ward_id, PhysicalRoom.is_active == True).all()

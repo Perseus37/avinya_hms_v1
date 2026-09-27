@@ -1,8 +1,10 @@
 from pydantic import BaseModel, EmailStr, ConfigDict
 from datetime import datetime
 from typing import Optional, List
-from models import GenderEnum, UserStatusEnum, WardTypeEnum, RoomTypeEnum, BedTypeEnum, BedStatusEnum, AllergyCategoryEnum, AllergySeverityEnum, BodySystemEnum, ShiftTypeEnum
-
+from models import (
+    GenderEnum, UserStatusEnum, WardTypeEnum, RoomTypeEnum, BedTypeEnum, 
+    BedStatusEnum, AllergyCategoryEnum, AllergySeverityEnum, BodySystemEnum, ShiftTypeEnum
+)
 
 # --- AUTH & IAM SCHEMAS ---
 class UserLogin(BaseModel):
@@ -55,7 +57,7 @@ class UserMeResponse(BaseModel):
     roles: List[RoleResponse]
     model_config = ConfigDict(from_attributes=True)
 
-# --- WARD & ASSET MANAGEMENT ---
+# --- WARD & ASSET MANAGEMENT SCHEMAS ---
 class FloorCreate(BaseModel):
     floor_number: int
     name: str
@@ -74,7 +76,9 @@ class WardUpdate(BaseModel):
 
 class WardResponse(BaseModel):
     id: int
+    code: str
     name: str
+    ward_type: WardTypeEnum
     model_config = ConfigDict(from_attributes=True)
 
 class RoomCreate(BaseModel):
@@ -106,6 +110,7 @@ class WardMapResponse(BaseModel):
     code: str
     name: str
     ward_type: WardTypeEnum
+    rooms: List[RoomSchema]
     model_config = ConfigDict(from_attributes=True)
 
 class BedStatusUpdate(BaseModel):
@@ -118,7 +123,28 @@ class ShiftAssignmentCreate(BaseModel):
     shift_date: datetime
     handoff_notes: Optional[str] = None
 
-# --- CLINICAL TAXONOMY & CPOE ---
+# --- PATIENT & CLINICAL SCHEMAS ---
+class PatientCreate(BaseModel):
+    mrn: str
+    full_name: str
+    date_of_birth: datetime
+    gender: GenderEnum
+
+class PatientResponse(BaseModel):
+    id: int
+    mrn: str
+    full_name: str
+    date_of_birth: datetime
+    gender: GenderEnum
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
+
+class PatientAllergyCreate(BaseModel):
+    patient_id: int
+    allergy_id: int
+    severity: AllergySeverityEnum
+    reaction_description: Optional[str] = None
+
 class AllergyMasterCreate(BaseModel):
     department_id: int
     code: str
@@ -133,7 +159,6 @@ class AllergyCheckRequest(BaseModel):
 class TaxonomyResponse(BaseModel):
     items: List[dict]
 
-# --- EMR CLINICAL TAXONOMY SCHEMAS ---
 class ChiefComplaintCreate(BaseModel):
     department_id: int
     code: str
@@ -158,24 +183,3 @@ class PhysicalExamCreate(BaseModel):
     body_system: BodySystemEnum
     code: str
     name: str
-# --- PATIENT & CLINICAL CHARTING SCHEMAS ---
-class PatientCreate(BaseModel):
-    mrn: str
-    full_name: str
-    date_of_birth: datetime
-    gender: GenderEnum
-
-class PatientResponse(BaseModel):
-    id: int
-    mrn: str
-    full_name: str
-    date_of_birth: datetime
-    gender: GenderEnum
-    is_active: bool
-    model_config = ConfigDict(from_attributes=True)
-
-class PatientAllergyCreate(BaseModel):
-    patient_id: int
-    allergy_id: int
-    severity: AllergySeverityEnum
-    reaction_description: Optional[str] = None

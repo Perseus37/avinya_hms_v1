@@ -1,11 +1,14 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from database import get_db, get_redis
 from dependencies import get_current_user, RequirePermission
-from schemas import AllergyCheckRequest, TaxonomyResponse, AllergyMasterCreate
+from schemas import (
+    AllergyCheckRequest, TaxonomyResponse, AllergyMasterCreate, 
+    ChiefComplaintCreate, ComorbidityCreate, DiagnosisCreate
+)
 from services.taxonomy_cache import get_department_taxonomy, invalidate_department_taxonomy_cache
 from services.cpoe import check_allergy_hard_stop
-from models import AllergyMaster
+from models import AllergyMaster, ChiefComplaintMaster, ComorbidityMaster, DiagnosisMaster
 
 router = APIRouter(prefix="/api/clinical", tags=["Clinical Core & EMR"])
 
@@ -23,6 +26,30 @@ def create_allergy_master(payload: AllergyMasterCreate, db: Session = Depends(ge
     db.commit()
     invalidate_department_taxonomy_cache(redis, "allergies", payload.department_id)
     return {"status": "success", "message": "Allergy master created and cache busted."}
+
+@router.post("/complaints", status_code=201)
+def create_chief_complaint(payload: ChiefComplaintCreate, db: Session = Depends(get_db), redis=Depends(get_redis), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    item = ChiefComplaintMaster(department_id=payload.department_id, code=payload.code, name=payload.name, is_active=True)
+    db.add(item)
+    db.commit()
+    invalidate_department_taxonomy_cache(redis, "complaints", payload.department_id)
+    return {"status": "success", "message": "Chief complaint created."}
+
+@router.post("/diagnoses", status_code=201)
+def create_diagnosis(payload: DiagnosisCreate, db: Session = Depends(get_db), redis=Depends(get_redis), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    item = DiagnosisMaster(
+        department_id=payload.department_id,
+        icd10_code=payload.icd10_code,
+        short_description=payload.short_description,
+        full_description=payload.full_description,
+        is_billable=payload.is_billable,
+        parent_diagnosis_id=payload.parent_diagnosis_id,
+        is_active=True
+    )
+    db.add(item)
+    db.commit()
+    invalidate_department_taxonomy_cache(redis, "diagnoses", payload.department_id)
+    return {"status": "success", "message": f"ICD-10 Diagnosis {payload.icd10_code} created."}
 
 @router.get("/taxonomy/{taxonomy}/{department_id}", response_model=TaxonomyResponse)
 def fetch_taxonomy(taxonomy: str, department_id: int, db: Session = Depends(get_db), redis=Depends(get_redis)):
@@ -45,8 +72,6 @@ def update_allergy_master(allergy_id: int, payload: AllergyMasterCreate, db: Ses
     allergy.category = payload.category
     allergy.default_severity = payload.default_severity
     db.commit()
-    
-    # Invalidate old and new department cache to ensure consistency
     invalidate_department_taxonomy_cache(redis, "allergies", payload.department_id)
     return {"status": "success", "message": f"Allergy ID {allergy_id} updated successfully."}
 
@@ -60,3 +85,36 @@ def deactivate_allergy_master(allergy_id: int, db: Session = Depends(get_db), re
     db.commit()
     invalidate_department_taxonomy_cache(redis, "allergies", allergy.department_id)
     return {"status": "success", "message": f"Allergy ID {allergy_id} deactivated successfully."}
+
+from schemas import ComorbidityCreate, PhysicalExamCreate
+from models import ComorbidityMaster, PhysicalExaminationMaster
+
+@router.post("/comorbidities", status_code=201)
+def create_comorbidity(payload: ComorbidityCreate, db: Session = Depends(get_db), redis=Depends(get_redis), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    """Creates a master comorbidity definition linked to a department."""
+    item = ComorbidityMaster(
+        department_id=payload.department_id,
+        code=payload.code,
+        name=payload.name,
+        icd10_code=payload.icd10_code,
+        is_active=True
+    )
+    db.add(item)
+    db.commit()
+    invalidate_department_taxonomy_cache(redis, "comorbidities", payload.department_id)
+    return {"status": "success", "message": "Comorbidity master created."}
+
+@router.post("/physical-exams", status_code=201)
+def create_physical_exam(payload: PhysicalExamCreate, db: Session = Depends(get_db), redis=Depends(get_redis), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    """Creates a physical examination taxonomy master definition."""
+    item = PhysicalExaminationMaster(
+        department_id=payload.department_id,
+        body_system=payload.body_system,
+        code=payload.code,
+        name=payload.name,
+        is_active=True
+    )
+    db.add(item)
+    db.commit()
+    invalidate_department_taxonomy_cache(redis, "physical_exams", payload.department_id)
+    return {"status": "success", "message": "Physical examination master created."}
