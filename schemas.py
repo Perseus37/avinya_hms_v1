@@ -150,6 +150,14 @@ class WardResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class FloorResponse(BaseModel):
+    id: int
+    floor_number: int
+    name: str
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
 class RoomCreate(BaseModel):
     ward_id: int
     room_number: str

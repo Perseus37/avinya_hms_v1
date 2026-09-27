@@ -16,9 +16,14 @@ from models import (
     AllergyCategoryEnum,
     AllergyMaster,
     AllergySeverityEnum,
+    BodySystemEnum,
+    ChiefComplaintMaster,
     Department,
+    Floor,
     Patient,
     PatientAllergy,
+    PhysicalExaminationMaster,
+    PhysicalRoom,
     Role,
     User,
     UserStatusEnum,
@@ -198,7 +203,11 @@ def test_patient_api_and_clinical_safety(client):
 
     list_response = client.get("/api/patients")
     assert list_response.status_code == 200
-    assert isinstance(list_response.json(), list)
+    payload = list_response.json()
+    assert "items" in payload
+    assert "total" in payload
+    assert "page" in payload
+    assert "page_size" in payload
 
     allergy_response = client.post(
         "/api/clinical/allergies",
@@ -222,8 +231,12 @@ def test_patient_api_and_clinical_safety(client):
 def test_ward_api_routes(client):
     session = TestingSessionLocal()
     try:
+        floor = Floor(floor_number=2, name="Second Floor", is_active=True)
+        session.add(floor)
+        session.commit()
+
         ward = Ward(
-            floor_id=1,
+            floor_id=floor.id,
             department_id=1,
             code="WARD-101",
             name="Ward 101",
@@ -231,6 +244,16 @@ def test_ward_api_routes(client):
             is_active=True,
         )
         session.add(ward)
+        session.commit()
+
+        room = PhysicalRoom(
+            ward_id=ward.id,
+            room_number="401",
+            room_type="SINGLE",
+            bed_capacity=1,
+            is_active=True,
+        )
+        session.add(room)
         session.commit()
     finally:
         session.close()
@@ -263,6 +286,82 @@ def test_ward_api_routes(client):
     )
     assert bed_response.status_code in {200, 201}
 
+    floors_response = client.get("/api/ip/floors?page=1&page_size=10")
+    assert floors_response.status_code == 200
+    body = floors_response.json()
+    assert "items" in body
+    assert "total" in body
+    assert "page" in body
+    assert "page_size" in body
+
+    deactivated_ward = client.delete("/api/ip/wards/1")
+    assert deactivated_ward.status_code == 200
+
+    deactivated_room = client.delete("/api/ip/rooms/1")
+    assert deactivated_room.status_code == 200
+
+    deactivated_bed = client.delete("/api/ip/beds/1")
+    assert deactivated_bed.status_code == 200
+
     map_response = client.get("/api/ip/beds/map-view")
     assert map_response.status_code == 200
     assert isinstance(map_response.json(), list)
+
+
+def test_pagination_contract_for_patient_list(client):
+    response = client.get("/api/patients?page=1&page_size=5")
+    assert response.status_code == 200
+    body = response.json()
+    assert "items" in body
+    assert "total" in body
+    assert "page" in body
+    assert "page_size" in body
+
+
+def test_clinical_master_update_and_delete_routes(client):
+    session = TestingSessionLocal()
+    try:
+        complaint = ChiefComplaintMaster(
+            department_id=1,
+            code="CC-001",
+            name="Chest pain",
+            is_active=True,
+        )
+        exam = PhysicalExaminationMaster(
+            department_id=1,
+            body_system=BodySystemEnum.CARDIOVASCULAR,
+            code="EX-001",
+            name="Blood pressure",
+            is_active=True,
+        )
+        session.add_all([complaint, exam])
+        session.commit()
+    finally:
+        session.close()
+
+    complaint_update = client.put(
+        "/api/clinical/complaints/1",
+        json={
+            "department_id": 1,
+            "code": "CC-002",
+            "name": "Shortness of breath",
+        },
+    )
+    assert complaint_update.status_code == 200
+
+    complaint_delete = client.delete("/api/clinical/complaints/1")
+    assert complaint_delete.status_code == 200
+
+    exam_update = client.put(
+        "/api/clinical/physical-exams/1",
+        json={
+            "department_id": 1,
+            "body_system": "CARDIOVASCULAR",
+            "code": "EX-002",
+            "name": "Pulse rate",
+        },
+    )
+    assert exam_update.status_code == 200
+
+    exam_delete = client.delete("/api/clinical/physical-exams/1")
+    assert exam_delete.status_code == 200

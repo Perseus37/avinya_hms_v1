@@ -18,7 +18,9 @@ from schemas import (
     BedCreate,
     BedStatusUpdate,
     FloorCreate,
+    FloorResponse,
     FloorUpdate,
+    PaginatedResponse,
     RoomCreate,
     RoomUpdate,
     ShiftAssignmentCreate,
@@ -32,16 +34,62 @@ router = APIRouter(prefix="/api/ip", tags=["Ward & Asset Management"])
 # -----------------------------------------------------------------------------
 # Ward and facility master data domain
 # -----------------------------------------------------------------------------
-@router.get("/wards", response_model=list[WardResponse])
-def list_wards(db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
-    """Lists all active hospital wards."""
-    return db.query(Ward).filter(Ward.is_active == True).all()
+@router.get("/wards", response_model=PaginatedResponse[WardResponse])
+def list_wards(
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    _: bool = Depends(get_current_user),
+):
+    """Lists active hospital wards with pagination support."""
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Page must be greater than 0")
+    if page_size < 1 or page_size > 200:
+        raise HTTPException(status_code=400, detail="Page size must be between 1 and 200")
+
+    query = db.query(Ward).filter(Ward.is_active == True)
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-@router.get("/wards/{ward_id}/rooms", status_code=200)
-def list_ward_rooms(ward_id: int, db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
-    """Lists all physical rooms associated with a specific ward."""
-    return db.query(PhysicalRoom).filter(PhysicalRoom.ward_id == ward_id, PhysicalRoom.is_active == True).all()
+@router.get("/floors", response_model=PaginatedResponse[FloorResponse])
+def list_floors(
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    _: bool = Depends(get_current_user),
+):
+    """Lists active hospital floors with pagination support."""
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Page must be greater than 0")
+    if page_size < 1 or page_size > 200:
+        raise HTTPException(status_code=400, detail="Page size must be between 1 and 200")
+
+    query = db.query(Floor).filter(Floor.is_active == True)
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/wards/{ward_id}/rooms", response_model=PaginatedResponse[RoomUpdate])
+def list_ward_rooms(
+    ward_id: int,
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    _: bool = Depends(get_current_user),
+):
+    """Lists physical rooms for a ward with pagination support."""
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Page must be greater than 0")
+    if page_size < 1 or page_size > 200:
+        raise HTTPException(status_code=400, detail="Page size must be between 1 and 200")
+
+    query = db.query(PhysicalRoom).filter(PhysicalRoom.ward_id == ward_id, PhysicalRoom.is_active == True)
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
 @router.get("/beds/map-view", response_model=list[WardMapResponse])
@@ -139,6 +187,50 @@ def update_room(room_id: int, payload: RoomUpdate, db: Session = Depends(get_db)
     return {"status": "success", "message": f"Room ID {room_id} updated."}
 
 
+@router.delete("/floors/{floor_id}", status_code=200)
+def deactivate_floor(floor_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    """Soft-deactivate a floor record without deleting its history."""
+    floor = db.get(Floor, floor_id)
+    if not floor:
+        raise HTTPException(status_code=404, detail="Floor not found")
+    floor.is_active = False
+    db.commit()
+    return {"status": "success", "message": f"Floor ID {floor_id} deactivated."}
+
+
+@router.delete("/wards/{ward_id}", status_code=200)
+def deactivate_ward(ward_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    """Soft-deactivate a ward record while preserving historical references."""
+    ward = db.get(Ward, ward_id)
+    if not ward:
+        raise HTTPException(status_code=404, detail="Ward not found")
+    ward.is_active = False
+    db.commit()
+    return {"status": "success", "message": f"Ward ID {ward_id} deactivated."}
+
+
+@router.delete("/rooms/{room_id}", status_code=200)
+def deactivate_room(room_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    """Soft-deactivate a room entry while keeping the room inventory intact."""
+    room = db.get(PhysicalRoom, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    room.is_active = False
+    db.commit()
+    return {"status": "success", "message": f"Room ID {room_id} deactivated."}
+
+
+@router.delete("/beds/{bed_id}", status_code=200)
+def remove_bed(bed_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    """Remove a bed from active circulation by moving it to maintenance status."""
+    bed = db.get(Bed, bed_id)
+    if not bed:
+        raise HTTPException(status_code=404, detail="Bed not found")
+    bed.status = BedStatusEnum.MAINTENANCE
+    db.commit()
+    return {"status": "success", "message": f"Bed ID {bed_id} removed from circulation."}
+
+
 # -----------------------------------------------------------------------------
 # Bed and shift operations domain
 # -----------------------------------------------------------------------------
@@ -163,10 +255,24 @@ def update_bed_status(bed_id: int, payload: BedStatusUpdate, db: Session = Depen
         raise HTTPException(status_code=409, detail="Bed record is currently locked by a concurrent admission transaction.")
 
 
-@router.get("/wards/{ward_id}/shifts", status_code=200)
-def get_ward_shifts(ward_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("view_ward_map"))):
-    """Fetch the shift assignments for a specific ward."""
-    return db.query(NursingShiftAssignment).filter(NursingShiftAssignment.ward_id == ward_id).all()
+@router.get("/wards/{ward_id}/shifts", response_model=PaginatedResponse[ShiftAssignmentCreate])
+def get_ward_shifts(
+    ward_id: int,
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    _: bool = Depends(RequirePermission("view_ward_map")),
+):
+    """Fetch shift assignments for a ward with pagination support."""
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Page must be greater than 0")
+    if page_size < 1 or page_size > 200:
+        raise HTTPException(status_code=400, detail="Page size must be between 1 and 200")
+
+    query = db.query(NursingShiftAssignment).filter(NursingShiftAssignment.ward_id == ward_id)
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
 @router.post("/shifts", status_code=201)

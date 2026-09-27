@@ -23,6 +23,7 @@ from schemas import (
     ChiefComplaintCreate,
     ComorbidityCreate,
     DiagnosisCreate,
+    PaginatedResponse,
     PhysicalExamCreate,
     TaxonomyResponse,
 )
@@ -34,32 +35,85 @@ router = APIRouter(prefix="/api/clinical", tags=["Clinical Core & EMR"])
 # -----------------------------------------------------------------------------
 # Clinical taxonomy and lookup domain
 # -----------------------------------------------------------------------------
-@router.get("/taxonomy/{taxonomy}/{department_id}", response_model=TaxonomyResponse)
-def fetch_taxonomy(taxonomy: str, department_id: int, db: Session = Depends(get_db), redis=Depends(get_redis)):
-    """Return a department taxonomy collection, using Redis cache when available."""
+@router.get("/taxonomy/{taxonomy}/{department_id}", response_model=PaginatedResponse[dict])
+def fetch_taxonomy(
+    taxonomy: str,
+    department_id: int,
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    redis=Depends(get_redis),
+):
+    """Return a paginated department taxonomy collection, using Redis cache when available."""
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Page must be greater than 0")
+    if page_size < 1 or page_size > 200:
+        raise HTTPException(status_code=400, detail="Page size must be between 1 and 200")
+
     items = get_department_taxonomy(redis, db, taxonomy, department_id)
-    return {"items": items}
+    total = len(items)
+    paginated = items[(page - 1) * page_size : page * page_size]
+    return {"items": paginated, "total": total, "page": page, "page_size": page_size}
 
 
-@router.get("/diagnoses/{department_id}", response_model=TaxonomyResponse)
-def get_department_diagnoses(department_id: int, db: Session = Depends(get_db), redis=Depends(get_redis)):
-    """Retrieves all active ICD-10 diagnoses for a department (cached via Redis)."""
+@router.get("/diagnoses/{department_id}", response_model=PaginatedResponse[dict])
+def get_department_diagnoses(
+    department_id: int,
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    redis=Depends(get_redis),
+):
+    """Retrieves active ICD-10 diagnoses for a department with pagination support."""
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Page must be greater than 0")
+    if page_size < 1 or page_size > 200:
+        raise HTTPException(status_code=400, detail="Page size must be between 1 and 200")
+
     items = get_department_taxonomy(redis, db, "diagnoses", department_id)
-    return {"items": items}
+    total = len(items)
+    paginated = items[(page - 1) * page_size : page * page_size]
+    return {"items": paginated, "total": total, "page": page, "page_size": page_size}
 
 
-@router.get("/comorbidities/{department_id}", response_model=TaxonomyResponse)
-def get_department_comorbidities(department_id: int, db: Session = Depends(get_db), redis=Depends(get_redis)):
-    """Retrieves all active comorbidities for a department (cached via Redis)."""
+@router.get("/comorbidities/{department_id}", response_model=PaginatedResponse[dict])
+def get_department_comorbidities(
+    department_id: int,
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    redis=Depends(get_redis),
+):
+    """Retrieves active comorbidity taxonomies for a department with pagination support."""
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Page must be greater than 0")
+    if page_size < 1 or page_size > 200:
+        raise HTTPException(status_code=400, detail="Page size must be between 1 and 200")
+
     items = get_department_taxonomy(redis, db, "comorbidities", department_id)
-    return {"items": items}
+    total = len(items)
+    paginated = items[(page - 1) * page_size : page * page_size]
+    return {"items": paginated, "total": total, "page": page, "page_size": page_size}
 
 
-@router.get("/physical-exams/{department_id}", response_model=TaxonomyResponse)
-def get_department_physical_exams(department_id: int, db: Session = Depends(get_db), redis=Depends(get_redis)):
-    """Retrieves all active physical examination taxonomies for a department (cached via Redis)."""
+@router.get("/physical-exams/{department_id}", response_model=PaginatedResponse[dict])
+def get_department_physical_exams(
+    department_id: int,
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    redis=Depends(get_redis),
+):
+    """Retrieves active physical examination taxonomies for a department with pagination support."""
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Page must be greater than 0")
+    if page_size < 1 or page_size > 200:
+        raise HTTPException(status_code=400, detail="Page size must be between 1 and 200")
+
     items = get_department_taxonomy(redis, db, "physical_exams", department_id)
-    return {"items": items}
+    total = len(items)
+    paginated = items[(page - 1) * page_size : page * page_size]
+    return {"items": paginated, "total": total, "page": page, "page_size": page_size}
 
 
 # -----------------------------------------------------------------------------
@@ -142,6 +196,33 @@ def create_physical_exam(payload: PhysicalExamCreate, db: Session = Depends(get_
     return {"status": "success", "message": "Physical examination master created."}
 
 
+@router.put("/complaints/{complaint_id}", status_code=200)
+def update_chief_complaint(complaint_id: int, payload: ChiefComplaintCreate, db: Session = Depends(get_db), redis=Depends(get_redis), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    """Update a chief complaint master entry."""
+    item = db.get(ChiefComplaintMaster, complaint_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Chief complaint not found")
+    item.code = payload.code
+    item.name = payload.name
+    if payload.department_id is not None:
+        item.department_id = payload.department_id
+    db.commit()
+    invalidate_department_taxonomy_cache(redis, "complaints", payload.department_id)
+    return {"status": "success", "message": f"Complaint ID {complaint_id} updated."}
+
+
+@router.delete("/complaints/{complaint_id}", status_code=200)
+def deactivate_chief_complaint(complaint_id: int, db: Session = Depends(get_db), redis=Depends(get_redis), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    """Soft-deactivate a chief complaint taxonomy item."""
+    item = db.get(ChiefComplaintMaster, complaint_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Chief complaint not found")
+    item.is_active = False
+    db.commit()
+    invalidate_department_taxonomy_cache(redis, "complaints", item.department_id)
+    return {"status": "success", "message": f"Complaint ID {complaint_id} deactivated."}
+
+
 @router.put("/allergies/{allergy_id}", status_code=200)
 def update_allergy_master(allergy_id: int, payload: AllergyMasterCreate, db: Session = Depends(get_db), redis=Depends(get_redis), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
     """Update allergy metadata for an existing master record."""
@@ -222,6 +303,34 @@ def deactivate_diagnosis(diagnosis_id: int, db: Session = Depends(get_db), redis
     db.commit()
     invalidate_department_taxonomy_cache(redis, "diagnoses", item.department_id)
     return {"status": "success", "message": f"Diagnosis ID {diagnosis_id} deactivated."}
+
+
+@router.put("/physical-exams/{exam_id}", status_code=200)
+def update_physical_exam(exam_id: int, payload: PhysicalExamCreate, db: Session = Depends(get_db), redis=Depends(get_redis), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    """Update a physical examination master entry."""
+    item = db.get(PhysicalExaminationMaster, exam_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Physical exam not found")
+    item.code = payload.code
+    item.name = payload.name
+    item.body_system = payload.body_system
+    if payload.department_id is not None:
+        item.department_id = payload.department_id
+    db.commit()
+    invalidate_department_taxonomy_cache(redis, "physical_exams", payload.department_id)
+    return {"status": "success", "message": f"Physical exam ID {exam_id} updated."}
+
+
+@router.delete("/physical-exams/{exam_id}", status_code=200)
+def deactivate_physical_exam(exam_id: int, db: Session = Depends(get_db), redis=Depends(get_redis), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    """Soft-deactivate a physical examination master item."""
+    item = db.get(PhysicalExaminationMaster, exam_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Physical exam not found")
+    item.is_active = False
+    db.commit()
+    invalidate_department_taxonomy_cache(redis, "physical_exams", item.department_id)
+    return {"status": "success", "message": f"Physical exam ID {exam_id} deactivated."}
 
 
 # -----------------------------------------------------------------------------

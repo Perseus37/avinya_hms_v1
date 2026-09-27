@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from dependencies import RequirePermission, get_current_user
 from models import Patient, PatientAllergy, User
-from schemas import PatientAllergyCreate, PatientCreate, PatientResponse, PatientUpdate
+from schemas import PaginatedResponse, PatientAllergyCreate, PatientCreate, PatientResponse, PatientUpdate
 
 router = APIRouter(prefix="/api/patients", tags=["Patient Management & EMR"])
 
@@ -38,10 +38,23 @@ def register_patient(payload: PatientCreate, db: Session = Depends(get_db), _: b
     return patient
 
 
-@router.get("", response_model=list[PatientResponse])
-def list_patients(db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
-    """Retrieves all active hospital patients."""
-    return db.query(Patient).filter(Patient.is_active == True).all()
+@router.get("", response_model=PaginatedResponse[PatientResponse])
+def list_patients(
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    _: bool = Depends(get_current_user),
+):
+    """Retrieves active hospital patients with pagination support."""
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Page must be greater than 0")
+    if page_size < 1 or page_size > 200:
+        raise HTTPException(status_code=400, detail="Page size must be between 1 and 200")
+
+    query = db.query(Patient).filter(Patient.is_active == True)
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
 @router.get("/{patient_id}", response_model=PatientResponse)

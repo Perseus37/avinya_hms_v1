@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from dependencies import RequirePermission, get_current_user
 from models import DoctorProfile, Role, User, UserRole, UserStatusEnum
-from schemas import RoleCreate, RoleResponse, TokenResponse, UserCreate, UserLogin, UserMeResponse
+from schemas import PaginatedResponse, RoleCreate, RoleResponse, TokenResponse, UserCreate, UserLogin, UserMeResponse
 
 from config import settings
 
@@ -43,10 +43,23 @@ def get_logged_in_user(current_user: User = Depends(get_current_user)):
 # -----------------------------------------------------------------------------
 # User lifecycle domain
 # -----------------------------------------------------------------------------
-@router.get("/users", response_model=list[UserMeResponse])
-def list_users(db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
-    """List all registered users in the system."""
-    return db.query(User).all()
+@router.get("/users", response_model=PaginatedResponse[UserMeResponse])
+def list_users(
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    _: bool = Depends(RequirePermission("manage_clinical_mdm")),
+):
+    """List registered users with pagination support."""
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Page must be greater than 0")
+    if page_size < 1 or page_size > 200:
+        raise HTTPException(status_code=400, detail="Page size must be between 1 and 200")
+
+    query = db.query(User)
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
 @router.post("/users/doctor", status_code=status.HTTP_201_CREATED)
@@ -126,10 +139,23 @@ def assign_user_department(
 # -----------------------------------------------------------------------------
 # Role and access-control domain
 # -----------------------------------------------------------------------------
-@router.get("/roles", response_model=list[RoleResponse])
-def list_roles(db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
-    """List all available system roles."""
-    return db.query(Role).all()
+@router.get("/roles", response_model=PaginatedResponse[RoleResponse])
+def list_roles(
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    _: bool = Depends(get_current_user),
+):
+    """List available system roles with pagination support."""
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Page must be greater than 0")
+    if page_size < 1 or page_size > 200:
+        raise HTTPException(status_code=400, detail="Page size must be between 1 and 200")
+
+    query = db.query(Role)
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
 @router.post("/roles", response_model=RoleResponse, status_code=status.HTTP_201_CREATED)
