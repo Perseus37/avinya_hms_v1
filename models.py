@@ -4,15 +4,14 @@ The model layer is grouped by functional responsibility so the healthcare data
 model reads like an application domain model instead of a flat list of tables.
 """
 
-from datetime import datetime
-from typing import List, Optional
-from sqlalchemy import String, Integer, DateTime, ForeignKey, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from enum import Enum as PyEnum
-from database import Base
 from datetime import datetime, timezone
-from sqlalchemy import DateTime, func
-from sqlalchemy.orm import Mapped, mapped_column
+from typing import List, Optional
+from enum import Enum as PyEnum
+
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from database import Base
 
 # -----------------------------------------------------------------------------
 # Shared enums
@@ -106,7 +105,7 @@ class TimestampMixin:
 # -----------------------------------------------------------------------------
 # Identity and IAM domain
 # -----------------------------------------------------------------------------
-class Department(Base):
+class Department(TimestampMixin, Base):
     __tablename__ = "departments"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -116,7 +115,7 @@ class Department(Base):
     is_active: Mapped[bool] = mapped_column(default=True)
 
 
-class Role(Base):
+class Role(TimestampMixin, Base):
     __tablename__ = "roles"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -129,7 +128,7 @@ class Role(Base):
     users: Mapped[List["User"]] = relationship(secondary="user_roles", back_populates="roles")
 
 
-class Permission(Base):
+class Permission(TimestampMixin, Base):
     __tablename__ = "permissions"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -147,7 +146,7 @@ class RolePermission(Base):
     permission_id: Mapped[int] = mapped_column(ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True)
 
 
-class User(Base):
+class User(TimestampMixin, Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -196,7 +195,7 @@ class DoctorProfile(Base):
 # -----------------------------------------------------------------------------
 # Facility and ward management domain
 # -----------------------------------------------------------------------------
-class Floor(Base):
+class Floor(TimestampMixin, Base):
     __tablename__ = "floors"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -207,7 +206,7 @@ class Floor(Base):
     wards: Mapped[List["Ward"]] = relationship(back_populates="floor")
 
 
-class Ward(Base):
+class Ward(TimestampMixin, Base):
     __tablename__ = "wards"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -223,7 +222,7 @@ class Ward(Base):
     rooms: Mapped[List["PhysicalRoom"]] = relationship(back_populates="ward")
 
 
-class PhysicalRoom(Base):
+class PhysicalRoom(TimestampMixin, Base):
     __tablename__ = "physical_rooms_master"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -237,7 +236,7 @@ class PhysicalRoom(Base):
     beds: Mapped[List["Bed"]] = relationship(back_populates="room")
 
 
-class Bed(Base):
+class Bed(TimestampMixin, Base):
     __tablename__ = "beds_master"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -251,7 +250,7 @@ class Bed(Base):
     room: Mapped[PhysicalRoom] = relationship(back_populates="beds")
 
 
-class NursingShiftAssignment(Base):
+class NursingShiftAssignment(TimestampMixin, Base):
     __tablename__ = "nursing_shift_assignments"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -266,7 +265,7 @@ class NursingShiftAssignment(Base):
 # -----------------------------------------------------------------------------
 # Clinical and EMR master data
 # -----------------------------------------------------------------------------
-class ChiefComplaintMaster(Base):
+class ChiefComplaintMaster(TimestampMixin, Base):
     __tablename__ = "chief_complaints_master"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -276,7 +275,7 @@ class ChiefComplaintMaster(Base):
     is_active: Mapped[bool] = mapped_column(default=True)
 
 
-class ComorbidityMaster(Base):
+class ComorbidityMaster(TimestampMixin, Base):
     __tablename__ = "comorbidities_master"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -287,7 +286,7 @@ class ComorbidityMaster(Base):
     is_active: Mapped[bool] = mapped_column(default=True)
 
 
-class AllergyMaster(Base):
+class AllergyMaster(TimestampMixin, Base):
     __tablename__ = "allergies_master"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -299,7 +298,7 @@ class AllergyMaster(Base):
     is_active: Mapped[bool] = mapped_column(default=True)
 
 
-class DiagnosisMaster(Base):
+class DiagnosisMaster(TimestampMixin, Base):
     __tablename__ = "diagnoses_master"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -312,7 +311,7 @@ class DiagnosisMaster(Base):
     is_active: Mapped[bool] = mapped_column(default=True)
 
 
-class PhysicalExaminationMaster(Base):
+class PhysicalExaminationMaster(TimestampMixin, Base):
     __tablename__ = "physical_examinations_master"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -323,7 +322,7 @@ class PhysicalExaminationMaster(Base):
     is_active: Mapped[bool] = mapped_column(default=True)
 
 
-class Patient(Base):
+class Patient(TimestampMixin, Base):
     __tablename__ = "patients"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -334,7 +333,7 @@ class Patient(Base):
     is_active: Mapped[bool] = mapped_column(default=True)
 
 
-class PatientAllergy(Base):
+class PatientAllergy(TimestampMixin, Base):
     __tablename__ = "patient_allergies"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

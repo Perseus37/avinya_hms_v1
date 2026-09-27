@@ -5,11 +5,18 @@ organized by business domains rather than by action type, so identity,
 operations, patient, and clinical logic remain easy to navigate.
 """
 
+import logging
+from time import perf_counter
+
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from routers import auth_router, ward_router, clinical_router, patient_router
+
+from routers import auth_router, clinical_router, patient_router, ward_router
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logger = logging.getLogger("avinya.api")
 
 # -----------------------------------------------------------------------------
 # Domain composition
@@ -59,6 +66,22 @@ app.include_router(ward_router.router)
 # Clinical and patient care domain
 app.include_router(clinical_router.router)
 app.include_router(patient_router.router)
+
+
+@app.middleware("http")
+async def log_request_details(request: Request, call_next):
+    """Log request metadata and latency for API observability."""
+    start = perf_counter()
+    response = await call_next(request)
+    duration_ms = round((perf_counter() - start) * 1000, 2)
+    logger.info(
+        "HTTP %s %s completed in %sms with status %s",
+        request.method,
+        request.url.path,
+        duration_ms,
+        response.status_code,
+    )
+    return response
 
 
 @app.get("/health", tags=["System"])

@@ -29,8 +29,9 @@ class PaginatedResponse(BaseModel, Generic[T]):
     success: bool = True
     total: int
     page: int
-    size: int
+    page_size: int
     items: List[T]
+
 # -----------------------------------------------------------------------------
 # Authentication and IAM schemas
 # -----------------------------------------------------------------------------
@@ -227,6 +228,16 @@ class AllergyMasterCreate(BaseModel):
 class AllergyCheckRequest(BaseModel):
     patient_id: int
     allergen_keywords: List[str]
+
+
+T = TypeVar("T")
+
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    items: List[T]
+    total: int
+    page: int
+    page_size: int
 
 
 class TaxonomyResponse(BaseModel):
