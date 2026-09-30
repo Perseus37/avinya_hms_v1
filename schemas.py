@@ -70,7 +70,7 @@ class DoctorProfileCreate(BaseModel):
     medical_registration_number: str
     registration_valid_till: datetime
     consultation_fee_paise: int
-
+    consultation_duration_minutes: int = 15  # Default fallback
 
 class UserCreate(BaseModel):
     login_id: str
@@ -488,7 +488,7 @@ class InvoiceLineItemCreate(BaseModel):
     description: str
     quantity: int = 1
     unit_price_paise: int
-    
+
 class InvoiceUpdate(BaseModel):
     notes: Optional[str] = None
 
@@ -524,4 +524,33 @@ class InvoiceResponse(BaseModel):
     amount_paid_paise: int
     line_items: List[InvoiceLineItemResponse]
     payments: List[PaymentReceiptResponse]
+    model_config = ConfigDict(from_attributes=True)
+
+from models import AppointmentStatusEnum
+
+# --- PHASE 7: OPD SCHEMAS ---
+class AppointmentCreate(BaseModel):
+    patient_id: int
+    doctor_id: int
+    department_id: int
+    appointment_time: datetime
+    reason_for_visit: Optional[str] = None
+
+class AppointmentUpdate(BaseModel):
+    appointment_time: Optional[datetime] = None
+    reason_for_visit: Optional[str] = None
+
+class AppointmentStatusUpdate(BaseModel):
+    status: AppointmentStatusEnum
+    encounter_id: Optional[int] = None # Attached when status moves to IN_CONSULTATION
+
+class AppointmentResponse(BaseModel):
+    id: int
+    patient_id: int
+    doctor_id: int
+    department_id: int
+    appointment_time: datetime
+    status: AppointmentStatusEnum
+    reason_for_visit: Optional[str]
+    encounter_id: Optional[int]
     model_config = ConfigDict(from_attributes=True)

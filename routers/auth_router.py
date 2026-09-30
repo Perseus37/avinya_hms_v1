@@ -96,6 +96,7 @@ def create_doctor(
             medical_registration_number=dp.medical_registration_number,
             registration_valid_till=dp.registration_valid_till,
             consultation_fee_paise=dp.consultation_fee_paise,
+            consultation_duration_minutes=dp.consultation_duration_minutes
         )
         db.add(doc)
 

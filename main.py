@@ -13,7 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from routers import auth_router, ward_router, clinical_router, patient_router, diagnostic_router, adt_router,billing_router
+from routers import auth_router, ward_router, clinical_router, patient_router, diagnostic_router, adt_router, billing_router , opd_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("avinya.api")
@@ -69,6 +69,7 @@ app.include_router(patient_router.router)
 app.include_router(diagnostic_router.router)
 app.include_router(adt_router.router)
 app.include_router(billing_router.router)
+app.include_router(opd_router.router)
 
 @app.middleware("http")
 async def log_request_details(request: Request, call_next):

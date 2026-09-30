@@ -10,7 +10,8 @@ from models import (
     GenderEnum, UserStatusEnum, WardTypeEnum, RoomTypeEnum, BedTypeEnum, BedStatusEnum,
     AllergyCategoryEnum, AllergySeverityEnum, BodySystemEnum, ServiceTypeEnum, OrderStatusEnum, TaskStatusEnum,
     AdmissionTypeEnum, EncounterTypeEnum, EncounterStatusEnum, InpatientAdmission, BedTransferLog,
-    Invoice, InvoiceLineItem, InvoiceStatusEnum, PaymentReceipt, PaymentMethodEnum,PatientEncounter
+    Invoice, InvoiceLineItem, InvoiceStatusEnum, PaymentReceipt, PaymentMethodEnum,PatientEncounter, 
+    Appointment, AppointmentStatusEnum
 )
 
 # --- CONFIGURE STRUCTURED LOGGING ---
@@ -92,7 +93,8 @@ def run_seed():
             medical_council_name="State Medical Council",
             medical_registration_number="SMC-994821",
             registration_valid_till=datetime(2030, 12, 31, tzinfo=timezone.utc),
-            consultation_fee_paise=150000
+            consultation_fee_paise=150000,
+            consultation_duration_minutes=20
         )
         db.add(doc_profile)
         db.flush()
@@ -344,6 +346,30 @@ def run_seed():
 
         db.commit()
         logger.info("Phase 6 Seeding completed successfully.")
+
+        # 10. Seed Phase 7: OPD Scheduling
+        logger.info("Seeding Phase 7: Outpatient Appointments...")
+        from datetime import timedelta
+        
+        # Schedule a follow-up appointment for John Doe 7 days from now
+        future_date = datetime.now(timezone.utc) + timedelta(days=7)
+        
+        appointment = Appointment(
+            patient_id=sample_patient.id,
+            doctor_id=doctor_user.id,
+            department_id=dept_cardio.id,
+            appointment_time=future_date,
+            reason_for_visit="Post-discharge cardiac follow-up.",
+            status=AppointmentStatusEnum.SCHEDULED
+        )
+        db.add(appointment)
+        db.flush()
+        
+        # Simulate front-desk check-in (Patient arrives)
+        appointment.status = AppointmentStatusEnum.ARRIVED
+        
+        db.commit()
+        logger.info("Phase 7 Seeding completed successfully.")
 
         logger.info("Database seeding completed with status: SUCCESS")
 

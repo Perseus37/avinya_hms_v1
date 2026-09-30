@@ -108,6 +108,7 @@ class TaskStatusEnum(str, PyEnum):
     RESULT_ENTERED = "RESULT_ENTERED"
     VERIFIED = "VERIFIED"
     CANCELLED = "CANCELLED"
+
 # --- PHASE 5 ENUMS ---
 class EncounterTypeEnum(str, PyEnum):
     OPD = "OPD"  # Outpatient
@@ -131,6 +132,7 @@ class DischargeDispositionEnum(str, PyEnum):
     REFERRED_OUT = "REFERRED_OUT"
     AGAINST_MEDICAL_ADVICE = "AGAINST_MEDICAL_ADVICE"
     DECEASED = "DECEASED"
+
 # --- PHASE 6 ENUMS ---
 class InvoiceStatusEnum(str, PyEnum):
     DRAFT = "DRAFT"
@@ -145,6 +147,15 @@ class PaymentMethodEnum(str, PyEnum):
     INSURANCE = "INSURANCE"
     UPI = "UPI"
     BANK_TRANSFER = "BANK_TRANSFER"
+
+# --- PHASE 7 ENUMS ---
+class AppointmentStatusEnum(str, PyEnum):
+    SCHEDULED = "SCHEDULED"
+    ARRIVED = "ARRIVED"
+    IN_CONSULTATION = "IN_CONSULTATION"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+    NO_SHOW = "NO_SHOW"
 
 # -----------------------------------------------------------------------------
 # Auditing mixin for timestamp fields
@@ -268,6 +279,7 @@ class DoctorProfile(AuditMixin, Base):
     medical_registration_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     registration_valid_till: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     consultation_fee_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    consultation_duration_minutes: Mapped[int] = mapped_column(Integer, default=15, nullable=False)# Dynamic scheduling buffer
 
     user: Mapped[User] = relationship(back_populates="doctor_profile")
     department: Mapped[Department] = relationship()
@@ -628,3 +640,29 @@ class PaymentReceipt(AuditMixin, Base):
     transaction_reference: Mapped[Optional[str]] = mapped_column(String(100))
     
     invoice: Mapped[Invoice] = relationship(back_populates="payments")
+
+
+# ==========================================
+# PHASE 7: OUTPATIENT APPOINTMENTS (OPD)
+# ==========================================
+
+class Appointment(AuditMixin, Base):
+    """Schedules a patient visit with a doctor before a formal encounter begins."""
+    __tablename__ = "appointments"
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
+    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
+    
+    appointment_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[AppointmentStatusEnum] = mapped_column(default=AppointmentStatusEnum.SCHEDULED, nullable=False)
+    reason_for_visit: Mapped[Optional[str]] = mapped_column(String(255))
+    
+    # Links to the ADT Encounter once the patient actually walks into the room
+    encounter_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patient_encounters.id")) 
+    
+    patient: Mapped["Patient"] = relationship()
+    doctor: Mapped["User"] = relationship()
+    department: Mapped["Department"] = relationship()
+    encounter: Mapped[Optional["PatientEncounter"]] = relationship()
