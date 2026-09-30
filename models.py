@@ -86,6 +86,53 @@ class BodySystemEnum(str, PyEnum):
     MUSCULOSKELETAL = "MUSCULOSKELETAL"
     DERMATOLOGICAL = "DERMATOLOGICAL"
 
+# --- PHASE 4 ENUMS ---
+class ServiceTypeEnum(str, PyEnum):
+    LAB = "LAB"
+    RADIOLOGY = "RADIOLOGY"
+    PROCEDURE = "PROCEDURE"
+    PACKAGE = "PACKAGE"
+    CONSULTATION = "CONSULTATION"
+
+class OrderStatusEnum(str, PyEnum):
+    DRAFT = "DRAFT"
+    ACTIVE = "ACTIVE"
+    PARTIAL = "PARTIAL"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+
+class TaskStatusEnum(str, PyEnum):
+    PENDING = "PENDING"
+    SAMPLE_COLLECTED = "SAMPLE_COLLECTED"
+    IN_PROGRESS = "IN_PROGRESS"
+    RESULT_ENTERED = "RESULT_ENTERED"
+    VERIFIED = "VERIFIED"
+    CANCELLED = "CANCELLED"
+# --- PHASE 5 ENUMS ---
+class EncounterTypeEnum(str, PyEnum):
+    OPD = "OPD"  # Outpatient
+    IPD = "IPD"  # Inpatient
+    ER = "ER"    # Emergency Room
+
+class EncounterStatusEnum(str, PyEnum):
+    PLANNED = "PLANNED"
+    ACTIVE = "ACTIVE"
+    DISCHARGED = "DISCHARGED"
+    CANCELLED = "CANCELLED"
+
+class AdmissionTypeEnum(str, PyEnum):
+    ROUTINE = "ROUTINE"
+    EMERGENCY = "EMERGENCY"
+    MATERNITY = "MATERNITY"
+    TRANSFER_IN = "TRANSFER_IN"
+
+class DischargeDispositionEnum(str, PyEnum):
+    ROUTINE_DISCHARGE = "ROUTINE_DISCHARGE"
+    REFERRED_OUT = "REFERRED_OUT"
+    AGAINST_MEDICAL_ADVICE = "AGAINST_MEDICAL_ADVICE"
+    DECEASED = "DECEASED"
+
+
 # -----------------------------------------------------------------------------
 # Auditing mixin for timestamp fields
 # -----------------------------------------------------------------------------
@@ -347,3 +394,84 @@ class PatientAllergy(TimestampMixin, Base):
     patient: Mapped[Patient] = relationship()
     allergy: Mapped[AllergyMaster] = relationship()
     recorded_by: Mapped[User] = relationship()
+
+
+# ==========================================
+# PHASE 4: DIAGNOSTIC SERVICES & LIS CORE
+# ==========================================
+
+class ServiceCategory(TimestampMixin, Base):
+    """Categorizes billable and executable services (e.g., Pathology, MRI, Health Checks)."""
+    __tablename__ = "service_categories"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    
+    department: Mapped["Department"] = relationship()
+    services: Mapped[List["ServiceCatalog"]] = relationship(back_populates="category")
+
+
+class ServiceCatalog(TimestampMixin, Base):
+    """The central master catalog for all hospital services, tests, and order sets."""
+    __tablename__ = "service_catalog"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    category_id: Mapped[int] = mapped_column(ForeignKey("service_categories.id"), nullable=False)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    service_type: Mapped[ServiceTypeEnum] = mapped_column(nullable=False)
+    base_price_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    
+    # Standard Clinical Data Mapping
+    loinc_code: Mapped[Optional[str]] = mapped_column(String(50))
+    cpt_code: Mapped[Optional[str]] = mapped_column(String(50))
+    
+    # Order Explosion Triggers
+    is_order_set: Mapped[bool] = mapped_column(default=False, nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    
+    category: Mapped[ServiceCategory] = relationship(back_populates="services")
+
+
+class ServiceBundleMapping(TimestampMixin, Base):
+    """Maps a parent package (e.g., 'Master Health Check') to executable child services."""
+    __tablename__ = "service_bundle_mappings"
+    parent_service_id: Mapped[int] = mapped_column(ForeignKey("service_catalog.id", ondelete="CASCADE"), primary_key=True)
+    child_service_id: Mapped[int] = mapped_column(ForeignKey("service_catalog.id", ondelete="CASCADE"), primary_key=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class DiagnosticOrder(TimestampMixin, Base):
+    """The overarching CPOE clinical request grouping multiple tests for a patient."""
+    __tablename__ = "diagnostic_orders"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
+    ordering_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    clinical_notes: Mapped[Optional[str]] = mapped_column(Text)
+    status: Mapped[OrderStatusEnum] = mapped_column(default=OrderStatusEnum.ACTIVE, nullable=False)
+    
+    patient: Mapped["Patient"] = relationship()
+    ordering_doctor: Mapped["User"] = relationship()
+    tasks: Mapped[List["DiagnosticTask"]] = relationship(back_populates="order", cascade="all, delete-orphan")
+
+
+class DiagnosticTask(TimestampMixin, Base):
+    """The exploded, department-level execution tickets resulting from a DiagnosticOrder."""
+    __tablename__ = "diagnostic_tasks"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("diagnostic_orders.id", ondelete="CASCADE"), nullable=False)
+    service_id: Mapped[int] = mapped_column(ForeignKey("service_catalog.id"), nullable=False)
+    status: Mapped[TaskStatusEnum] = mapped_column(default=TaskStatusEnum.PENDING, nullable=False)
+    
+    # Execution Tracking
+    result_value: Mapped[Optional[str]] = mapped_column(Text)
+    result_notes: Mapped[Optional[str]] = mapped_column(Text)
+    performed_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
+    verified_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
+    
+    order: Mapped[DiagnosticOrder] = relationship(back_populates="tasks")
+    service: Mapped[ServiceCatalog] = relationship()
+    performed_by: Mapped[Optional["User"]] = relationship(foreign_keys=[performed_by_id])
+    verified_by: Mapped[Optional["User"]] = relationship(foreign_keys=[verified_by_id])
+

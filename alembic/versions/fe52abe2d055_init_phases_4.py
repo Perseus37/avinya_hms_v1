@@ -1,8 +1,8 @@
-"""init_phases_1_to_3
+"""init_phases_4
 
-Revision ID: 28adc7c83fe0
+Revision ID: fe52abe2d055
 Revises: 
-Create Date: 2026-09-28 04:16:21.300499
+Create Date: 2026-09-29 19:54:49.557638
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '28adc7c83fe0'
+revision: str = 'fe52abe2d055'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -146,6 +146,18 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('icd10_code')
     )
+    op.create_table('diagnostic_orders',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('patient_id', sa.Integer(), nullable=False),
+    sa.Column('ordering_doctor_id', sa.Integer(), nullable=False),
+    sa.Column('clinical_notes', sa.Text(), nullable=True),
+    sa.Column('status', sa.Enum('DRAFT', 'ACTIVE', 'PARTIAL', 'COMPLETED', 'CANCELLED', name='orderstatusenum'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['ordering_doctor_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
     op.create_table('doctor_profiles',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=False),
@@ -182,6 +194,18 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['permission_id'], ['permissions.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['role_id'], ['roles.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('role_id', 'permission_id')
+    )
+    op.create_table('service_categories',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('department_id', sa.Integer(), nullable=False),
+    sa.Column('code', sa.String(length=50), nullable=False),
+    sa.Column('name', sa.String(length=100), nullable=False),
+    sa.Column('is_active', sa.Boolean(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['department_id'], ['departments.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('code')
     )
     op.create_table('user_roles',
     sa.Column('user_id', sa.Integer(), nullable=False),
@@ -248,6 +272,23 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['ward_id'], ['wards.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_table('service_catalog',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('category_id', sa.Integer(), nullable=False),
+    sa.Column('code', sa.String(length=50), nullable=False),
+    sa.Column('name', sa.String(length=200), nullable=False),
+    sa.Column('service_type', sa.Enum('LAB', 'RADIOLOGY', 'PROCEDURE', 'PACKAGE', 'CONSULTATION', name='servicetypeenum'), nullable=False),
+    sa.Column('base_price_paise', sa.Integer(), nullable=False),
+    sa.Column('loinc_code', sa.String(length=50), nullable=True),
+    sa.Column('cpt_code', sa.String(length=50), nullable=True),
+    sa.Column('is_order_set', sa.Boolean(), nullable=False),
+    sa.Column('is_active', sa.Boolean(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['category_id'], ['service_categories.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('code')
+    )
     op.create_table('beds_master',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('room_id', sa.Integer(), nullable=False),
@@ -261,21 +302,53 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['room_id'], ['physical_rooms_master.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_table('diagnostic_tasks',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('order_id', sa.Integer(), nullable=False),
+    sa.Column('service_id', sa.Integer(), nullable=False),
+    sa.Column('status', sa.Enum('PENDING', 'SAMPLE_COLLECTED', 'IN_PROGRESS', 'RESULT_ENTERED', 'VERIFIED', 'CANCELLED', name='taskstatusenum'), nullable=False),
+    sa.Column('result_value', sa.Text(), nullable=True),
+    sa.Column('result_notes', sa.Text(), nullable=True),
+    sa.Column('performed_by_id', sa.Integer(), nullable=True),
+    sa.Column('verified_by_id', sa.Integer(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['order_id'], ['diagnostic_orders.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['performed_by_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['service_id'], ['service_catalog.id'], ),
+    sa.ForeignKeyConstraint(['verified_by_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_table('service_bundle_mappings',
+    sa.Column('parent_service_id', sa.Integer(), nullable=False),
+    sa.Column('child_service_id', sa.Integer(), nullable=False),
+    sa.Column('quantity', sa.Integer(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['child_service_id'], ['service_catalog.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['parent_service_id'], ['service_catalog.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('parent_service_id', 'child_service_id')
+    )
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     """Downgrade schema."""
     # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_table('service_bundle_mappings')
+    op.drop_table('diagnostic_tasks')
     op.drop_table('beds_master')
+    op.drop_table('service_catalog')
     op.drop_table('physical_rooms_master')
     op.drop_table('patient_allergies')
     op.drop_table('nursing_shift_assignments')
     op.drop_table('wards')
     op.drop_table('user_roles')
+    op.drop_table('service_categories')
     op.drop_table('role_permissions')
     op.drop_table('physical_examinations_master')
     op.drop_table('doctor_profiles')
+    op.drop_table('diagnostic_orders')
     op.drop_table('diagnoses_master')
     op.drop_table('comorbidities_master')
     op.drop_table('chief_complaints_master')

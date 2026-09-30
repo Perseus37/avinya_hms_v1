@@ -5,8 +5,9 @@ from database import SessionLocal
 from models import (
     Base, Department, Role, Permission, RolePermission, User, UserRole, DoctorProfile,
     Floor, Ward, PhysicalRoom, Bed, AllergyMaster, Patient, PatientAllergy,
+    ServiceCategory, ServiceCatalog, ServiceBundleMapping, DiagnosticOrder, DiagnosticTask,
     GenderEnum, UserStatusEnum, WardTypeEnum, RoomTypeEnum, BedTypeEnum, BedStatusEnum,
-    AllergyCategoryEnum, AllergySeverityEnum, BodySystemEnum
+    AllergyCategoryEnum, AllergySeverityEnum, BodySystemEnum, ServiceTypeEnum, OrderStatusEnum, TaskStatusEnum
 )
 
 # --- CONFIGURE STRUCTURED LOGGING ---
@@ -28,9 +29,9 @@ def run_seed():
         logger.info("Seeding departments...")
         dept_cardio = Department(code="CARD", name="Cardiology", ndhm_speciality_code="CARD-01", is_active=True)
         dept_emergency = Department(code="EMER", name="Emergency Medicine", ndhm_speciality_code="EMER-01", is_active=True)
-        db.add_all([dept_cardio, dept_emergency])
+        dept_pathology = Department(code="PATH", name="Pathology Laboratory", ndhm_speciality_code="PATH-01", is_active=True)
+        db.add_all([dept_cardio, dept_emergency, dept_pathology])
         db.flush()
-        logger.info("Departments seeded successfully.")
 
         # 2. Seed Permissions
         logger.info("Seeding system permissions...")
@@ -39,9 +40,8 @@ def run_seed():
         p3 = Permission(code="write_cpoe_orders", description="Issue prescriptions and clinical orders", module="CPOE")
         db.add_all([p1, p2, p3])
         db.flush()
-        logger.info("Permissions seeded successfully.")
 
-        # 3. Seed Roles & Role-Permissions Mapping
+        # 3. Seed Roles
         logger.info("Seeding roles and mapping permissions...")
         admin_role = Role(code="ROLE_ADMIN", name="Hospital Administrator", description="Full system access", is_system_role=True)
         doctor_role = Role(code="ROLE_DOCTOR", name="Attending Physician", description="Clinical and EMR access", is_system_role=True)
@@ -51,9 +51,8 @@ def run_seed():
         admin_role.permissions.extend([p1, p2, p3])
         doctor_role.permissions.extend([p1, p3])
         db.flush()
-        logger.info("Roles and permissions mapped successfully.")
 
-        # 4. Seed Admin & Doctor Users
+        # 4. Seed Users
         logger.info("Seeding user accounts...")
         admin_user = User(
             login_id="admin_01",
@@ -94,7 +93,6 @@ def run_seed():
         )
         db.add(doc_profile)
         db.flush()
-        logger.info("Users and doctor profiles seeded successfully.")
 
         # 5. Seed Infrastructure
         logger.info("Seeding physical ward infrastructure...")
@@ -130,16 +128,8 @@ def run_seed():
             status=BedStatusEnum.AVAILABLE,
             base_daily_rate_paise=500000
         )
-        bed_b = Bed(
-            room_id=room_301.id,
-            bed_number="301-B",
-            bed_type=BedTypeEnum.ICU,
-            status=BedStatusEnum.AVAILABLE,
-            base_daily_rate_paise=750000
-        )
-        db.add_all([bed_a, bed_b])
+        db.add(bed_a)
         db.flush()
-        logger.info("Infrastructure hierarchy seeded successfully.")
 
         # 6. Seed Clinical Taxonomies & Patient Safety Profiles
         logger.info("Seeding clinical taxonomies and sample patient safety profiles...")
@@ -173,6 +163,77 @@ def run_seed():
             is_active=True
         )
         db.add(patient_allergy)
+        db.flush()
+
+        # 7. Seed Phase 4: Diagnostic Services & Order Sets
+        logger.info("Seeding Phase 4: Diagnostic Services and Bundled Order Sets...")
+        category_lab = ServiceCategory(
+            department_id=dept_pathology.id,
+            code="CAT-LAB",
+            name="General Laboratory Checks",
+            is_active=True
+        )
+        db.add(category_lab)
+        db.flush()
+
+        # Atomic tests
+        test_rbc = ServiceCatalog(
+            category_id=category_lab.id,
+            code="LAB-RBC",
+            name="Red Blood Cell (RBC) Count",
+            service_type=ServiceTypeEnum.LAB,
+            base_price_paise=25000, # 250.00
+            loinc_code="789-8",
+            is_order_set=False,
+            is_active=True
+        )
+        test_wbc = ServiceCatalog(
+            category_id=category_lab.id,
+            code="LAB-WBC",
+            name="White Blood Cell (WBC) Count",
+            service_type=ServiceTypeEnum.LAB,
+            base_price_paise=25000, # 250.00
+            loinc_code="804-5",
+            is_order_set=False,
+            is_active=True
+        )
+        db.add_all([test_rbc, test_wbc])
+        db.flush()
+
+        # Order Set (Bundle)
+        bundle_cbc = ServiceCatalog(
+            category_id=category_lab.id,
+            code="BUN-CBC",
+            name="Complete Blood Count (CBC) Panel",
+            service_type=ServiceTypeEnum.PACKAGE,
+            base_price_paise=40000, # Discounted bundled price 400.00
+            is_order_set=True,
+            is_active=True
+        )
+        db.add(bundle_cbc)
+        db.flush()
+
+        # Map children to bundle
+        db.add(ServiceBundleMapping(parent_service_id=bundle_cbc.id, child_service_id=test_rbc.id, quantity=1))
+        db.add(ServiceBundleMapping(parent_service_id=bundle_cbc.id, child_service_id=test_wbc.id, quantity=1))
+        db.flush()
+
+        # Simulate CPOE Order processing (Explosion logic test)
+        logger.info("Generating sample diagnostic CPOE order...")
+        order = DiagnosticOrder(
+            patient_id=sample_patient.id,
+            ordering_doctor_id=doctor_user.id,
+            clinical_notes="Routine CBC evaluation.",
+            status=OrderStatusEnum.ACTIVE
+        )
+        db.add(order)
+        db.flush()
+
+        # Generate atomic tasks simulating the explosion engine
+        task_1 = DiagnosticTask(order_id=order.id, service_id=test_rbc.id, status=TaskStatusEnum.PENDING)
+        task_2 = DiagnosticTask(order_id=order.id, service_id=test_wbc.id, status=TaskStatusEnum.PENDING)
+        db.add_all([task_1, task_2])
+
         db.commit()
         logger.info("Database seeding completed with status: SUCCESS")
 

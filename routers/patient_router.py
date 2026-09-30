@@ -116,3 +116,30 @@ def chart_patient_allergy(payload: PatientAllergyCreate, db: Session = Depends(g
     db.add(patient_allergy)
     db.commit()
     return {"status": "success", "message": "Patient allergy charted successfully."}
+
+from sqlalchemy.orm import joinedload
+from schemas import PatientAllergyResponse
+
+@router.get("/{patient_id}/allergies", response_model=list[PatientAllergyResponse])
+def get_patient_allergies(patient_id: int, db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
+    """Retrieves all actively charted allergies for a specific patient."""
+    patient = db.get(Patient, patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found.")
+        
+    stmt = select(PatientAllergy).options(joinedload(PatientAllergy.allergy)).where(
+        PatientAllergy.patient_id == patient_id,
+        PatientAllergy.is_active == True
+    )
+    return db.execute(stmt).scalars().all()
+
+@router.delete("/allergies/{chart_id}", status_code=200)
+def unchart_patient_allergy(chart_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+    """Soft-deletes a charted allergy in case of data entry error."""
+    charted_allergy = db.get(PatientAllergy, chart_id)
+    if not charted_allergy:
+        raise HTTPException(status_code=404, detail="Charted patient allergy not found.")
+        
+    charted_allergy.is_active = False
+    db.commit()
+    return {"status": "success", "message": f"Patient allergy chart ID {chart_id} deactivated."}
