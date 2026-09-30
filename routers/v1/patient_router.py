@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from dependencies import RequirePermission, get_current_user
 from models import Patient, PatientAllergy, User
-from schemas import PaginatedResponse, PatientAllergyCreate, PatientCreate, PatientResponse, PatientUpdate
+from schemas.v1.schemas import PaginatedResponse, PatientAllergyCreate, PatientCreate, PatientResponse, PatientUpdate
 
 router = APIRouter(prefix="/api/patients", tags=["Patient Management & EMR"])
 
@@ -122,7 +122,7 @@ def chart_patient_allergy(payload: PatientAllergyCreate, db: Session = Depends(g
     return {"status": "success", "message": "Patient allergy charted successfully."}
 
 from sqlalchemy.orm import joinedload
-from schemas import PatientAllergyResponse
+from schemas.v1.schemas import PatientAllergyResponse
 
 @router.get("/{patient_id}/allergies", response_model=list[PatientAllergyResponse])
 def get_patient_allergies(patient_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):

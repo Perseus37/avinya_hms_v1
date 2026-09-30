@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, joinedload
 from database import get_db
 from dependencies import RequirePermission
 from models import Bed, BedStatusEnum, Floor, NursingShiftAssignment, PhysicalRoom, Ward
-from schemas import (
+from schemas.v1.schemas import (
     BedCreate,
     BedStatusUpdate,
     FloorCreate,

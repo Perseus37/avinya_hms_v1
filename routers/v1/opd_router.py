@@ -7,7 +7,7 @@ from sqlalchemy import select
 from database import get_db
 from dependencies import RequirePermission, get_current_user
 from models import User, Appointment, AppointmentStatusEnum, Patient, Department
-from schemas import (
+from schemas.v1.schemas import (
     PaginatedResponse, AppointmentCreate, AppointmentResponse, 
     AppointmentUpdate, AppointmentStatusUpdate
 )

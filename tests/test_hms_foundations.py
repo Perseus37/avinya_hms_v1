@@ -31,7 +31,7 @@ from models import (
     WardTypeEnum,
     GenderEnum,
 )
-from schemas import PaginatedResponse
+from schemas.v1.schemas import PaginatedResponse
 
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

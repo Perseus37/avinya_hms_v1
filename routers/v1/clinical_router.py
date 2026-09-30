@@ -17,7 +17,7 @@ from models import (
     DiagnosisMaster,
     PhysicalExaminationMaster,
 )
-from schemas import (
+from schemas.v1.schemas import (
     AllergyCheckRequest,
     AllergyMasterCreate,
     ChiefComplaintCreate,

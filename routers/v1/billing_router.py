@@ -7,7 +7,7 @@ from sqlalchemy import select
 from database import get_db
 from dependencies import RequirePermission, get_current_user
 from models import User, Invoice, InvoiceLineItem, PaymentReceipt, InvoiceStatusEnum
-from schemas import (
+from schemas.v1.schemas import (
     PaginatedResponse, InvoiceCreate, InvoiceResponse, 
     InvoiceLineItemCreate, PaymentReceiptCreate, PaymentReceiptResponse
 )
@@ -93,7 +93,7 @@ def record_payment(invoice_id: int, payload: PaymentReceiptCreate, db: Session =
     db.commit()
     db.refresh(receipt)
     return receipt
-from schemas import InvoiceUpdate
+from schemas.v1.schemas import InvoiceUpdate
 
 @router.get("/invoices", response_model=PaginatedResponse[InvoiceResponse])
 def list_invoices(patient_id: Optional[int] = None, status: Optional[InvoiceStatusEnum] = None, page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: User = Depends(RequirePermission("process_billing"))):

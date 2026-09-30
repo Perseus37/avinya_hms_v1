@@ -9,7 +9,7 @@ from models import (
     User, PatientEncounter, InpatientAdmission, BedTransferLog, Bed, 
     BedStatusEnum, EncounterStatusEnum, EncounterTypeEnum, TaskStatusEnum
 )
-from schemas import (
+from schemas.v1.schemas import (
     PaginatedResponse, PatientEncounterCreate, PatientEncounterResponse,
     InpatientAdmissionCreate, InpatientAdmissionResponse, BedTransferRequest, 
     BedTransferResponse, ClinicalDischargeRequest
@@ -204,7 +204,7 @@ def discharge_patient(admission_id: int, payload: ClinicalDischargeRequest, db: 
     return {"status": "success", "message": f"Patient discharged. Bed released to housekeeping."}
 
 from typing import Optional
-from schemas import PatientEncounterUpdate
+from schemas.v1.schemas import PatientEncounterUpdate
 
 # -----------------------------------------------------------------------------
 # Encounters Missing CRUD
@@ -271,7 +271,7 @@ def list_admission_transfers(admission_id: int, page: int = 1, page_size: int = 
     items = query.offset((page - 1) * page_size).limit(page_size).all()
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
-from schemas import InpatientAdmissionUpdate
+from schemas.v1.schemas import InpatientAdmissionUpdate
 
 # --- Encounters Missing Delete (Cancellation) ---
 

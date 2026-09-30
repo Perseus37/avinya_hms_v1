@@ -7,7 +7,7 @@ from models import (
     User, ServiceCategory, ServiceCatalog, ServiceBundleMapping, 
     DiagnosticOrder, DiagnosticTask, TaskStatusEnum, OrderStatusEnum
 )
-from schemas import (
+from schemas.v1.schemas import (
     PaginatedResponse, ServiceCategoryCreate, ServiceCategoryResponse,
     ServiceCatalogCreate, ServiceCatalogResponse, ServiceBundleMappingCreate,
     DiagnosticOrderCreate, DiagnosticOrderResponse, TaskResultEntry, DiagnosticTaskResponse,
@@ -119,7 +119,7 @@ def submit_task_result(task_id: int, payload: TaskResultEntry, db: Session = Dep
     db.commit()
     return {"status": "success", "message": f"Task {task_id} results recorded and status advanced to {payload.status}."}
 
-from schemas import ServiceCategoryUpdate, ServiceCatalogUpdate
+from schemas.v1.schemas import ServiceCategoryUpdate, ServiceCatalogUpdate
 
 # --- Service Category Missing Reads ---
 

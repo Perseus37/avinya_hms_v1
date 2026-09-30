@@ -11,7 +11,7 @@ from models import (
     User, MedicationMaster, InventoryBatch, Prescription, PrescriptionItem, 
     Invoice, InvoiceLineItem, InvoiceStatusEnum, PrescriptionStatusEnum
 )
-from schemas import (
+from schemas.v1.schemas import (
     PaginatedResponse, MedicationMasterCreate, MedicationMasterResponse, MedicationMasterUpdate,
     InventoryBatchCreate, InventoryBatchResponse, InventoryStockAdjustment,
     PrescriptionCreate, PrescriptionResponse, PrescriptionDispenseRequest
@@ -200,7 +200,7 @@ def cancel_prescription(prescription_id: int, db: Session = Depends(get_db), _: 
     db.commit()
     return {"status": "success", "message": "Prescription cancelled."}
 
-from schemas import InventoryBatchUpdate
+from schemas.v1.schemas import InventoryBatchUpdate
 
 @router.put("/inventory/batches/{batch_id}", response_model=InventoryBatchResponse)
 def update_inventory_batch(batch_id: int, payload: InventoryBatchUpdate, db: Session = Depends(get_db), _: User = Depends(RequirePermission("manage_pharmacy"))):

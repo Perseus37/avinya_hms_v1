@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from dependencies import RequirePermission, get_current_user
 from models import DoctorProfile, Role, User, UserRole, UserStatusEnum
-from schemas import PaginatedResponse, RoleCreate, RoleResponse, TokenResponse, UserCreate, UserLogin, UserMeResponse
+from schemas.v1.schemas import PaginatedResponse, RoleCreate, RoleResponse, TokenResponse, UserCreate, UserLogin, UserMeResponse
 
 from config import settings
 
@@ -183,7 +183,7 @@ def create_role(payload: RoleCreate, db: Session = Depends(get_db), current_user
     db.refresh(role)
     return role
 from models import Department, Permission
-from schemas import DepartmentCreate, DepartmentUpdate, DepartmentResponse, RoleUpdate, UserUpdate, PermissionResponse
+from schemas.v1.schemas import DepartmentCreate, DepartmentUpdate, DepartmentResponse, RoleUpdate, UserUpdate, PermissionResponse
 
 # --- Department Lifecycle ---
 
