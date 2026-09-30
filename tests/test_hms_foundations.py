@@ -90,7 +90,9 @@ def client():
             db.close()
 
     def override_get_current_user(db: Session = Depends(get_db)):
-        return db.query(User).filter(User.email == "admin@test.com").first()
+        user = db.query(User).filter(User.email == "admin@test.com").first()
+        db.info["audit_user_id"] = user.id
+        return user
 
     def override_get_redis():
         return fake_redis
@@ -116,8 +118,23 @@ def test_health_endpoint(client):
 def test_models_include_audit_columns():
     assert "created_at" in Department.__table__.columns
     assert "updated_at" in Department.__table__.columns
+    assert "created_by_id" in Department.__table__.columns
+    assert "updated_by_id" in Department.__table__.columns
     assert "created_at" in User.__table__.columns
     assert "updated_at" in User.__table__.columns
+
+
+def test_protected_create_records_audit_actor(client):
+    response = client.post("/api/ip/floors", json={"floor_number": 9, "name": "Audit Floor"})
+    assert response.status_code == 201
+
+    session = TestingSessionLocal()
+    try:
+        floor = session.query(Floor).filter_by(floor_number=9).one()
+        assert floor.created_by_id == 1
+        assert floor.updated_by_id == 1
+    finally:
+        session.close()
 
 
 def test_paginated_response_schema_exists():

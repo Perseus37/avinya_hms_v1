@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from database import get_db
 from dependencies import RequirePermission, get_current_user
@@ -48,7 +49,7 @@ def map_bundle_child(payload: ServiceBundleMappingCreate, db: Session = Depends(
     return {"status": "success", "message": "Service successfully mapped to bundle."}
 
 @router.get("/catalog", response_model=PaginatedResponse[ServiceCatalogResponse])
-def list_service_catalog(page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
+def list_service_catalog(page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
     query = db.query(ServiceCatalog).filter(ServiceCatalog.is_active == True)
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
@@ -60,7 +61,7 @@ def list_service_catalog(page: int = 1, page_size: int = 50, db: Session = Depen
 # -----------------------------------------------------------------------------
 
 @router.post("/orders", response_model=DiagnosticOrderResponse, status_code=status.HTTP_201_CREATED)
-def place_diagnostic_order(payload: DiagnosticOrderCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def place_diagnostic_order(payload: DiagnosticOrderCreate, db: Session = Depends(get_db), current_user: User = Depends(RequirePermission("write_cpoe_orders"))):
     """Places a clinical order and executes the Order Explosion Engine to generate department tasks."""
     # 1. Explode ordered IDs into executable tasks
     executable_service_ids = explode_clinical_orders(db, payload.ordered_service_ids)
@@ -91,7 +92,7 @@ def place_diagnostic_order(payload: DiagnosticOrderCreate, db: Session = Depends
     return order
 
 @router.get("/tasks/pending", response_model=PaginatedResponse[DiagnosticTaskResponse])
-def get_department_task_queue(page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
+def get_department_task_queue(page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
     """Retrieves pending diagnostic execution tickets for lab/radiology departments."""
     query = db.query(DiagnosticTask).filter(DiagnosticTask.status == TaskStatusEnum.PENDING)
     total = query.count()
@@ -99,7 +100,7 @@ def get_department_task_queue(page: int = 1, page_size: int = 50, db: Session = 
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 @router.patch("/tasks/{task_id}/result", status_code=200)
-def submit_task_result(task_id: int, payload: TaskResultEntry, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def submit_task_result(task_id: int, payload: TaskResultEntry, db: Session = Depends(get_db), current_user: User = Depends(RequirePermission("write_cpoe_orders"))):
     """Logs results for a task and advances its lifecycle state."""
     task = db.get(DiagnosticTask, task_id)
     if not task:
@@ -123,14 +124,14 @@ from schemas import ServiceCategoryUpdate, ServiceCatalogUpdate
 # --- Service Category Missing Reads ---
 
 @router.get("/categories", response_model=PaginatedResponse[ServiceCategoryResponse])
-def list_service_categories(page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
+def list_service_categories(page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
     query = db.query(ServiceCategory).filter(ServiceCategory.is_active == True)
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 @router.get("/categories/{category_id}", response_model=ServiceCategoryResponse)
-def get_service_category(category_id: int, db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
+def get_service_category(category_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
     category = db.get(ServiceCategory, category_id)
     if not category:
         raise HTTPException(status_code=404, detail="Service category not found")
@@ -140,7 +141,7 @@ def get_service_category(category_id: int, db: Session = Depends(get_db), _: boo
 # --- Service Catalog Missing Reads ---
 
 @router.get("/catalog/{item_id}", response_model=ServiceCatalogResponse)
-def get_service_catalog_item(item_id: int, db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
+def get_service_catalog_item(item_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
     item = db.get(ServiceCatalog, item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Service catalog item not found")
@@ -150,7 +151,7 @@ def get_service_catalog_item(item_id: int, db: Session = Depends(get_db), _: boo
 # --- Service Bundle Missing Reads & Deletes ---
 
 @router.get("/catalog/{parent_id}/bundles", response_model=list[ServiceBundleMappingResponse])
-def get_bundle_mappings(parent_id: int, db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
+def get_bundle_mappings(parent_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
     """Retrieves all child services mapped to a parent order set/package."""
     parent = db.get(ServiceCatalog, parent_id)
     if not parent or not parent.is_order_set:
@@ -228,7 +229,7 @@ from sqlalchemy.orm import joinedload
 # --- Diagnostic Order Missing CRUD ---
 
 @router.get("/orders", response_model=PaginatedResponse[DiagnosticOrderResponse])
-def list_diagnostic_orders(patient_id: Optional[int] = None, page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
+def list_diagnostic_orders(patient_id: Optional[int] = None, page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
     """Lists diagnostic orders, optionally filtered by a specific patient."""
     query = db.query(DiagnosticOrder).options(joinedload(DiagnosticOrder.tasks))
     if patient_id:
@@ -239,7 +240,7 @@ def list_diagnostic_orders(patient_id: Optional[int] = None, page: int = 1, page
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 @router.get("/orders/{order_id}", response_model=DiagnosticOrderResponse)
-def get_diagnostic_order(order_id: int, db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
+def get_diagnostic_order(order_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
     order = db.query(DiagnosticOrder).options(joinedload(DiagnosticOrder.tasks)).filter(DiagnosticOrder.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Diagnostic order not found.")
@@ -279,7 +280,7 @@ def cancel_diagnostic_order(order_id: int, db: Session = Depends(get_db), _: boo
 # --- Diagnostic Task Missing Reads ---
 
 @router.get("/orders/{order_id}/tasks", response_model=PaginatedResponse[DiagnosticTaskResponse])
-def list_order_tasks(order_id: int, page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
+def list_order_tasks(order_id: int, page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
     """Retrieves all department-level execution tickets for a specific parent order."""
     query = db.query(DiagnosticTask).filter(DiagnosticTask.order_id == order_id)
     total = query.count()

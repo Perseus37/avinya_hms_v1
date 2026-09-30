@@ -37,15 +37,14 @@ def get_current_user(
     user = db.execute(select(User).where(User.id == int(user_id))).scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=401, detail="User not found or inactive")
+    db.info["audit_user_id"] = user.id
     return user
 
-
 def RequirePermission(permission_code: str):
-    """Factory that verifies a user has the required permission before access is granted."""
-
-    def dependency(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Verifies a user has the required permission and returns the authorized User object."""
+    def dependency(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
         if current_user.is_superuser:
-            return True
+            return current_user
                      
         stmt = (
             select(Permission)
@@ -60,5 +59,6 @@ def RequirePermission(permission_code: str):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access denied: Required permission '{permission_code}' missing."
             )
-        return True
+        # Return the user object instead of True for audit tracking
+        return current_user
     return dependency

@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/patients", tags=["Patient Management & EMR"])
 # Patient master data domain
 # -----------------------------------------------------------------------------
 @router.post("", response_model=PatientResponse, status_code=status.HTTP_201_CREATED)
-def register_patient(payload: PatientCreate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+def register_patient(payload: PatientCreate, db: Session = Depends(get_db),current_user: User = Depends(RequirePermission("manage_clinical_mdm"))):
     """Registers a new patient into the hospital system."""
     existing = db.query(Patient).filter(Patient.mrn == payload.mrn).first()
     if existing:
@@ -32,6 +32,9 @@ def register_patient(payload: PatientCreate, db: Session = Depends(get_db), _: b
         gender=payload.gender,
         is_active=True,
     )
+
+    patient.updated_by_id = current_user.id
+
     db.add(patient)
     db.commit()
     db.refresh(patient)
@@ -43,7 +46,7 @@ def list_patients(
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
-    _: bool = Depends(get_current_user),
+    _: bool = Depends(RequirePermission("write_cpoe_orders")),
 ):
     """Retrieves active hospital patients with pagination support."""
     if page < 1:
@@ -58,7 +61,7 @@ def list_patients(
 
 
 @router.get("/{patient_id}", response_model=PatientResponse)
-def get_patient(patient_id: int, db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
+def get_patient(patient_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
     """Retrieves a single patient by ID."""
     patient = db.get(Patient, patient_id)
     if not patient:
@@ -67,7 +70,7 @@ def get_patient(patient_id: int, db: Session = Depends(get_db), _: bool = Depend
 
 
 @router.put("/{patient_id}", response_model=PatientResponse)
-def update_patient(patient_id: int, payload: PatientUpdate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+def update_patient(patient_id: int, payload: PatientUpdate, db: Session = Depends(get_db),current_user: User = Depends(RequirePermission("manage_clinical_mdm"))):
     """Updates patient demographic records."""
     patient = db.get(Patient, patient_id)
     if not patient:
@@ -81,20 +84,21 @@ def update_patient(patient_id: int, payload: PatientUpdate, db: Session = Depend
         patient.gender = payload.gender
     if payload.is_active is not None:
         patient.is_active = payload.is_active
-
+    patient.updated_by_id = current_user.id
     db.commit()
     db.refresh(patient)
     return patient
 
 
 @router.delete("/{patient_id}", status_code=200)
-def deactivate_patient(patient_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+def deactivate_patient(patient_id: int, db: Session = Depends(get_db),current_user: User = Depends(RequirePermission("manage_clinical_mdm"))):
     """Soft-deactivates a patient record."""
     patient = db.get(Patient, patient_id)
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
 
     patient.is_active = False
+    patient.updated_by_id = current_user.id
     db.commit()
     return {"status": "success", "message": f"Patient ID {patient_id} deactivated successfully."}
 
@@ -103,7 +107,7 @@ def deactivate_patient(patient_id: int, db: Session = Depends(get_db), _: bool =
 # Allergy and patient safety domain
 # -----------------------------------------------------------------------------
 @router.post("/allergies", status_code=status.HTTP_201_CREATED)
-def chart_patient_allergy(payload: PatientAllergyCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def chart_patient_allergy(payload: PatientAllergyCreate, db: Session = Depends(get_db), current_user: User = Depends(RequirePermission("write_cpoe_orders"))):
     """Charts an active allergy relation for a patient (triggers CPOE safety checks)."""
     patient_allergy = PatientAllergy(
         patient_id=payload.patient_id,
@@ -121,7 +125,7 @@ from sqlalchemy.orm import joinedload
 from schemas import PatientAllergyResponse
 
 @router.get("/{patient_id}/allergies", response_model=list[PatientAllergyResponse])
-def get_patient_allergies(patient_id: int, db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
+def get_patient_allergies(patient_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
     """Retrieves all actively charted allergies for a specific patient."""
     patient = db.get(Patient, patient_id)
     if not patient:
@@ -134,12 +138,11 @@ def get_patient_allergies(patient_id: int, db: Session = Depends(get_db), _: boo
     return db.execute(stmt).scalars().all()
 
 @router.delete("/allergies/{chart_id}", status_code=200)
-def unchart_patient_allergy(chart_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+def unchart_patient_allergy(chart_id: int, db: Session = Depends(get_db),current_user: User = Depends(RequirePermission("manage_clinical_mdm"))):
     """Soft-deletes a charted allergy in case of data entry error."""
     charted_allergy = db.get(PatientAllergy, chart_id)
     if not charted_allergy:
         raise HTTPException(status_code=404, detail="Charted patient allergy not found.")
-        
     charted_allergy.is_active = False
     db.commit()
     return {"status": "success", "message": f"Patient allergy chart ID {chart_id} deactivated."}

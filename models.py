@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from enum import Enum as PyEnum
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, event, func
+from sqlalchemy.orm import Mapped, Session as SQLAlchemySession, mapped_column, relationship
 
 from database import Base
 
@@ -136,7 +136,8 @@ class DischargeDispositionEnum(str, PyEnum):
 # -----------------------------------------------------------------------------
 # Auditing mixin for timestamp fields
 # -----------------------------------------------------------------------------
-class TimestampMixin:
+
+class AuditMixin:
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), 
         server_default=func.now(), 
@@ -148,11 +149,31 @@ class TimestampMixin:
         onupdate=lambda: datetime.now(timezone.utc), 
         nullable=False
     )
+    # Using Integer instead of strict ForeignKey to prevent circular dependencies in the base mixin
+    created_by_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_by_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
+
+@event.listens_for(SQLAlchemySession, "before_flush")
+def stamp_audit_actor(session, flush_context, instances):
+    """Attribute audited ORM inserts and updates to the authenticated request user."""
+    actor_id = session.info.get("audit_user_id")
+    if actor_id is None:
+        return
+
+    for entity in session.new:
+        if isinstance(entity, AuditMixin):
+            if entity.created_by_id is None:
+                entity.created_by_id = actor_id
+            entity.updated_by_id = actor_id
+
+    for entity in session.dirty:
+        if isinstance(entity, AuditMixin) and session.is_modified(entity, include_collections=False):
+            entity.updated_by_id = actor_id
 # -----------------------------------------------------------------------------
 # Identity and IAM domain
 # -----------------------------------------------------------------------------
-class Department(TimestampMixin, Base):
+class Department(AuditMixin, Base):
     __tablename__ = "departments"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -162,7 +183,7 @@ class Department(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(default=True)
 
 
-class Role(TimestampMixin, Base):
+class Role(AuditMixin, Base):
     __tablename__ = "roles"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -175,7 +196,7 @@ class Role(TimestampMixin, Base):
     users: Mapped[List["User"]] = relationship(secondary="user_roles", back_populates="roles")
 
 
-class Permission(TimestampMixin, Base):
+class Permission(AuditMixin, Base):
     __tablename__ = "permissions"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -193,7 +214,7 @@ class RolePermission(Base):
     permission_id: Mapped[int] = mapped_column(ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True)
 
 
-class User(TimestampMixin, Base):
+class User(AuditMixin, Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -213,7 +234,7 @@ class User(TimestampMixin, Base):
     doctor_profile: Mapped[Optional["DoctorProfile"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
-class UserRole(Base):
+class UserRole(AuditMixin, Base):
     __tablename__ = "user_roles"
 
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
@@ -221,7 +242,7 @@ class UserRole(Base):
     department_id: Mapped[Optional[int]] = mapped_column(ForeignKey("departments.id", ondelete="SET NULL"))
 
 
-class DoctorProfile(Base):
+class DoctorProfile(AuditMixin, Base):
     __tablename__ = "doctor_profiles"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -242,7 +263,7 @@ class DoctorProfile(Base):
 # -----------------------------------------------------------------------------
 # Facility and ward management domain
 # -----------------------------------------------------------------------------
-class Floor(TimestampMixin, Base):
+class Floor(AuditMixin, Base):
     __tablename__ = "floors"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -253,7 +274,7 @@ class Floor(TimestampMixin, Base):
     wards: Mapped[List["Ward"]] = relationship(back_populates="floor")
 
 
-class Ward(TimestampMixin, Base):
+class Ward(AuditMixin, Base):
     __tablename__ = "wards"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -269,7 +290,7 @@ class Ward(TimestampMixin, Base):
     rooms: Mapped[List["PhysicalRoom"]] = relationship(back_populates="ward")
 
 
-class PhysicalRoom(TimestampMixin, Base):
+class PhysicalRoom(AuditMixin, Base):
     __tablename__ = "physical_rooms_master"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -283,7 +304,7 @@ class PhysicalRoom(TimestampMixin, Base):
     beds: Mapped[List["Bed"]] = relationship(back_populates="room")
 
 
-class Bed(TimestampMixin, Base):
+class Bed(AuditMixin, Base):
     __tablename__ = "beds_master"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -297,7 +318,7 @@ class Bed(TimestampMixin, Base):
     room: Mapped[PhysicalRoom] = relationship(back_populates="beds")
 
 
-class NursingShiftAssignment(TimestampMixin, Base):
+class NursingShiftAssignment(AuditMixin, Base):
     __tablename__ = "nursing_shift_assignments"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -312,7 +333,7 @@ class NursingShiftAssignment(TimestampMixin, Base):
 # -----------------------------------------------------------------------------
 # Clinical and EMR master data
 # -----------------------------------------------------------------------------
-class ChiefComplaintMaster(TimestampMixin, Base):
+class ChiefComplaintMaster(AuditMixin, Base):
     __tablename__ = "chief_complaints_master"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -322,7 +343,7 @@ class ChiefComplaintMaster(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(default=True)
 
 
-class ComorbidityMaster(TimestampMixin, Base):
+class ComorbidityMaster(AuditMixin, Base):
     __tablename__ = "comorbidities_master"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -333,7 +354,7 @@ class ComorbidityMaster(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(default=True)
 
 
-class AllergyMaster(TimestampMixin, Base):
+class AllergyMaster(AuditMixin, Base):
     __tablename__ = "allergies_master"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -345,7 +366,7 @@ class AllergyMaster(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(default=True)
 
 
-class DiagnosisMaster(TimestampMixin, Base):
+class DiagnosisMaster(AuditMixin, Base):
     __tablename__ = "diagnoses_master"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -358,7 +379,7 @@ class DiagnosisMaster(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(default=True)
 
 
-class PhysicalExaminationMaster(TimestampMixin, Base):
+class PhysicalExaminationMaster(AuditMixin, Base):
     __tablename__ = "physical_examinations_master"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -369,7 +390,7 @@ class PhysicalExaminationMaster(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(default=True)
 
 
-class Patient(TimestampMixin, Base):
+class Patient(AuditMixin, Base):
     __tablename__ = "patients"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -380,7 +401,7 @@ class Patient(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(default=True)
 
 
-class PatientAllergy(TimestampMixin, Base):
+class PatientAllergy(AuditMixin, Base):
     __tablename__ = "patient_allergies"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -400,7 +421,7 @@ class PatientAllergy(TimestampMixin, Base):
 # PHASE 4: DIAGNOSTIC SERVICES & LIS CORE
 # ==========================================
 
-class ServiceCategory(TimestampMixin, Base):
+class ServiceCategory(AuditMixin, Base):
     """Categorizes billable and executable services (e.g., Pathology, MRI, Health Checks)."""
     __tablename__ = "service_categories"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -413,7 +434,7 @@ class ServiceCategory(TimestampMixin, Base):
     services: Mapped[List["ServiceCatalog"]] = relationship(back_populates="category")
 
 
-class ServiceCatalog(TimestampMixin, Base):
+class ServiceCatalog(AuditMixin, Base):
     """The central master catalog for all hospital services, tests, and order sets."""
     __tablename__ = "service_catalog"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -434,7 +455,7 @@ class ServiceCatalog(TimestampMixin, Base):
     category: Mapped[ServiceCategory] = relationship(back_populates="services")
 
 
-class ServiceBundleMapping(TimestampMixin, Base):
+class ServiceBundleMapping(AuditMixin, Base):
     """Maps a parent package (e.g., 'Master Health Check') to executable child services."""
     __tablename__ = "service_bundle_mappings"
     parent_service_id: Mapped[int] = mapped_column(ForeignKey("service_catalog.id", ondelete="CASCADE"), primary_key=True)
@@ -442,7 +463,7 @@ class ServiceBundleMapping(TimestampMixin, Base):
     quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
 
-class DiagnosticOrder(TimestampMixin, Base):
+class DiagnosticOrder(AuditMixin, Base):
     """The overarching CPOE clinical request grouping multiple tests for a patient."""
     __tablename__ = "diagnostic_orders"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -456,7 +477,7 @@ class DiagnosticOrder(TimestampMixin, Base):
     tasks: Mapped[List["DiagnosticTask"]] = relationship(back_populates="order", cascade="all, delete-orphan")
 
 
-class DiagnosticTask(TimestampMixin, Base):
+class DiagnosticTask(AuditMixin, Base):
     """The exploded, department-level execution tickets resulting from a DiagnosticOrder."""
     __tablename__ = "diagnostic_tasks"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -475,3 +496,68 @@ class DiagnosticTask(TimestampMixin, Base):
     performed_by: Mapped[Optional["User"]] = relationship(foreign_keys=[performed_by_id])
     verified_by: Mapped[Optional["User"]] = relationship(foreign_keys=[verified_by_id])
 
+
+# ==========================================
+# PHASE 5: PATIENT ADMISSIONS & ENCOUNTERS (ADT)
+# ==========================================
+
+class PatientEncounter(AuditMixin, Base):
+    """The overarching episode of care, covering OPD visits, IPD stays, or ER visits."""
+    __tablename__ = "patient_encounters"
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
+    encounter_type: Mapped[EncounterTypeEnum] = mapped_column(nullable=False)
+    status: Mapped[EncounterStatusEnum] = mapped_column(default=EncounterStatusEnum.ACTIVE, nullable=False)
+    
+    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=func.now(), nullable=False)
+    end_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    
+    primary_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
+    chief_complaint_notes: Mapped[Optional[str]] = mapped_column(Text)
+    
+    patient: Mapped["Patient"] = relationship()
+    primary_doctor: Mapped["User"] = relationship()
+    department: Mapped["Department"] = relationship()
+    admissions: Mapped[List["InpatientAdmission"]] = relationship(back_populates="encounter")
+
+
+class InpatientAdmission(AuditMixin, Base):
+    """Specific IPD record tracking bed assignment and admission lifecycle."""
+    __tablename__ = "inpatient_admissions"
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id", ondelete="CASCADE"), nullable=False, unique=True)
+    admission_type: Mapped[AdmissionTypeEnum] = mapped_column(nullable=False)
+    
+    current_bed_id: Mapped[Optional[int]] = mapped_column(ForeignKey("beds_master.id"))
+    admitting_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    
+    discharge_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    discharge_disposition: Mapped[Optional[DischargeDispositionEnum]] = mapped_column(default=None)
+    discharge_summary: Mapped[Optional[str]] = mapped_column(Text)
+    
+    encounter: Mapped[PatientEncounter] = relationship(back_populates="admissions")
+    current_bed: Mapped[Optional["Bed"]] = relationship()
+    admitting_doctor: Mapped["User"] = relationship()
+    transfer_logs: Mapped[List["BedTransferLog"]] = relationship(back_populates="admission")
+
+
+class BedTransferLog(AuditMixin, Base):
+    """Audit trail for patient movement across wards and beds during an active admission."""
+    __tablename__ = "bed_transfer_logs"
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    admission_id: Mapped[int] = mapped_column(ForeignKey("inpatient_admissions.id", ondelete="CASCADE"), nullable=False)
+    from_bed_id: Mapped[Optional[int]] = mapped_column(ForeignKey("beds_master.id"))
+    to_bed_id: Mapped[int] = mapped_column(ForeignKey("beds_master.id"), nullable=False)
+    
+    transfer_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=func.now(), nullable=False)
+    requested_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    transfer_reason: Mapped[Optional[str]] = mapped_column(String(255))
+    
+    admission: Mapped[InpatientAdmission] = relationship(back_populates="transfer_logs")
+    from_bed: Mapped[Optional["Bed"]] = relationship(foreign_keys=[from_bed_id])
+    to_bed: Mapped["Bed"] = relationship(foreign_keys=[to_bed_id])
+    requested_by: Mapped["User"] = relationship()

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from database import get_db, get_redis
-from dependencies import RequirePermission, get_current_user
+from dependencies import RequirePermission
 from models import (
     AllergyMaster,
     ChiefComplaintMaster,
@@ -43,6 +43,7 @@ def fetch_taxonomy(
     page_size: int = 20,
     db: Session = Depends(get_db),
     redis=Depends(get_redis),
+    _: bool = Depends(RequirePermission("write_cpoe_orders")),
 ):
     """Return a paginated department taxonomy collection, using Redis cache when available."""
     if page < 1:
@@ -63,6 +64,7 @@ def get_department_diagnoses(
     page_size: int = 20,
     db: Session = Depends(get_db),
     redis=Depends(get_redis),
+    _: bool = Depends(RequirePermission("write_cpoe_orders")),
 ):
     """Retrieves active ICD-10 diagnoses for a department with pagination support."""
     if page < 1:
@@ -83,6 +85,7 @@ def get_department_comorbidities(
     page_size: int = 20,
     db: Session = Depends(get_db),
     redis=Depends(get_redis),
+    _: bool = Depends(RequirePermission("write_cpoe_orders")),
 ):
     """Retrieves active comorbidity taxonomies for a department with pagination support."""
     if page < 1:
@@ -103,6 +106,7 @@ def get_department_physical_exams(
     page_size: int = 20,
     db: Session = Depends(get_db),
     redis=Depends(get_redis),
+    _: bool = Depends(RequirePermission("write_cpoe_orders")),
 ):
     """Retrieves active physical examination taxonomies for a department with pagination support."""
     if page < 1:
@@ -337,7 +341,11 @@ def deactivate_physical_exam(exam_id: int, db: Session = Depends(get_db), redis=
 # Clinical safety domain
 # -----------------------------------------------------------------------------
 @router.post("/orders/check-allergy")
-def verify_prescription_safety(payload: AllergyCheckRequest, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def verify_prescription_safety(
+    payload: AllergyCheckRequest,
+    db: Session = Depends(get_db),
+    _: bool = Depends(RequirePermission("write_cpoe_orders")),
+):
     """Check whether a patient has an active allergy conflict before prescribing."""
     check_allergy_hard_stop(db, payload.patient_id, payload.allergen_keywords)
     return {"status": "safe", "message": "CPOE verification passed: No clinical allergy conflicts detected."}

@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from database import get_db
-from dependencies import RequirePermission, get_current_user
+from dependencies import RequirePermission
 from models import Bed, BedStatusEnum, Floor, NursingShiftAssignment, PhysicalRoom, Ward
 from schemas import (
     BedCreate,
@@ -39,7 +39,7 @@ def list_wards(
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
-    _: bool = Depends(get_current_user),
+    _: bool = Depends(RequirePermission("view_ward_map")),
 ):
     """Lists active hospital wards with pagination support."""
     if page < 1:
@@ -58,7 +58,7 @@ def list_floors(
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
-    _: bool = Depends(get_current_user),
+    _: bool = Depends(RequirePermission("view_ward_map")),
 ):
     """Lists active hospital floors with pagination support."""
     if page < 1:
@@ -78,7 +78,7 @@ def list_ward_rooms(
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
-    _: bool = Depends(get_current_user),
+    _: bool = Depends(RequirePermission("view_ward_map")),
 ):
     """Lists physical rooms for a ward with pagination support."""
     if page < 1:
@@ -235,7 +235,12 @@ def remove_bed(bed_id: int, db: Session = Depends(get_db), _: bool = Depends(Req
 # Bed and shift operations domain
 # -----------------------------------------------------------------------------
 @router.patch("/beds/{bed_id}/status")
-def update_bed_status(bed_id: int, payload: BedStatusUpdate, db: Session = Depends(get_db)):
+def update_bed_status(
+    bed_id: int,
+    payload: BedStatusUpdate,
+    db: Session = Depends(get_db),
+    _: bool = Depends(RequirePermission("view_ward_map")),
+):
     """Update the occupancy or availability state of a bed with concurrency protection."""
     try:
         stmt = select(Bed).where(Bed.id == bed_id).with_for_update(nowait=True)

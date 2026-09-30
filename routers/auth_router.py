@@ -63,7 +63,11 @@ def list_users(
 
 
 @router.post("/users/doctor", status_code=status.HTTP_201_CREATED)
-def create_doctor(payload: UserCreate, db: Session = Depends(get_db)):
+def create_doctor(
+    payload: UserCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+):
     """Create a doctor account and attach the related clinical profile if supplied."""
     hashed_pwd = pwd_context.hash(payload.password)
     user = User(
@@ -78,7 +82,7 @@ def create_doctor(payload: UserCreate, db: Session = Depends(get_db)):
     db.flush()
 
     roles = db.query(Role).filter(Role.id.in_(payload.role_ids)).all()
-    user.roles.extend(roles)
+    db.add_all(UserRole(user_id=user.id, role_id=role.id) for role in roles)
 
     if payload.doctor_profile:
         dp = payload.doctor_profile
@@ -104,7 +108,7 @@ def update_user_status(
     user_id: int,
     new_status: UserStatusEnum,
     db: Session = Depends(get_db),
-    _: bool = Depends(RequirePermission("manage_clinical_mdm")),
+    current_user: User = Depends(RequirePermission("manage_clinical_mdm")),
 ):
     """Update a user’s active status such as active, inactive, or suspended."""
     user = db.get(User, user_id)
@@ -122,7 +126,7 @@ def assign_user_department(
     department_id: int,
     role_id: int,
     db: Session = Depends(get_db),
-    _: bool = Depends(RequirePermission("manage_clinical_mdm")),
+    current_user: User = Depends(RequirePermission("manage_clinical_mdm")),
 ):
     """Assigns or updates a user's operational department scope."""
     user_role = db.query(UserRole).filter(UserRole.user_id == user_id, UserRole.role_id == role_id).first()
@@ -144,7 +148,7 @@ def list_roles(
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
-    _: bool = Depends(get_current_user),
+    _: User = Depends(RequirePermission("manage_clinical_mdm")),
 ):
     """List available system roles with pagination support."""
     if page < 1:
@@ -159,7 +163,7 @@ def list_roles(
 
 
 @router.post("/roles", response_model=RoleResponse, status_code=status.HTTP_201_CREATED)
-def create_role(payload: RoleCreate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+def create_role(payload: RoleCreate, db: Session = Depends(get_db), current_user: User = Depends(RequirePermission("manage_clinical_mdm"))):
     """Creates a new enterprise system role."""
     existing = db.query(Role).filter(Role.name == payload.name).first()
     if existing:
@@ -170,6 +174,8 @@ def create_role(payload: RoleCreate, db: Session = Depends(get_db), _: bool = De
         name=payload.name,
         description=payload.description,
         is_system_role=False,
+        created_by_id=current_user.id,
+        updated_by_id=current_user.id
     )
     db.add(role)
     db.commit()
@@ -181,41 +187,43 @@ from schemas import DepartmentCreate, DepartmentUpdate, DepartmentResponse, Role
 # --- Department Lifecycle ---
 
 @router.post("/departments", response_model=DepartmentResponse, status_code=status.HTTP_201_CREATED)
-def create_department(payload: DepartmentCreate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+def create_department(payload: DepartmentCreate, db: Session = Depends(get_db), current_user: User = Depends(RequirePermission("manage_clinical_mdm"))):
     existing = db.query(Department).filter(Department.code == payload.code).first()
     if existing:
         raise HTTPException(status_code=409, detail="Department code already exists.")
-    dept = Department(**payload.model_dump(), is_active=True)
+    dept = Department(**payload.model_dump(), is_active=True, created_by_id=current_user.id, updated_by_id=current_user.id)
     db.add(dept)
     db.commit()
     db.refresh(dept)
     return dept
 
 @router.get("/departments", response_model=PaginatedResponse[DepartmentResponse])
-def list_departments(page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: bool = Depends(get_current_user)):
+def list_departments(page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: User = Depends(RequirePermission("manage_clinical_mdm"))):
     query = db.query(Department).filter(Department.is_active == True)
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 @router.put("/departments/{dept_id}", response_model=DepartmentResponse)
-def update_department(dept_id: int, payload: DepartmentUpdate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+def update_department(dept_id: int, payload: DepartmentUpdate, db: Session = Depends(get_db), current_user: User = Depends(RequirePermission("manage_clinical_mdm"))):
     dept = db.get(Department, dept_id)
     if not dept:
         raise HTTPException(status_code=404, detail="Department not found.")
     if payload.name is not None: dept.name = payload.name
     if payload.ndhm_speciality_code is not None: dept.ndhm_speciality_code = payload.ndhm_speciality_code
     if payload.is_active is not None: dept.is_active = payload.is_active
+    dept.updated_by_id = current_user.id
     db.commit()
     db.refresh(dept)
     return dept
 
 @router.delete("/departments/{dept_id}", status_code=200)
-def deactivate_department(dept_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+def deactivate_department(dept_id: int, db: Session = Depends(get_db), current_user: User = Depends(RequirePermission("manage_clinical_mdm"))):
     dept = db.get(Department, dept_id)
     if not dept:
         raise HTTPException(status_code=404, detail="Department not found.")
     dept.is_active = False
+    dept.updated_by_id = current_user.id
     db.commit()
     return {"status": "success", "message": f"Department ID {dept_id} deactivated."}
 
@@ -223,23 +231,24 @@ def deactivate_department(dept_id: int, db: Session = Depends(get_db), _: bool =
 # --- Permissions & Roles Missing CRUD ---
 
 @router.get("/permissions", response_model=list[PermissionResponse])
-def list_permissions(db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+def list_permissions(db: Session = Depends(get_db), current_user: User = Depends(RequirePermission("manage_clinical_mdm"))):
     """Provides a flat list of all hardcoded system permissions for role assignment UI."""
     return db.query(Permission).all()
 
 @router.put("/roles/{role_id}", response_model=RoleResponse)
-def update_role(role_id: int, payload: RoleUpdate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+def update_role(role_id: int, payload: RoleUpdate, db: Session = Depends(get_db), current_user: User = Depends(RequirePermission("manage_clinical_mdm"))):
     role = db.get(Role, role_id)
     if not role or role.is_system_role:
         raise HTTPException(status_code=400, detail="Role not found or is a protected system role.")
     if payload.name is not None: role.name = payload.name
     if payload.description is not None: role.description = payload.description
+    role.updated_by_id = current_user.id
     db.commit()
     db.refresh(role)
     return role
 
 @router.delete("/roles/{role_id}", status_code=200)
-def delete_role(role_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+def delete_role(role_id: int, db: Session = Depends(get_db), current_user: User = Depends(RequirePermission("manage_clinical_mdm"))):
     role = db.get(Role, role_id)
     if not role or role.is_system_role:
         raise HTTPException(status_code=400, detail="Role not found or is a protected system role.")
@@ -258,13 +267,14 @@ def get_user(user_id: int, db: Session = Depends(get_db), _: bool = Depends(Requ
     return user
 
 @router.put("/users/{user_id}", response_model=UserMeResponse)
-def update_user_details(user_id: int, payload: UserUpdate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+def update_user_details(user_id: int, payload: UserUpdate, db: Session = Depends(get_db), current_user: User = Depends(RequirePermission("manage_clinical_mdm"))):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
     if payload.full_name is not None: user.full_name = payload.full_name
     if payload.phone_number is not None: user.phone_number = payload.phone_number
     if payload.gender is not None: user.gender = payload.gender
+    user.updated_by_id = current_user.id
     db.commit()
     db.refresh(user)
     return user

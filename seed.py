@@ -235,6 +235,54 @@ def run_seed():
         db.add_all([task_1, task_2])
 
         db.commit()
+        logger.info("Phase 4 Seeding completed successfully.")
+
+        # 8. Seed Phase 5: Patient Encounters & IPD Admission
+        logger.info("Seeding Phase 5: Encounters and IPD Admissions...")
+        
+        # Create an active IPD Encounter
+        encounter = PatientEncounter(
+            patient_id=sample_patient.id,
+            encounter_type=EncounterTypeEnum.IPD,
+            primary_doctor_id=doctor_user.id,
+            department_id=dept_cardio.id,
+            chief_complaint_notes="Admitted for cardiac monitoring and CBC evaluation.",
+            status=EncounterStatusEnum.ACTIVE
+        )
+        db.add(encounter)
+        db.flush()
+
+        # Ensure Bed A is available for the seed logic
+        bed_a.status = BedStatusEnum.AVAILABLE
+        db.flush()
+
+        # Admit the patient to Bed 301-A
+        admission = InpatientAdmission(
+            encounter_id=encounter.id,
+            admission_type=AdmissionTypeEnum.ROUTINE,
+            current_bed_id=bed_a.id,
+            admitting_doctor_id=doctor_user.id
+        )
+        db.add(admission)
+        db.flush()
+
+        # Lock the bed to the admission
+        bed_a.status = BedStatusEnum.OCCUPIED
+        bed_a.current_admission_id = admission.id
+
+        # Log the initial placement
+        transfer_log = BedTransferLog(
+            admission_id=admission.id,
+            from_bed_id=None,
+            to_bed_id=bed_a.id,
+            requested_by_id=doctor_user.id,
+            transfer_reason="Initial IPD Admission placement."
+        )
+        db.add(transfer_log)
+        
+        db.commit()
+        logger.info("Phase 5 Seeding completed successfully.")
+
         logger.info("Database seeding completed with status: SUCCESS")
 
     except Exception as e:

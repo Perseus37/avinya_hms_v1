@@ -410,3 +410,67 @@ class PatientAllergyResponse(BaseModel):
     allergy: AllergyMasterCreate # Nests the master data details
     model_config = ConfigDict(from_attributes=True)
 
+from models import EncounterTypeEnum, EncounterStatusEnum, AdmissionTypeEnum, DischargeDispositionEnum
+
+# --- PHASE 5: ENCOUNTER & ADT SCHEMAS ---
+
+class PatientEncounterCreate(BaseModel):
+    patient_id: int
+    encounter_type: EncounterTypeEnum
+    primary_doctor_id: int
+    department_id: int
+    chief_complaint_notes: Optional[str] = None
+
+class PatientEncounterResponse(BaseModel):
+    id: int
+    patient_id: int
+    encounter_type: EncounterTypeEnum
+    status: EncounterStatusEnum
+    start_time: datetime
+    end_time: Optional[datetime] = None
+    primary_doctor_id: int
+    department_id: int
+    model_config = ConfigDict(from_attributes=True)
+
+class InpatientAdmissionCreate(BaseModel):
+    encounter_id: int
+    admission_type: AdmissionTypeEnum
+    admitting_doctor_id: int
+    assigned_bed_id: int
+
+class InpatientAdmissionResponse(BaseModel):
+    id: int
+    encounter_id: int
+    admission_type: AdmissionTypeEnum
+    current_bed_id: Optional[int]
+    admitting_doctor_id: int
+    discharge_time: Optional[datetime] = None
+    discharge_disposition: Optional[DischargeDispositionEnum] = None
+    model_config = ConfigDict(from_attributes=True)
+
+class BedTransferRequest(BaseModel):
+    admission_id: int
+    new_bed_id: int
+    transfer_reason: str
+
+class BedTransferResponse(BaseModel):
+    id: int
+    admission_id: int
+    from_bed_id: Optional[int]
+    to_bed_id: int
+    transfer_time: datetime
+    transfer_reason: Optional[str]
+    model_config = ConfigDict(from_attributes=True)
+
+class ClinicalDischargeRequest(BaseModel):
+    discharge_disposition: DischargeDispositionEnum
+    discharge_summary: str
+
+class PatientEncounterUpdate(BaseModel):
+    primary_doctor_id: Optional[int] = None
+    department_id: Optional[int] = None
+    chief_complaint_notes: Optional[str] = None
+
+class InpatientAdmissionUpdate(BaseModel):
+    admission_type: Optional[AdmissionTypeEnum] = None
+    admitting_doctor_id: Optional[int] = None
