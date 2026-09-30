@@ -42,7 +42,9 @@ def run_seed():
         p1 = Permission(code="view_ward_map", description="View spatial ward and bed layouts", module="WardManagement")
         p2 = Permission(code="manage_clinical_mdm", description="Create/Update clinical taxonomies", module="ClinicalEMR")
         p3 = Permission(code="write_cpoe_orders", description="Issue prescriptions and clinical orders", module="CPOE")
-        db.add_all([p1, p2, p3])
+        p4 = Permission(code="process_billing", description="Manage invoices and payments", module="Financial")
+        p5 = Permission(code="manage_pharmacy", description="Dispense drugs and manage stock", module="Pharmacy")
+        db.add_all([p1, p2, p3, p4, p5])
         db.flush()
 
         # 3. Seed Roles
@@ -52,7 +54,7 @@ def run_seed():
         db.add_all([admin_role, doctor_role])
         db.flush()
 
-        admin_role.permissions.extend([p1, p2, p3])
+        admin_role.permissions.extend([p1, p2, p3, p4, p5])
         doctor_role.permissions.extend([p1, p3])
         db.flush()
 
@@ -370,6 +372,56 @@ def run_seed():
         
         db.commit()
         logger.info("Phase 7 Seeding completed successfully.")
+
+        # 11. Seed Phase 8: Pharmacy & Inventory
+        logger.info("Seeding Phase 8: Pharmacy Supply Chain & CPOE...")
+        from datetime import timedelta
+        from models import MedicationMaster, MedicationFormEnum, InventoryBatch, Prescription, PrescriptionItem, PrescriptionStatusEnum
+        
+        # Define Medication Master
+        med_para = MedicationMaster(
+            code="MED-PARA-500",
+            brand_name="Dolo-500",
+            generic_name="Paracetamol",
+            form=MedicationFormEnum.TABLET,
+            strength="500mg",
+            is_active=True
+        )
+        db.add(med_para)
+        db.flush()
+
+        # Receive Inventory Batch
+        batch_1 = InventoryBatch(
+            medication_id=med_para.id,
+            batch_number="BCH-2026-X1",
+            expiry_date=datetime.now(timezone.utc) + timedelta(days=365),
+            stock_quantity=1000,
+            unit_price_paise=1500  # 15.00
+        )
+        db.add(batch_1)
+        db.flush()
+
+        # Doctor Issues Prescription for the IPD Encounter
+        prescription = Prescription(
+            encounter_id=encounter.id,
+            prescribing_doctor_id=doctor_user.id,
+            clinical_notes="Fever management.",
+            status=PrescriptionStatusEnum.ACTIVE
+        )
+        db.add(prescription)
+        db.flush()
+
+        # Add 10 pills to the prescription
+        rx_item = PrescriptionItem(
+            prescription_id=prescription.id,
+            medication_id=med_para.id,
+            dosage_instruction="1-1-1 after food",
+            requested_quantity=10
+        )
+        db.add(rx_item)
+        
+        db.commit()
+        logger.info("Phase 8 Seeding completed successfully.")
 
         logger.info("Database seeding completed with status: SUCCESS")
 

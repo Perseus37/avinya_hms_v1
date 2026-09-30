@@ -554,3 +554,84 @@ class AppointmentResponse(BaseModel):
     reason_for_visit: Optional[str]
     encounter_id: Optional[int]
     model_config = ConfigDict(from_attributes=True)
+
+from models import MedicationFormEnum, PrescriptionStatusEnum
+
+# --- PHASE 8: PHARMACY SCHEMAS ---
+class MedicationMasterCreate(BaseModel):
+    code: str
+    brand_name: str
+    generic_name: str
+    form: MedicationFormEnum
+    strength: str
+
+class MedicationMasterUpdate(BaseModel):
+    brand_name: Optional[str] = None
+    generic_name: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class InventoryBatchCreate(BaseModel):
+    medication_id: int
+    batch_number: str
+    expiry_date: datetime
+    stock_quantity: int
+    unit_price_paise: int
+
+class InventoryStockAdjustment(BaseModel):
+    quantity_adjustment: int  # Negative for write-offs, positive for restocks
+
+class PrescriptionItemCreate(BaseModel):
+    medication_id: int
+    dosage_instruction: str
+    requested_quantity: int
+
+class PrescriptionCreate(BaseModel):
+    encounter_id: int
+    clinical_notes: Optional[str] = None
+    items: List[PrescriptionItemCreate]
+
+class MedicationMasterResponse(BaseModel):
+    id: int
+    code: str
+    brand_name: str
+    generic_name: str
+    form: MedicationFormEnum
+    strength: str
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
+
+class InventoryBatchResponse(BaseModel):
+    id: int
+    medication_id: int
+    batch_number: str
+    expiry_date: datetime
+    stock_quantity: int
+    unit_price_paise: int
+    medication: MedicationMasterResponse
+    model_config = ConfigDict(from_attributes=True)
+
+class PrescriptionItemResponse(BaseModel):
+    id: int
+    medication_id: int
+    dosage_instruction: str
+    requested_quantity: int
+    dispensed_quantity: int
+    medication: MedicationMasterResponse
+    model_config = ConfigDict(from_attributes=True)
+
+class PrescriptionResponse(BaseModel):
+    id: int
+    encounter_id: int
+    prescribing_doctor_id: int
+    status: PrescriptionStatusEnum
+    clinical_notes: Optional[str]
+    items: List[PrescriptionItemResponse]
+    model_config = ConfigDict(from_attributes=True)
+
+class DispenseItem(BaseModel):
+    prescription_item_id: int
+    batch_id: int
+    quantity_to_dispense: int
+
+class PrescriptionDispenseRequest(BaseModel):
+    items: List[DispenseItem]

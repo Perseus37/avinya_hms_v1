@@ -157,6 +157,22 @@ class AppointmentStatusEnum(str, PyEnum):
     CANCELLED = "CANCELLED"
     NO_SHOW = "NO_SHOW"
 
+# --- PHASE 8 ENUMS ---
+class MedicationFormEnum(str, PyEnum):
+    TABLET = "TABLET"
+    CAPSULE = "CAPSULE"
+    SYRUP = "SYRUP"
+    INJECTION = "INJECTION"
+    OINTMENT = "OINTMENT"
+    DROPS = "DROPS"
+
+class PrescriptionStatusEnum(str, PyEnum):
+    ACTIVE = "ACTIVE"
+    PARTIAL = "PARTIAL"
+    DISPENSED = "DISPENSED"
+    CANCELLED = "CANCELLED"
+
+
 # -----------------------------------------------------------------------------
 # Auditing mixin for timestamp fields
 # -----------------------------------------------------------------------------
@@ -666,3 +682,64 @@ class Appointment(AuditMixin, Base):
     doctor: Mapped["User"] = relationship()
     department: Mapped["Department"] = relationship()
     encounter: Mapped[Optional["PatientEncounter"]] = relationship()
+
+# ==========================================
+# PHASE 8: PHARMACY & INVENTORY MANAGEMENT
+# ==========================================
+
+class MedicationMaster(AuditMixin, Base):
+    """The central catalog of all authorized medications."""
+    __tablename__ = "medication_master"
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    brand_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    generic_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    form: Mapped[MedicationFormEnum] = mapped_column(nullable=False)
+    strength: Mapped[str] = mapped_column(String(50), nullable=False)  # e.g., "500mg"
+    is_active: Mapped[bool] = mapped_column(default=True)
+
+class InventoryBatch(AuditMixin, Base):
+    """Tracks physical stock levels, pricing, and expiry dates for specific drug batches."""
+    __tablename__ = "inventory_batches"
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    medication_id: Mapped[int] = mapped_column(ForeignKey("medication_master.id"), nullable=False)
+    
+    batch_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    expiry_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    
+    stock_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit_price_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    
+    medication: Mapped[MedicationMaster] = relationship()
+
+class Prescription(AuditMixin, Base):
+    """A physician's formal order for patient medication."""
+    __tablename__ = "prescriptions"
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id"), nullable=False)
+    prescribing_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    
+    status: Mapped[PrescriptionStatusEnum] = mapped_column(default=PrescriptionStatusEnum.ACTIVE, nullable=False)
+    clinical_notes: Mapped[Optional[str]] = mapped_column(Text)
+    
+    encounter: Mapped["PatientEncounter"] = relationship()
+    prescribing_doctor: Mapped["User"] = relationship()
+    items: Mapped[List["PrescriptionItem"]] = relationship(back_populates="prescription", cascade="all, delete-orphan")
+
+class PrescriptionItem(AuditMixin, Base):
+    """The specific dosage instructions and requested quantities for a prescription."""
+    __tablename__ = "prescription_items"
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    prescription_id: Mapped[int] = mapped_column(ForeignKey("prescriptions.id", ondelete="CASCADE"), nullable=False)
+    medication_id: Mapped[int] = mapped_column(ForeignKey("medication_master.id"), nullable=False)
+    
+    dosage_instruction: Mapped[str] = mapped_column(String(255), nullable=False)  # e.g., "1-0-1 after meals"
+    requested_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    dispensed_quantity: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    
+    prescription: Mapped[Prescription] = relationship(back_populates="items")
+    medication: Mapped[MedicationMaster] = relationship()
