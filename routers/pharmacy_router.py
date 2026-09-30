@@ -199,3 +199,29 @@ def cancel_prescription(prescription_id: int, db: Session = Depends(get_db), _: 
     prescription.status = PrescriptionStatusEnum.CANCELLED
     db.commit()
     return {"status": "success", "message": "Prescription cancelled."}
+
+from schemas import InventoryBatchUpdate
+
+@router.put("/inventory/batches/{batch_id}", response_model=InventoryBatchResponse)
+def update_inventory_batch(batch_id: int, payload: InventoryBatchUpdate, db: Session = Depends(get_db), _: User = Depends(RequirePermission("manage_pharmacy"))):
+    """Corrects data-entry errors on a batch (e.g., fixing pricing before it bills patients)."""
+    batch = db.get(InventoryBatch, batch_id)
+    if not batch: raise HTTPException(status_code=404, detail="Batch not found.")
+    
+    if payload.batch_number is not None: batch.batch_number = payload.batch_number
+    if payload.expiry_date is not None: batch.expiry_date = payload.expiry_date
+    if payload.unit_price_paise is not None: batch.unit_price_paise = payload.unit_price_paise
+    
+    db.commit()
+    db.refresh(batch)
+    return batch
+
+@router.delete("/inventory/batches/{batch_id}", status_code=200)
+def void_inventory_batch(batch_id: int, db: Session = Depends(get_db), _: User = Depends(RequirePermission("manage_pharmacy"))):
+    """Permanently voids an inventory batch created in error."""
+    batch = db.get(InventoryBatch, batch_id)
+    if not batch: raise HTTPException(status_code=404, detail="Batch not found.")
+    
+    db.delete(batch)
+    db.commit()
+    return {"status": "success", "message": f"Batch {batch_id} voided from inventory successfully."}

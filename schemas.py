@@ -635,3 +635,8 @@ class DispenseItem(BaseModel):
 
 class PrescriptionDispenseRequest(BaseModel):
     items: List[DispenseItem]
+
+class InventoryBatchUpdate(BaseModel):
+    batch_number: Optional[str] = None
+    expiry_date: Optional[datetime] = None
+    unit_price_paise: Optional[int] = None
