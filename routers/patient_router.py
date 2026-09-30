@@ -138,7 +138,7 @@ def get_patient_allergies(patient_id: int, db: Session = Depends(get_db), _: boo
     return db.execute(stmt).scalars().all()
 
 @router.delete("/allergies/{chart_id}", status_code=200)
-def unchart_patient_allergy(chart_id: int, db: Session = Depends(get_db),current_user: User = Depends(RequirePermission("manage_clinical_mdm"))):
+def unchart_patient_allergy(chart_id: int, db: Session = Depends(get_db),current_user: User = Depends(RequirePermission("write_cpoe_orders"))):
     """Soft-deletes a charted allergy in case of data entry error."""
     charted_allergy = db.get(PatientAllergy, chart_id)
     if not charted_allergy:

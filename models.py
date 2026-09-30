@@ -131,7 +131,20 @@ class DischargeDispositionEnum(str, PyEnum):
     REFERRED_OUT = "REFERRED_OUT"
     AGAINST_MEDICAL_ADVICE = "AGAINST_MEDICAL_ADVICE"
     DECEASED = "DECEASED"
+# --- PHASE 6 ENUMS ---
+class InvoiceStatusEnum(str, PyEnum):
+    DRAFT = "DRAFT"
+    UNPAID = "UNPAID"
+    PARTIAL = "PARTIAL"
+    PAID = "PAID"
+    VOID = "VOID"
 
+class PaymentMethodEnum(str, PyEnum):
+    CASH = "CASH"
+    CREDIT_CARD = "CREDIT_CARD"
+    INSURANCE = "INSURANCE"
+    UPI = "UPI"
+    BANK_TRANSFER = "BANK_TRANSFER"
 
 # -----------------------------------------------------------------------------
 # Auditing mixin for timestamp fields
@@ -561,3 +574,57 @@ class BedTransferLog(AuditMixin, Base):
     from_bed: Mapped[Optional["Bed"]] = relationship(foreign_keys=[from_bed_id])
     to_bed: Mapped["Bed"] = relationship(foreign_keys=[to_bed_id])
     requested_by: Mapped["User"] = relationship()
+
+# ==========================================
+# PHASE 6: ENTERPRISE BILLING & LEDGER
+# ==========================================
+
+class Invoice(AuditMixin, Base):
+    """The master billing ledger generated for a patient or an encounter."""
+    __tablename__ = "invoices"
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
+    encounter_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patient_encounters.id"))
+    
+    invoice_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    status: Mapped[InvoiceStatusEnum] = mapped_column(default=InvoiceStatusEnum.DRAFT, nullable=False)
+    
+    total_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    amount_paid_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    
+    patient: Mapped["Patient"] = relationship()
+    encounter: Mapped[Optional["PatientEncounter"]] = relationship()
+    line_items: Mapped[List["InvoiceLineItem"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
+    payments: Mapped[List["PaymentReceipt"]] = relationship(back_populates="invoice")
+
+class InvoiceLineItem(AuditMixin, Base):
+    """Granular billable charges (e.g., bed charges, pharmacy, diagnostic tests)."""
+    __tablename__ = "invoice_line_items"
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    invoice_id: Mapped[int] = mapped_column(ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False)
+    service_id: Mapped[Optional[int]] = mapped_column(ForeignKey("service_catalog.id"))
+    
+    description: Mapped[str] = mapped_column(String(255), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    unit_price_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_price_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    
+    invoice: Mapped[Invoice] = relationship(back_populates="line_items")
+    service: Mapped[Optional["ServiceCatalog"]] = relationship()
+
+class PaymentReceipt(AuditMixin, Base):
+    """Immutable ledger of funds received against an invoice."""
+    __tablename__ = "payment_receipts"
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    invoice_id: Mapped[int] = mapped_column(ForeignKey("invoices.id"), nullable=False)
+    
+    receipt_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    amount_paid_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    payment_method: Mapped[PaymentMethodEnum] = mapped_column(nullable=False)
+    transaction_reference: Mapped[Optional[str]] = mapped_column(String(100))
+    
+    invoice: Mapped[Invoice] = relationship(back_populates="payments")

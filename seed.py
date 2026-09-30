@@ -1,4 +1,5 @@
 import logging
+import uuid
 from datetime import datetime, timezone
 from passlib.context import CryptContext
 from database import SessionLocal
@@ -7,7 +8,9 @@ from models import (
     Floor, Ward, PhysicalRoom, Bed, AllergyMaster, Patient, PatientAllergy,
     ServiceCategory, ServiceCatalog, ServiceBundleMapping, DiagnosticOrder, DiagnosticTask,
     GenderEnum, UserStatusEnum, WardTypeEnum, RoomTypeEnum, BedTypeEnum, BedStatusEnum,
-    AllergyCategoryEnum, AllergySeverityEnum, BodySystemEnum, ServiceTypeEnum, OrderStatusEnum, TaskStatusEnum
+    AllergyCategoryEnum, AllergySeverityEnum, BodySystemEnum, ServiceTypeEnum, OrderStatusEnum, TaskStatusEnum,
+    AdmissionTypeEnum, EncounterTypeEnum, EncounterStatusEnum, InpatientAdmission, BedTransferLog,
+    Invoice, InvoiceLineItem, InvoiceStatusEnum, PaymentReceipt, PaymentMethodEnum,PatientEncounter
 )
 
 # --- CONFIGURE STRUCTURED LOGGING ---
@@ -282,6 +285,65 @@ def run_seed():
         
         db.commit()
         logger.info("Phase 5 Seeding completed successfully.")
+
+        # 9. Seed Phase 6: Enterprise Billing & Payments
+        logger.info("Seeding Phase 6: Generating Financial Ledgers...")
+        
+        # Create a draft invoice for John Doe's encounter
+        inv_number = f"INV-{uuid.uuid4().hex[:8].upper()}"
+        invoice = Invoice(
+            patient_id=sample_patient.id,
+            encounter_id=encounter.id,
+            invoice_number=inv_number,
+            status=InvoiceStatusEnum.DRAFT,
+            notes="Initial billing for IPD admission and diagnostic tests."
+        )
+        db.add(invoice)
+        db.flush()
+
+        # Add Line Item 1: Bed Charges
+        bed_charge = InvoiceLineItem(
+            invoice_id=invoice.id,
+            description=f"IPD Bed Charge - {bed_a.bed_type.value}",
+            quantity=1,
+            unit_price_paise=bed_a.base_daily_rate_paise,
+            total_price_paise=bed_a.base_daily_rate_paise
+        )
+        db.add(bed_charge)
+
+        # Add Line Item 2: Diagnostic Order (CBC Package)
+        lab_charge = InvoiceLineItem(
+            invoice_id=invoice.id,
+            service_id=bundle_cbc.id,
+            description=bundle_cbc.name,
+            quantity=1,
+            unit_price_paise=bundle_cbc.base_price_paise,
+            total_price_paise=bundle_cbc.base_price_paise
+        )
+        db.add(lab_charge)
+        
+        # Calculate Total and Finalize
+        invoice.total_amount_paise = bed_charge.total_price_paise + lab_charge.total_price_paise
+        invoice.status = InvoiceStatusEnum.UNPAID
+        db.flush()
+
+        # Record a full payment via Insurance
+        receipt_number = f"REC-{uuid.uuid4().hex[:8].upper()}"
+        payment = PaymentReceipt(
+            invoice_id=invoice.id,
+            receipt_number=receipt_number,
+            amount_paid_paise=invoice.total_amount_paise,
+            payment_method=PaymentMethodEnum.INSURANCE,
+            transaction_reference="INS-AUTH-994821"
+        )
+        db.add(payment)
+        
+        # Mark as Paid
+        invoice.amount_paid_paise = payment.amount_paid_paise
+        invoice.status = InvoiceStatusEnum.PAID
+
+        db.commit()
+        logger.info("Phase 6 Seeding completed successfully.")
 
         logger.info("Database seeding completed with status: SUCCESS")
 

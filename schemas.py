@@ -474,3 +474,54 @@ class PatientEncounterUpdate(BaseModel):
 class InpatientAdmissionUpdate(BaseModel):
     admission_type: Optional[AdmissionTypeEnum] = None
     admitting_doctor_id: Optional[int] = None
+
+from models import InvoiceStatusEnum, PaymentMethodEnum
+
+# --- PHASE 6: BILLING SCHEMAS ---
+class InvoiceCreate(BaseModel):
+    patient_id: int
+    encounter_id: Optional[int] = None
+    notes: Optional[str] = None
+
+class InvoiceLineItemCreate(BaseModel):
+    service_id: Optional[int] = None
+    description: str
+    quantity: int = 1
+    unit_price_paise: int
+    
+class InvoiceUpdate(BaseModel):
+    notes: Optional[str] = None
+
+class PaymentReceiptCreate(BaseModel):
+    amount_paid_paise: int
+    payment_method: PaymentMethodEnum
+    transaction_reference: Optional[str] = None
+
+class InvoiceLineItemResponse(BaseModel):
+    id: int
+    service_id: Optional[int]
+    description: str
+    quantity: int
+    unit_price_paise: int
+    total_price_paise: int
+    model_config = ConfigDict(from_attributes=True)
+
+class PaymentReceiptResponse(BaseModel):
+    id: int
+    receipt_number: str
+    amount_paid_paise: int
+    payment_method: PaymentMethodEnum
+    transaction_reference: Optional[str]
+    model_config = ConfigDict(from_attributes=True)
+
+class InvoiceResponse(BaseModel):
+    id: int
+    patient_id: int
+    encounter_id: Optional[int]
+    invoice_number: str
+    status: InvoiceStatusEnum
+    total_amount_paise: int
+    amount_paid_paise: int
+    line_items: List[InvoiceLineItemResponse]
+    payments: List[PaymentReceiptResponse]
+    model_config = ConfigDict(from_attributes=True)
