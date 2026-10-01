@@ -35,7 +35,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-
+# application_documentation.md
 # ==========================================
 # ⚗️ Database & Alembic Migrations
 # ==========================================

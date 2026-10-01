@@ -3,8 +3,7 @@
 Schemas are grouped by the same business domains used in the routes so request
 and response payloads stay easy to follow and maintain.
 """
-
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, EmailStr, ConfigDict,Field
 from datetime import datetime
 from typing import Optional, Generic, TypeVar, List
 from models import (
@@ -33,6 +32,54 @@ class PaginatedResponse(BaseModel, Generic[T]):
     page: int
     page_size: int
     items: List[T]
+
+# -----------------------------------------------------------------------------
+# Inter-Branch / Multi-Tenant Federation Schemas
+# -----------------------------------------------------------------------------
+class FederatedClientCreate(BaseModel):
+    branch_code: str = Field(min_length=2, max_length=50, description="Unique branch or tenant code, e.g., AVINYA-BLR-01")
+    name: str = Field(min_length=3, max_length=150, description="Display name of the branch or partner hospital")
+
+
+class FederatedClientCreatedResponse(BaseModel):
+    id: int
+    branch_code: str
+    name: str
+    api_key_prefix: str
+    raw_api_key: str = Field(description="Store securely. This raw key is shown only once.")
+    is_active: bool
+
+
+class FederatedClientResponse(BaseModel):
+    id: int
+    branch_code: str
+    name: str
+    api_key_prefix: str
+    is_active: bool
+    last_used_at: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FederatedAllergySummary(BaseModel):
+    allergy_code: str
+    allergy_name: str
+    severity: SeverityEnum
+    reaction: str
+
+
+class FederatedPatientSummaryResponse(BaseModel):
+    source_mrn: str
+    abha_number: Optional[str] = None
+    full_name: str
+    date_of_birth: datetime
+    gender: GenderEnum
+    blood_group: Optional[BloodGroupEnum] = None
+    phone_number: str
+    email: Optional[EmailStr] = None
+    address: Optional[str] = None
+    emergency_contact_name: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+    active_allergies: list[FederatedAllergySummary] = []
 
 # -----------------------------------------------------------------------------
 # Authentication and IAM schemas
@@ -159,6 +206,27 @@ class FloorResponse(BaseModel):
     is_active: bool
     model_config = ConfigDict(from_attributes=True)
 
+class RoomResponse(BaseModel):
+    id: int
+    ward_id: int
+    room_number: str
+    room_type: RoomTypeEnum
+    bed_capacity: int
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
+
+class ShiftAssignmentResponse(BaseModel):
+    id: int
+    ward_id: int
+    nurse_user_id: int
+    shift_type: ShiftTypeEnum
+    shift_date: datetime
+    handoff_notes: Optional[str] = None
+    handed_off_at: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True)
+
+class ShiftHandoffRequest(BaseModel):
+    handoff_notes: str = Field(min_length=1, description="Clinical handoff summary notes")
 
 class RoomCreate(BaseModel):
     ward_id: int
@@ -486,14 +554,14 @@ class InvoiceCreate(BaseModel):
 class InvoiceLineItemCreate(BaseModel):
     service_id: Optional[int] = None
     description: str
-    quantity: int = 1
-    unit_price_paise: int
+    quantity: int = Field(gt=0, description="Quantity must be strictly positive")
+    unit_price_paise: int = Field(ge=0, description="Price cannot be negative")
 
 class InvoiceUpdate(BaseModel):
     notes: Optional[str] = None
 
 class PaymentReceiptCreate(BaseModel):
-    amount_paid_paise: int
+    amount_paid_paise: int = Field(gt=0, description="Payment must be strictly positive")
     payment_method: PaymentMethodEnum
     transaction_reference: Optional[str] = None
 
@@ -578,7 +646,8 @@ class InventoryBatchCreate(BaseModel):
     unit_price_paise: int
 
 class InventoryStockAdjustment(BaseModel):
-    quantity_adjustment: int  # Negative for write-offs, positive for restocks
+    # Can be negative for write-offs, but should not be zero
+    quantity_adjustment: int = Field(default=..., description="Must not be zero")
 
 class PrescriptionItemCreate(BaseModel):
     medication_id: int
@@ -631,7 +700,7 @@ class PrescriptionResponse(BaseModel):
 class DispenseItem(BaseModel):
     prescription_item_id: int
     batch_id: int
-    quantity_to_dispense: int
+    quantity_to_dispense: int = Field(gt=0, description="Cannot dispense negative or zero stock")
 
 class PrescriptionDispenseRequest(BaseModel):
     items: List[DispenseItem]

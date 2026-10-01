@@ -7,7 +7,7 @@ hospital.
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-
+from sqlalchemy import select
 from database import get_db
 from dependencies import RequirePermission, get_current_user
 from models import Patient, PatientAllergy, User

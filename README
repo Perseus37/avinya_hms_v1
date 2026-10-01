@@ -87,3 +87,42 @@ Your `.env` file currently holds the `SECRET_KEY` and database passwords.
 
 **The Verdict:**
 The Python architecture is **100% complete** for a V1 release. If you run the final Alembic migration for Phase 8, wrap this in a Dockerfile, and put it behind HTTPS, you can confidently ship Avinya HMS to your first client.
+
+## 🐳 Docker Development Environment
+
+This project utilizes a structured **Docker Compose** multi-container setup. To prevent cluttering your **Docker Desktop** dashboard with inactive or stopped components, database migration and seeding tasks are isolated using Docker **Profiles**.
+
+### 🛠️ Container Topology
+* **`api`**: Core FastAPI backend application server.
+* **`db`**: PostgreSQL database engine.
+* **`redis`**: Cache and session management layer.
+* **`api-migration`** *(Profile: tools)*: One-off task running Alembic schema updates.
+* **`api-seed`** *(Profile: tools)*: One-off task inserting core domain datasets.
+
+---
+
+### 🚀 Getting Started
+
+#### 1. First-Time Setup or Database Reset
+Use this command when you are setting up the project for the first time, pulling schema modifications, or rewriting initial seed datasets. This explicitly activates the management profile to configure your database storage.
+
+```bash
+docker compose --profile tools up --build
+```
+* **What happens:** Docker spins up the database cluster, runs all pending **Alembic updates**, inserts **seed datasets** (`seed.py`), and launches the API. The migration and seeding containers will gracefully terminate after completion.
+
+#### 2. Daily Local Development
+For normal daily work where you are only editing code inside your FastAPI routers or business logic (and no changes have been made to your database models):
+
+```bash
+docker compose up --build
+```
+* **Why use this:** This skips checking migrations and seeding entirely. Your **Docker Desktop view remains completely clean** with no "grey" inactive tool containers cluttering your interface.
+
+#### 3. Tearing Down the Environment
+To completely wipe out your active runtime stack, free up local system memory, and remove ephemeral network interfaces:
+
+```bash
+docker compose down
+```
+*(Add the `-v` flag if you want to explicitly wipe out the Postgres data volume and start with a completely pristine database instance: `docker compose down -v`)*.

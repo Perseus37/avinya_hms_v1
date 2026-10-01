@@ -136,7 +136,7 @@ def create_allergy_master(payload: AllergyMasterCreate, db: Session = Depends(ge
     )
     db.add(allergy)
     db.commit()
-    invalidate_department_taxonomy_cache(redis, "allergies", payload.department_id)
+    invalidate_department_taxonomy_cache(redis, "allergies", allergy.department_id)
     return {"status": "success", "message": "Allergy master created and cache busted."}
 
 
@@ -146,7 +146,7 @@ def create_chief_complaint(payload: ChiefComplaintCreate, db: Session = Depends(
     item = ChiefComplaintMaster(department_id=payload.department_id, code=payload.code, name=payload.name, is_active=True)
     db.add(item)
     db.commit()
-    invalidate_department_taxonomy_cache(redis, "complaints", payload.department_id)
+    invalidate_department_taxonomy_cache(redis, "complaints", item.department_id)
     return {"status": "success", "message": "Chief complaint created."}
 
 
@@ -164,7 +164,7 @@ def create_diagnosis(payload: DiagnosisCreate, db: Session = Depends(get_db), re
     )
     db.add(item)
     db.commit()
-    invalidate_department_taxonomy_cache(redis, "diagnoses", payload.department_id)
+    invalidate_department_taxonomy_cache(redis, "diagnoses", item.department_id)
     return {"status": "success", "message": f"ICD-10 Diagnosis {payload.icd10_code} created."}
 
 
@@ -180,7 +180,7 @@ def create_comorbidity(payload: ComorbidityCreate, db: Session = Depends(get_db)
     )
     db.add(item)
     db.commit()
-    invalidate_department_taxonomy_cache(redis, "comorbidities", payload.department_id)
+    invalidate_department_taxonomy_cache(redis, "comorbidities", item.department_id)
     return {"status": "success", "message": "Comorbidity master created."}
 
 
@@ -196,7 +196,7 @@ def create_physical_exam(payload: PhysicalExamCreate, db: Session = Depends(get_
     )
     db.add(item)
     db.commit()
-    invalidate_department_taxonomy_cache(redis, "physical_exams", payload.department_id)
+    invalidate_department_taxonomy_cache(redis, "physical_exams", item.department_id)
     return {"status": "success", "message": "Physical examination master created."}
 
 
@@ -211,7 +211,7 @@ def update_chief_complaint(complaint_id: int, payload: ChiefComplaintCreate, db:
     if payload.department_id is not None:
         item.department_id = payload.department_id
     db.commit()
-    invalidate_department_taxonomy_cache(redis, "complaints", payload.department_id)
+    invalidate_department_taxonomy_cache(redis, "complaints", item.department_id)
     return {"status": "success", "message": f"Complaint ID {complaint_id} updated."}
 
 
@@ -239,7 +239,7 @@ def update_allergy_master(allergy_id: int, payload: AllergyMasterCreate, db: Ses
     allergy.category = payload.category
     allergy.default_severity = payload.default_severity
     db.commit()
-    invalidate_department_taxonomy_cache(redis, "allergies", payload.department_id)
+    invalidate_department_taxonomy_cache(redis, "allergies", allergy.department_id)
     return {"status": "success", "message": f"Allergy ID {allergy_id} updated successfully."}
 
 
@@ -253,7 +253,7 @@ def update_comorbidity(comorbidity_id: int, payload: ComorbidityCreate, db: Sess
     item.name = payload.name
     item.icd10_code = payload.icd10_code
     db.commit()
-    invalidate_department_taxonomy_cache(redis, "comorbidities", payload.department_id)
+    invalidate_department_taxonomy_cache(redis, "comorbidities", item.department_id)
     return {"status": "success", "message": f"Comorbidity ID {comorbidity_id} updated."}
 
 
@@ -268,7 +268,7 @@ def update_diagnosis(diagnosis_id: int, payload: DiagnosisCreate, db: Session = 
     item.full_description = payload.full_description
     item.is_billable = payload.is_billable
     db.commit()
-    invalidate_department_taxonomy_cache(redis, "diagnoses", payload.department_id)
+    invalidate_department_taxonomy_cache(redis, "diagnoses", item.department_id)
     return {"status": "success", "message": f"Diagnosis ID {diagnosis_id} updated."}
 
 
@@ -321,7 +321,7 @@ def update_physical_exam(exam_id: int, payload: PhysicalExamCreate, db: Session 
     if payload.department_id is not None:
         item.department_id = payload.department_id
     db.commit()
-    invalidate_department_taxonomy_cache(redis, "physical_exams", payload.department_id)
+    invalidate_department_taxonomy_cache(redis, "physical_exams", item.department_id)
     return {"status": "success", "message": f"Physical exam ID {exam_id} updated."}
 
 

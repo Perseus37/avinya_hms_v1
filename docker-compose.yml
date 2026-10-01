@@ -1,4 +1,5 @@
 version: '3.8'
+
 services:
   db:
     image: postgres:15-alpine
@@ -8,7 +9,52 @@ services:
       POSTGRES_DB: avinya_hms
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d avinya_hms"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+
+  # 1. The Single-Use Migration Container
+  api-migration:
+    build: .
+    profiles: [tools]
+    command: alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/avinya_hms
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 2. The Single-Use Seeding Container (NEW STEP)
+  api-seed:
+    build: .
+    profiles: [tools]
+    command: python seed.py
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/avinya_hms
+    depends_on:
+      db:
+        condition: service_healthy
+      api-migration:
+        condition: service_completed_successfully # Seeds only after schema updates
+
+  # 3. The Scalable API Containers (UPDATED DEPENDENCIES)
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/avinya_hms
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY}
+    depends_on:
+      db:
+        condition: service_started
+      api-seed:
+        condition: service_completed_successfully # API now safely waits for migrations AND seed data

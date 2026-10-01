@@ -1,288 +1,491 @@
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
+
 from database import get_db
-from dependencies import RequirePermission, get_current_user
+from dependencies import RequirePermission, validate_pagination
 from models import (
-    User, ServiceCategory, ServiceCatalog, ServiceBundleMapping, 
-    DiagnosticOrder, DiagnosticTask, TaskStatusEnum, OrderStatusEnum
+    DiagnosticOrder,
+    DiagnosticTask,
+    OrderStatusEnum,
+    Patient,
+    ServiceBundleMapping,
+    ServiceCatalog,
+    ServiceCategory,
+    TaskStatusEnum,
+    User,
 )
 from schemas.v1.schemas import (
-    PaginatedResponse, ServiceCategoryCreate, ServiceCategoryResponse,
-    ServiceCatalogCreate, ServiceCatalogResponse, ServiceBundleMappingCreate,
-    DiagnosticOrderCreate, DiagnosticOrderResponse, TaskResultEntry, DiagnosticTaskResponse,
-    ServiceCategoryUpdate, ServiceCatalogUpdate,ServiceBundleMappingResponse,DiagnosticOrderUpdate
+    DiagnosticOrderCreate,
+    DiagnosticOrderResponse,
+    DiagnosticOrderUpdate,
+    DiagnosticTaskResponse,
+    PaginatedResponse,
+    ServiceBundleMappingCreate,
+    ServiceBundleMappingResponse,
+    ServiceCatalogCreate,
+    ServiceCatalogResponse,
+    ServiceCatalogUpdate,
+    ServiceCategoryCreate,
+    ServiceCategoryResponse,
+    ServiceCategoryUpdate,
+    TaskResultEntry,
 )
 from services.explosion_engine import explode_clinical_orders
-from typing import Optional, List
+
 router = APIRouter(prefix="/api/diagnostics", tags=["Diagnostic Services & LIS"])
+
 
 # -----------------------------------------------------------------------------
 # Service Master Data Domain (Catalog & Bundles)
 # -----------------------------------------------------------------------------
-
 @router.post("/categories", response_model=ServiceCategoryResponse, status_code=status.HTTP_201_CREATED)
-def create_service_category(payload: ServiceCategoryCreate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+def create_service_category(
+    payload: ServiceCategoryCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+):
+    existing = db.query(ServiceCategory).filter(ServiceCategory.code == payload.code).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Service category code already exists.")
     category = ServiceCategory(**payload.model_dump(), is_active=True)
     db.add(category)
     db.commit()
     db.refresh(category)
     return category
 
+
+@router.get("/categories", response_model=PaginatedResponse[ServiceCategoryResponse])
+def list_service_categories(
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("write_cpoe_orders") or RequirePermission("manage_clinical_mdm")),
+):
+    page, page_size = validate_pagination(page, page_size)
+    query = db.query(ServiceCategory).filter(ServiceCategory.is_active == True).order_by(ServiceCategory.id.asc())
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/categories/{category_id}", response_model=ServiceCategoryResponse)
+def get_service_category(
+    category_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("write_cpoe_orders") or RequirePermission("manage_clinical_mdm")),
+):
+    category = db.get(ServiceCategory, category_id)
+    if not category or not category.is_active:
+        raise HTTPException(status_code=404, detail="Active service category not found")
+    return category
+
+
+@router.put("/categories/{category_id}", response_model=ServiceCategoryResponse, status_code=200)
+def update_service_category(
+    category_id: int,
+    payload: ServiceCategoryUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+):
+    category = db.get(ServiceCategory, category_id)
+    if not category:
+        raise HTTPException(status_code=404, detail="Service category not found")
+    if payload.name is not None:
+        category.name = payload.name
+    if payload.is_active is not None:
+        category.is_active = payload.is_active
+    db.commit()
+    db.refresh(category)
+    return category
+
+
+@router.delete("/categories/{category_id}", status_code=200)
+def deactivate_service_category(
+    category_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+):
+    category = db.get(ServiceCategory, category_id)
+    if not category:
+        raise HTTPException(status_code=404, detail="Service category not found")
+    category.is_active = False
+    db.commit()
+    return {"status": "success", "message": f"Category ID {category_id} deactivated."}
+
+
 @router.post("/catalog", response_model=ServiceCatalogResponse, status_code=status.HTTP_201_CREATED)
-def create_service_catalog_item(payload: ServiceCatalogCreate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+def create_service_catalog_item(
+    payload: ServiceCatalogCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+):
+    existing = db.query(ServiceCatalog).filter(ServiceCatalog.code == payload.code).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Service catalog code already exists.")
     item = ServiceCatalog(**payload.model_dump(), is_active=True)
     db.add(item)
     db.commit()
     db.refresh(item)
     return item
 
+
+@router.get("/catalog", response_model=PaginatedResponse[ServiceCatalogResponse])
+def list_service_catalog(
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("write_cpoe_orders") or RequirePermission("manage_clinical_mdm")),
+):
+    page, page_size = validate_pagination(page, page_size)
+    query = db.query(ServiceCatalog).filter(ServiceCatalog.is_active == True).order_by(ServiceCatalog.id.asc())
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/catalog/{item_id}", response_model=ServiceCatalogResponse)
+def get_service_catalog_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("write_cpoe_orders") or RequirePermission("manage_clinical_mdm")),
+):
+    item = db.get(ServiceCatalog, item_id)
+    if not item or not item.is_active:
+        raise HTTPException(status_code=404, detail="Active service catalog item not found")
+    return item
+
+
+@router.put("/catalog/{item_id}", response_model=ServiceCatalogResponse, status_code=200)
+def update_service_catalog_item(
+    item_id: int,
+    payload: ServiceCatalogUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+):
+    item = db.get(ServiceCatalog, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Service catalog item not found")
+    if payload.name is not None:
+        item.name = payload.name
+    if payload.base_price_paise is not None:
+        item.base_price_paise = payload.base_price_paise
+    if payload.is_active is not None:
+        item.is_active = payload.is_active
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@router.delete("/catalog/{item_id}", status_code=200)
+def deactivate_service_catalog_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+):
+    item = db.get(ServiceCatalog, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Service catalog item not found")
+    item.is_active = False
+    db.commit()
+    return {"status": "success", "message": f"Service Catalog ID {item_id} deactivated."}
+
+
 @router.post("/catalog/bundle", status_code=status.HTTP_201_CREATED)
-def map_bundle_child(payload: ServiceBundleMappingCreate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
+def map_bundle_child(
+    payload: ServiceBundleMappingCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+):
+    """H4 FIX: Validates self-references, child existence, and duplicate mappings at write time."""
+    if payload.parent_service_id == payload.child_service_id:
+        raise HTTPException(status_code=400, detail="A bundle cannot reference itself as a child service.")
+    if payload.quantity < 1:
+        raise HTTPException(status_code=400, detail="Bundle child quantity must be at least 1.")
+
     parent = db.get(ServiceCatalog, payload.parent_service_id)
-    if not parent or not parent.is_order_set:
-        raise HTTPException(status_code=400, detail="Parent service is invalid or not marked as an order set.")
-        
+    if not parent or not parent.is_active or not parent.is_order_set:
+        raise HTTPException(status_code=400, detail="Parent service is invalid, inactive, or not marked as an order set.")
+
+    child = db.get(ServiceCatalog, payload.child_service_id)
+    if not child or not child.is_active:
+        raise HTTPException(status_code=400, detail="Child service is invalid or inactive.")
+
+    existing = (
+        db.query(ServiceBundleMapping)
+        .filter(
+            ServiceBundleMapping.parent_service_id == payload.parent_service_id,
+            ServiceBundleMapping.child_service_id == payload.child_service_id,
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="Child service is already mapped to this bundle.")
+
     mapping = ServiceBundleMapping(**payload.model_dump())
     db.add(mapping)
     db.commit()
     return {"status": "success", "message": "Service successfully mapped to bundle."}
 
-@router.get("/catalog", response_model=PaginatedResponse[ServiceCatalogResponse])
-def list_service_catalog(page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
-    query = db.query(ServiceCatalog).filter(ServiceCatalog.is_active == True)
-    total = query.count()
-    items = query.offset((page - 1) * page_size).limit(page_size).all()
-    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+@router.get("/catalog/{parent_id}/bundles", response_model=list[ServiceBundleMappingResponse])
+def get_bundle_mappings(
+    parent_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("write_cpoe_orders") or RequirePermission("manage_clinical_mdm")),
+):
+    """H3 FIX: Eager-loads child_service so ServiceBundleMappingResponse serializes cleanly."""
+    parent = db.get(ServiceCatalog, parent_id)
+    if not parent or not parent.is_order_set:
+        raise HTTPException(status_code=404, detail="Parent package not found or is not an order set.")
+
+    stmt = (
+        select(ServiceBundleMapping)
+        .options(joinedload(ServiceBundleMapping.child_service))
+        .where(ServiceBundleMapping.parent_service_id == parent_id)
+    )
+    return db.execute(stmt).scalars().all()
+
+
+@router.delete("/catalog/bundle/{parent_id}/{child_id}", status_code=200)
+def remove_bundle_mapping(
+    parent_id: int,
+    child_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+):
+    stmt = select(ServiceBundleMapping).where(
+        ServiceBundleMapping.parent_service_id == parent_id,
+        ServiceBundleMapping.child_service_id == child_id,
+    )
+    mapping = db.execute(stmt).scalar_one_or_none()
+    if not mapping:
+        raise HTTPException(status_code=404, detail="Bundle mapping not found.")
+
+    db.delete(mapping)
+    db.commit()
+    return {"status": "success", "message": "Service successfully removed from bundle."}
 
 
 # -----------------------------------------------------------------------------
 # Diagnostic CPOE & Execution Queues
 # -----------------------------------------------------------------------------
-
 @router.post("/orders", response_model=DiagnosticOrderResponse, status_code=status.HTTP_201_CREATED)
-def place_diagnostic_order(payload: DiagnosticOrderCreate, db: Session = Depends(get_db), current_user: User = Depends(RequirePermission("write_cpoe_orders"))):
+def place_diagnostic_order(
+    payload: DiagnosticOrderCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("write_cpoe_orders")),
+):
     """Places a clinical order and executes the Order Explosion Engine to generate department tasks."""
-    # 1. Explode ordered IDs into executable tasks
-    executable_service_ids = explode_clinical_orders(db, payload.ordered_service_ids)
-    
-    # 2. Create the Parent Order
+    patient = db.get(Patient, payload.patient_id)
+    if not patient or not patient.is_active:
+        raise HTTPException(status_code=404, detail="Active patient not found.")
+
+    executable_tasks_dict = explode_clinical_orders(db, payload.ordered_service_ids)
+
     order = DiagnosticOrder(
         patient_id=payload.patient_id,
         ordering_doctor_id=current_user.id,
         clinical_notes=payload.clinical_notes,
-        status=OrderStatusEnum.ACTIVE
+        status=OrderStatusEnum.ACTIVE,
     )
     db.add(order)
-    db.flush() # Secure the order.id for child task assignment
-    
-    # 3. Generate Department Tasks
+    db.flush()
+
     tasks = []
-    for service_id in executable_service_ids:
-        task = DiagnosticTask(
-            order_id=order.id,
-            service_id=service_id,
-            status=TaskStatusEnum.PENDING
-        )
-        tasks.append(task)
-        
+    for service_id, quantity in executable_tasks_dict.items():
+        for _ in range(quantity):
+            tasks.append(
+                DiagnosticTask(
+                    order_id=order.id,
+                    service_id=service_id,
+                    status=TaskStatusEnum.PENDING,
+                )
+            )
+
     db.add_all(tasks)
     db.commit()
     db.refresh(order)
     return order
 
-@router.get("/tasks/pending", response_model=PaginatedResponse[DiagnosticTaskResponse])
-def get_department_task_queue(page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
-    """Retrieves pending diagnostic execution tickets for lab/radiology departments."""
-    query = db.query(DiagnosticTask).filter(DiagnosticTask.status == TaskStatusEnum.PENDING)
-    total = query.count()
-    items = query.offset((page - 1) * page_size).limit(page_size).all()
-    return {"items": items, "total": total, "page": page, "page_size": page_size}
-
-@router.patch("/tasks/{task_id}/result", status_code=200)
-def submit_task_result(task_id: int, payload: TaskResultEntry, db: Session = Depends(get_db), current_user: User = Depends(RequirePermission("write_cpoe_orders"))):
-    """Logs results for a task and advances its lifecycle state."""
-    task = db.get(DiagnosticTask, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found.")
-        
-    task.result_value = payload.result_value
-    task.result_notes = payload.result_notes
-    task.status = payload.status
-    
-    if payload.status in [TaskStatusEnum.RESULT_ENTERED, TaskStatusEnum.VERIFIED]:
-        task.performed_by_id = current_user.id
-        
-    if payload.status == TaskStatusEnum.VERIFIED:
-        task.verified_by_id = current_user.id
-
-    db.commit()
-    return {"status": "success", "message": f"Task {task_id} results recorded and status advanced to {payload.status}."}
-
-from schemas.v1.schemas import ServiceCategoryUpdate, ServiceCatalogUpdate
-
-# --- Service Category Missing Reads ---
-
-@router.get("/categories", response_model=PaginatedResponse[ServiceCategoryResponse])
-def list_service_categories(page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
-    query = db.query(ServiceCategory).filter(ServiceCategory.is_active == True)
-    total = query.count()
-    items = query.offset((page - 1) * page_size).limit(page_size).all()
-    return {"items": items, "total": total, "page": page, "page_size": page_size}
-
-@router.get("/categories/{category_id}", response_model=ServiceCategoryResponse)
-def get_service_category(category_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
-    category = db.get(ServiceCategory, category_id)
-    if not category:
-        raise HTTPException(status_code=404, detail="Service category not found")
-    return category
-
-
-# --- Service Catalog Missing Reads ---
-
-@router.get("/catalog/{item_id}", response_model=ServiceCatalogResponse)
-def get_service_catalog_item(item_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
-    item = db.get(ServiceCatalog, item_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Service catalog item not found")
-    return item
-
-
-# --- Service Bundle Missing Reads & Deletes ---
-
-@router.get("/catalog/{parent_id}/bundles", response_model=list[ServiceBundleMappingResponse])
-def get_bundle_mappings(parent_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
-    """Retrieves all child services mapped to a parent order set/package."""
-    parent = db.get(ServiceCatalog, parent_id)
-    if not parent or not parent.is_order_set:
-        raise HTTPException(status_code=404, detail="Parent package not found or is not an order set.")
-    
-    stmt = select(ServiceBundleMapping).where(ServiceBundleMapping.parent_service_id == parent_id)
-    return db.execute(stmt).scalars().all()
-
-@router.delete("/catalog/bundle/{parent_id}/{child_id}", status_code=200)
-def remove_bundle_mapping(parent_id: int, child_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
-    """Removes a specific test/service from a bundled package."""
-    stmt = select(ServiceBundleMapping).where(
-        ServiceBundleMapping.parent_service_id == parent_id,
-        ServiceBundleMapping.child_service_id == child_id
-    )
-    mapping = db.execute(stmt).scalar_one_or_none()
-    if not mapping:
-        raise HTTPException(status_code=404, detail="Bundle mapping not found.")
-        
-    db.delete(mapping)
-    db.commit()
-    return {"status": "success", "message": "Service successfully removed from bundle."}
-
-@router.put("/categories/{category_id}", response_model=ServiceCategoryResponse, status_code=200)
-def update_service_category(category_id: int, payload: ServiceCategoryUpdate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
-    """Updates category details such as department name adjustments."""
-    category = db.get(ServiceCategory, category_id)
-    if not category:
-        raise HTTPException(status_code=404, detail="Service category not found")
-        
-    if payload.name is not None: category.name = payload.name
-    if payload.is_active is not None: category.is_active = payload.is_active
-    db.commit()
-    db.refresh(category)
-    return category
-
-@router.delete("/categories/{category_id}", status_code=200)
-def deactivate_service_category(category_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
-    """Soft-deletes a category. Note: Active child catalog items should be handled by application logic."""
-    category = db.get(ServiceCategory, category_id)
-    if not category:
-        raise HTTPException(status_code=404, detail="Service category not found")
-        
-    category.is_active = False
-    db.commit()
-    return {"status": "success", "message": f"Category ID {category_id} deactivated."}
-
-@router.put("/catalog/{item_id}", response_model=ServiceCatalogResponse, status_code=200)
-def update_service_catalog_item(item_id: int, payload: ServiceCatalogUpdate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
-    """Updates core service catalog metadata including pricing."""
-    item = db.get(ServiceCatalog, item_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Service catalog item not found")
-        
-    if payload.name is not None: item.name = payload.name
-    if payload.base_price_paise is not None: item.base_price_paise = payload.base_price_paise
-    if payload.is_active is not None: item.is_active = payload.is_active
-    db.commit()
-    db.refresh(item)
-    return item
-
-@router.delete("/catalog/{item_id}", status_code=200)
-def deactivate_service_catalog_item(item_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("manage_clinical_mdm"))):
-    """Soft-deletes a master catalog item, removing it from future order selection."""
-    item = db.get(ServiceCatalog, item_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Service catalog item not found")
-        
-    item.is_active = False
-    db.commit()
-    return {"status": "success", "message": f"Service Catalog ID {item_id} deactivated."}
-
-from sqlalchemy.orm import joinedload
-
-# --- Diagnostic Order Missing CRUD ---
 
 @router.get("/orders", response_model=PaginatedResponse[DiagnosticOrderResponse])
-def list_diagnostic_orders(patient_id: Optional[int] = None, page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
-    """Lists diagnostic orders, optionally filtered by a specific patient."""
+def list_diagnostic_orders(
+    patient_id: Optional[int] = None,
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("write_cpoe_orders")),
+):
+    page, page_size = validate_pagination(page, page_size)
     query = db.query(DiagnosticOrder).options(joinedload(DiagnosticOrder.tasks))
     if patient_id:
         query = query.filter(DiagnosticOrder.patient_id == patient_id)
-        
+    query = query.order_by(DiagnosticOrder.id.desc())
+
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
+
 @router.get("/orders/{order_id}", response_model=DiagnosticOrderResponse)
-def get_diagnostic_order(order_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
-    order = db.query(DiagnosticOrder).options(joinedload(DiagnosticOrder.tasks)).filter(DiagnosticOrder.id == order_id).first()
+def get_diagnostic_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("write_cpoe_orders")),
+):
+    order = (
+        db.query(DiagnosticOrder)
+        .options(joinedload(DiagnosticOrder.tasks))
+        .filter(DiagnosticOrder.id == order_id)
+        .first()
+    )
     if not order:
         raise HTTPException(status_code=404, detail="Diagnostic order not found.")
     return order
 
+
 @router.put("/orders/{order_id}", response_model=DiagnosticOrderResponse)
-def update_diagnostic_order(order_id: int, payload: DiagnosticOrderUpdate, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
-    """Updates clinical notes or forces a status change on an order."""
+def update_diagnostic_order(
+    order_id: int,
+    payload: DiagnosticOrderUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("write_cpoe_orders")),
+):
     order = db.get(DiagnosticOrder, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Diagnostic order not found.")
-        
-    if payload.clinical_notes is not None: order.clinical_notes = payload.clinical_notes
-    if payload.status is not None: order.status = payload.status
+    if order.status in [OrderStatusEnum.COMPLETED, OrderStatusEnum.CANCELLED]:
+        raise HTTPException(status_code=400, detail="Cannot modify a completed or cancelled diagnostic order.")
+
+    if payload.clinical_notes is not None:
+        order.clinical_notes = payload.clinical_notes
+    if payload.status is not None:
+        order.status = payload.status
     db.commit()
     db.refresh(order)
     return order
 
+
 @router.delete("/orders/{order_id}", status_code=200)
-def cancel_diagnostic_order(order_id: int, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
-    """Cancels an order and cascades the cancellation status down to pending tasks."""
-    order = db.get(DiagnosticOrder, order_id)
+def cancel_diagnostic_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("write_cpoe_orders")),
+):
+    order = db.query(DiagnosticOrder).options(joinedload(DiagnosticOrder.tasks)).filter(DiagnosticOrder.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Diagnostic order not found.")
-        
+    if order.status == OrderStatusEnum.COMPLETED:
+        raise HTTPException(status_code=400, detail="Cannot cancel an already completed diagnostic order.")
+
     order.status = OrderStatusEnum.CANCELLED
-    
-    # Cascade cancellation to child tasks that haven't been processed yet
     for task in order.tasks:
-        if task.status in [TaskStatusEnum.PENDING, TaskStatusEnum.IN_PROGRESS]:
+        if task.status in [TaskStatusEnum.PENDING, TaskStatusEnum.SAMPLE_COLLECTED, TaskStatusEnum.IN_PROGRESS]:
             task.status = TaskStatusEnum.CANCELLED
-            
+
     db.commit()
     return {"status": "success", "message": f"Order {order_id} and associated pending tasks cancelled."}
 
 
-# --- Diagnostic Task Missing Reads ---
-
 @router.get("/orders/{order_id}/tasks", response_model=PaginatedResponse[DiagnosticTaskResponse])
-def list_order_tasks(order_id: int, page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: bool = Depends(RequirePermission("write_cpoe_orders"))):
-    """Retrieves all department-level execution tickets for a specific parent order."""
-    query = db.query(DiagnosticTask).filter(DiagnosticTask.order_id == order_id)
+def list_order_tasks(
+    order_id: int,
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("write_cpoe_orders")),
+):
+    page, page_size = validate_pagination(page, page_size)
+    query = db.query(DiagnosticTask).filter(DiagnosticTask.order_id == order_id).order_by(DiagnosticTask.id.asc())
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
     return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/tasks/pending", response_model=PaginatedResponse[DiagnosticTaskResponse])
+def get_department_task_queue(
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("write_cpoe_orders")),
+):
+    page, page_size = validate_pagination(page, page_size)
+    query = (
+        db.query(DiagnosticTask)
+        .filter(DiagnosticTask.status == TaskStatusEnum.PENDING)
+        .order_by(DiagnosticTask.id.asc())
+    )
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+@router.patch("/tasks/{task_id}/result", status_code=200)
+def submit_task_result(
+    task_id: int,
+    payload: TaskResultEntry,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("write_cpoe_orders")),
+):
+    """H8 FIX: Enforces task lifecycle, checks parent order status, and prevents self-verification."""
+    task = (
+        db.query(DiagnosticTask)
+        .options(joinedload(DiagnosticTask.order).joinedload(DiagnosticOrder.tasks))
+        .filter(DiagnosticTask.id == task_id)
+        .first()
+    )
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found.")
+
+    if not task.order or task.order.status == OrderStatusEnum.CANCELLED:
+        raise HTTPException(status_code=400, detail="Cannot submit results for a cancelled order.")
+
+    if task.status in [TaskStatusEnum.VERIFIED, TaskStatusEnum.CANCELLED]:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Task is already {task.status.value} and is locked from further edits.",
+        )
+
+    valid_transitions = {
+        TaskStatusEnum.PENDING: [TaskStatusEnum.SAMPLE_COLLECTED, TaskStatusEnum.IN_PROGRESS, TaskStatusEnum.RESULT_ENTERED],
+        TaskStatusEnum.SAMPLE_COLLECTED: [TaskStatusEnum.IN_PROGRESS, TaskStatusEnum.RESULT_ENTERED],
+        TaskStatusEnum.IN_PROGRESS: [TaskStatusEnum.RESULT_ENTERED],
+        TaskStatusEnum.RESULT_ENTERED: [TaskStatusEnum.RESULT_ENTERED, TaskStatusEnum.VERIFIED],
+    }
+
+    if payload.status not in valid_transitions.get(task.status, []):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid lifecycle transition from {task.status.value} to {payload.status.value}.",
+        )
+
+    if payload.status == TaskStatusEnum.RESULT_ENTERED:
+        task.result_value = payload.result_value
+        task.result_notes = payload.result_notes
+        task.performed_by_id = current_user.id
+        task.status = TaskStatusEnum.RESULT_ENTERED
+
+    elif payload.status == TaskStatusEnum.VERIFIED:
+        if task.performed_by_id is None:
+            raise HTTPException(status_code=400, detail="Task must have entered results before verification.")
+        if task.performed_by_id == current_user.id and not current_user.is_superuser:
+            raise HTTPException(
+                status_code=403,
+                detail="Separation of duties violation: The user who performed the test cannot verify it.",
+            )
+        task.verified_by_id = current_user.id
+        task.status = TaskStatusEnum.VERIFIED
+    else:
+        task.status = payload.status
+
+    # Automatically roll up status to the parent DiagnosticOrder
+    all_tasks = task.order.tasks
+    if all(t.status == TaskStatusEnum.VERIFIED for t in all_tasks):
+        task.order.status = OrderStatusEnum.COMPLETED
+    elif any(t.status in [TaskStatusEnum.RESULT_ENTERED, TaskStatusEnum.VERIFIED] for t in all_tasks):
+        task.order.status = OrderStatusEnum.PARTIAL
+
+    db.commit()
+    return {"status": "success", "message": f"Task {task_id} status advanced to {task.status.value}."}

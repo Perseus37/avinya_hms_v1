@@ -1,13 +1,13 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from database import get_db
 from dependencies import RequirePermission, get_current_user
-from models import User, Appointment, AppointmentStatusEnum, Patient, Department
-from schemas.v1.schemas import (
+from models import User, Appointment, AppointmentStatusEnum, Patient, Department, DoctorProfile, PatientEncounter
+from schemas.v1 import (
     PaginatedResponse, AppointmentCreate, AppointmentResponse, 
     AppointmentUpdate, AppointmentStatusUpdate
 )
@@ -18,8 +18,17 @@ router = APIRouter(prefix="/api/opd", tags=["Outpatient Scheduling (OPD)"])
 # Appointment Booking & Retrieval
 # -----------------------------------------------------------------------------
 
-from datetime import timedelta
-from models import DoctorProfile
+def check_schedule_overlap(db: Session, doctor_id: int, appointment_time: datetime, duration: int) -> bool:
+    """Helper to detect scheduling conflicts."""
+    time_lower_bound = appointment_time - timedelta(minutes=duration)
+    time_upper_bound = appointment_time + timedelta(minutes=duration)
+    
+    return db.query(Appointment).filter(
+        Appointment.doctor_id == doctor_id,
+        Appointment.status.in_([AppointmentStatusEnum.SCHEDULED, AppointmentStatusEnum.ARRIVED]),
+        Appointment.appointment_time > time_lower_bound,
+        Appointment.appointment_time < time_upper_bound
+    ).first() is not None
 
 @router.post("/appointments", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)
 def book_appointment(payload: AppointmentCreate, db: Session = Depends(get_db), _: User = Depends(RequirePermission("manage_clinical_mdm"))):
@@ -28,47 +37,26 @@ def book_appointment(payload: AppointmentCreate, db: Session = Depends(get_db), 
     if not patient or not patient.is_active:
         raise HTTPException(status_code=400, detail="Invalid or inactive patient.")
         
-    doctor_profile = db.query(DoctorProfile).filter(DoctorProfile.user_id == payload.doctor_id).first()
-    if not doctor_profile:
-        raise HTTPException(status_code=400, detail="Invalid doctor ID or user lacks a clinical profile.")
+    doctor = db.query(DoctorProfile).filter(DoctorProfile.user_id == payload.doctor_id).first()
+    if not doctor:
+        raise HTTPException(status_code=400, detail="Invalid doctor ID.")
 
-    # --- DYNAMIC OVERLAP CHECK ---
-    duration = doctor_profile.consultation_duration_minutes
+    # H5 FIX: Enforce a minimum duration to prevent 0-minute double-booking hacks
+    duration = max(doctor.consultation_duration_minutes, 5)
     
-    # An overlap occurs if an existing appointment starts strictly AFTER (New - Duration) 
-    # AND strictly BEFORE (New + Duration). 
-    # Strict inequalities allow perfect back-to-back booking.
-    time_lower_bound = payload.appointment_time - timedelta(minutes=duration)
-    time_upper_bound = payload.appointment_time + timedelta(minutes=duration)
-    
-    overlap = db.query(Appointment).filter(
-        Appointment.doctor_id == payload.doctor_id,
-        Appointment.status.in_([AppointmentStatusEnum.SCHEDULED, AppointmentStatusEnum.ARRIVED]),
-        Appointment.appointment_time > time_lower_bound,
-        Appointment.appointment_time < time_upper_bound
-    ).first()
-    
-    if overlap:
-        raise HTTPException(
-            status_code=409, 
-            detail=f"Scheduling conflict: Doctor has a {duration}-minute block already booked at {overlap.appointment_time}."
-        )
+    if check_schedule_overlap(db, payload.doctor_id, payload.appointment_time, duration):
+        raise HTTPException(status_code=409, detail=f"Scheduling conflict detected at {payload.appointment_time}.")
 
-    appointment = Appointment(
-        patient_id=payload.patient_id,
-        doctor_id=payload.doctor_id,
-        department_id=payload.department_id,
-        appointment_time=payload.appointment_time,
-        reason_for_visit=payload.reason_for_visit,
-        status=AppointmentStatusEnum.SCHEDULED
-    )
+    appointment = Appointment(**payload.model_dump(), status=AppointmentStatusEnum.SCHEDULED)
     db.add(appointment)
     db.commit()
     db.refresh(appointment)
     return appointment
 
 @router.get("/appointments", response_model=PaginatedResponse[AppointmentResponse])
-def list_appointments(doctor_id: Optional[int] = None, patient_id: Optional[int] = None, date_start: Optional[datetime] = None, date_end: Optional[datetime] = None, page: int = 1, page_size: int = 50, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def list_appointments(doctor_id: Optional[int] = None, patient_id: Optional[int] = None, date_start: Optional[datetime] = None,
+                       date_end: Optional[datetime] = None, page: int = 1, page_size: int = 50, db: Session = Depends(get_db), 
+                       _: User = Depends(RequirePermission("manage_clinical_mdm"))):
     """Retrieves appointments, filterable by doctor, patient, or date range."""
     query = db.query(Appointment)
     
@@ -88,7 +76,7 @@ def list_appointments(doctor_id: Optional[int] = None, patient_id: Optional[int]
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 @router.get("/appointments/{appointment_id}", response_model=AppointmentResponse)
-def get_appointment(appointment_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def get_appointment(appointment_id: int, db: Session = Depends(get_db), _: User = Depends(RequirePermission("manage_clinical_mdm"))):
     """Fetches details of a specific appointment."""
     appointment = db.get(Appointment, appointment_id)
     if not appointment:
@@ -109,8 +97,15 @@ def reschedule_appointment(appointment_id: int, payload: AppointmentUpdate, db: 
     if appointment.status not in [AppointmentStatusEnum.SCHEDULED, AppointmentStatusEnum.ARRIVED]:
         raise HTTPException(status_code=400, detail="Cannot reschedule an appointment that is already in progress or completed.")
 
+    # H5 FIX: Enforce overlap checks on reschedules
     if payload.appointment_time is not None:
+        doctor = db.query(DoctorProfile).filter(DoctorProfile.user_id == appointment.doctor_id).first()
+        duration = max(doctor.consultation_duration_minutes, 5) if doctor else 15
+        
+        if check_schedule_overlap(db, appointment.doctor_id, payload.appointment_time, duration):
+            raise HTTPException(status_code=409, detail="Scheduling conflict at the new requested time.")
         appointment.appointment_time = payload.appointment_time
+
     if payload.reason_for_visit is not None:
         appointment.reason_for_visit = payload.reason_for_visit
 
@@ -122,16 +117,32 @@ def reschedule_appointment(appointment_id: int, payload: AppointmentUpdate, db: 
 def update_appointment_status(appointment_id: int, payload: AppointmentStatusUpdate, db: Session = Depends(get_db), _: User = Depends(RequirePermission("manage_clinical_mdm"))):
     """Advances the patient through the waiting room pipeline (ARRIVED -> IN_CONSULTATION -> COMPLETED)."""
     appointment = db.get(Appointment, appointment_id)
-    if not appointment:
-        raise HTTPException(status_code=404, detail="Appointment not found.")
+    if not appointment: raise HTTPException(status_code=404, detail="Appointment not found.")
 
-    if payload.status == AppointmentStatusEnum.IN_CONSULTATION and not payload.encounter_id:
-        raise HTTPException(status_code=400, detail="Must attach an active Encounter ID when moving patient to IN_CONSULTATION.")
+    # H5 FIX: Enforce strictly linear state machine transitions
+    valid_transitions = {
+        AppointmentStatusEnum.SCHEDULED: [AppointmentStatusEnum.ARRIVED, AppointmentStatusEnum.CANCELLED, AppointmentStatusEnum.NO_SHOW],
+        AppointmentStatusEnum.ARRIVED: [AppointmentStatusEnum.IN_CONSULTATION, AppointmentStatusEnum.CANCELLED],
+        AppointmentStatusEnum.IN_CONSULTATION: [AppointmentStatusEnum.COMPLETED],
+        AppointmentStatusEnum.COMPLETED: [],
+        AppointmentStatusEnum.CANCELLED: [],
+        AppointmentStatusEnum.NO_SHOW: []
+    }
+    
+    if payload.status not in valid_transitions[appointment.status]:
+        raise HTTPException(status_code=400, detail=f"Invalid transition from {appointment.status} to {payload.status}.")
 
-    appointment.status = payload.status
-    if payload.encounter_id is not None:
+    if payload.status == AppointmentStatusEnum.IN_CONSULTATION:
+        if not payload.encounter_id:
+            raise HTTPException(status_code=400, detail="Must attach an active Encounter ID.")
+        
+        # H5 FIX: Ensure the encounter belongs to the same patient
+        encounter = db.get(PatientEncounter, payload.encounter_id)
+        if not encounter or encounter.patient_id != appointment.patient_id:
+            raise HTTPException(status_code=400, detail="Encounter does not match the appointment patient.")
         appointment.encounter_id = payload.encounter_id
 
+    appointment.status = payload.status
     db.commit()
     db.refresh(appointment)
     return appointment

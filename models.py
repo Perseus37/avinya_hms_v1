@@ -8,7 +8,20 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from enum import Enum as PyEnum
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, event, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    event,
+    func,
+)
 from sqlalchemy.orm import Mapped, Session as SQLAlchemySession, mapped_column, relationship
 
 from database import Base
@@ -210,6 +223,35 @@ def stamp_audit_actor(session, flush_context, instances):
     for entity in session.dirty:
         if isinstance(entity, AuditMixin) and session.is_modified(entity, include_collections=False):
             entity.updated_by_id = actor_id
+
+# -----------------------------------------------------------------------------
+# Federated Client and Transfer Log Models
+# -----------------------------------------------------------------------------
+
+class FederatedClient(AuditMixin, Base):
+    """Stores authorized external branches/tenants allowed to request patient records."""
+    __tablename__ = "federated_clients"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    branch_code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    api_key_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    api_key_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class FederationTransferLog(Base):
+    """Immutable audit log of every cross-branch/cross-tenant patient data lookup."""
+    __tablename__ = "federation_transfer_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("federated_clients.id"), nullable=False, index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients_master.id"), nullable=False, index=True)
+    requested_identifier: Mapped[str] = mapped_column(String(100), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(255), nullable=False)
+    accessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
 # -----------------------------------------------------------------------------
 # Identity and IAM domain
 # -----------------------------------------------------------------------------
@@ -284,6 +326,10 @@ class UserRole(AuditMixin, Base):
 
 class DoctorProfile(AuditMixin, Base):
     __tablename__ = "doctor_profiles"
+    __table_args__ = (
+        CheckConstraint("consultation_duration_minutes >= 5", name="ck_doctor_min_duration"),
+        CheckConstraint("consultation_fee_paise >= 0", name="ck_doctor_non_neg_fee"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
@@ -376,6 +422,7 @@ class NursingShiftAssignment(AuditMixin, Base):
 # -----------------------------------------------------------------------------
 class ChiefComplaintMaster(AuditMixin, Base):
     __tablename__ = "chief_complaints_master"
+    __table_args__ = (UniqueConstraint("department_id", "code", name="uq_complaint_dept_code"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
@@ -386,6 +433,7 @@ class ChiefComplaintMaster(AuditMixin, Base):
 
 class ComorbidityMaster(AuditMixin, Base):
     __tablename__ = "comorbidities_master"
+    __table_args__ = (UniqueConstraint("department_id", "code", name="uq_comorbidity_dept_code"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
@@ -397,6 +445,7 @@ class ComorbidityMaster(AuditMixin, Base):
 
 class AllergyMaster(AuditMixin, Base):
     __tablename__ = "allergies_master"
+    __table_args__ = (UniqueConstraint("department_id", "code", name="uq_allergy_dept_code"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
@@ -409,10 +458,11 @@ class AllergyMaster(AuditMixin, Base):
 
 class DiagnosisMaster(AuditMixin, Base):
     __tablename__ = "diagnoses_master"
+    __table_args__ = (UniqueConstraint("department_id", "icd10_code", name="uq_diagnosis_dept_icd10"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
-    icd10_code: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
+    icd10_code: Mapped[str] = mapped_column(String(20), nullable=False)
     short_description: Mapped[str] = mapped_column(String(100), nullable=False)
     full_description: Mapped[str] = mapped_column(Text, nullable=False)
     is_billable: Mapped[bool] = mapped_column(default=True)
@@ -422,6 +472,7 @@ class DiagnosisMaster(AuditMixin, Base):
 
 class PhysicalExaminationMaster(AuditMixin, Base):
     __tablename__ = "physical_examinations_master"
+    __table_args__ = (UniqueConstraint("department_id", "code", name="uq_exam_dept_code"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
@@ -444,6 +495,10 @@ class Patient(AuditMixin, Base):
 
 class PatientAllergy(AuditMixin, Base):
     __tablename__ = "patient_allergies"
+    __table_args__ = (
+        UniqueConstraint("patient_id", "allergy_id", name="uq_patient_allergy"),
+        Index("ix_patient_allergies_patient_id", "patient_id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
@@ -499,10 +554,14 @@ class ServiceCatalog(AuditMixin, Base):
 class ServiceBundleMapping(AuditMixin, Base):
     """Maps a parent package (e.g., 'Master Health Check') to executable child services."""
     __tablename__ = "service_bundle_mappings"
+    __table_args__ = (CheckConstraint("quantity > 0", name="ck_bundle_mapping_qty_pos"),)
+
     parent_service_id: Mapped[int] = mapped_column(ForeignKey("service_catalog.id", ondelete="CASCADE"), primary_key=True)
     child_service_id: Mapped[int] = mapped_column(ForeignKey("service_catalog.id", ondelete="CASCADE"), primary_key=True)
     quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-
+    
+    # H3 FIX: Add the relationship required by the response schema
+    child_service: Mapped["ServiceCatalog"] = relationship("ServiceCatalog", foreign_keys=[child_service_id])
 
 class DiagnosticOrder(AuditMixin, Base):
     """The overarching CPOE clinical request grouping multiple tests for a patient."""
@@ -545,6 +604,9 @@ class DiagnosticTask(AuditMixin, Base):
 class PatientEncounter(AuditMixin, Base):
     """The overarching episode of care, covering OPD visits, IPD stays, or ER visits."""
     __tablename__ = "patient_encounters"
+    __table_args__ = (
+        Index("ix_encounters_patient_status", "patient_id", "status"),
+    )
     
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
@@ -610,6 +672,13 @@ class BedTransferLog(AuditMixin, Base):
 class Invoice(AuditMixin, Base):
     """The master billing ledger generated for a patient or an encounter."""
     __tablename__ = "invoices"
+    __table_args__ = (
+        CheckConstraint("total_amount_paise >= 0", name="ck_invoice_total_non_neg"),
+        CheckConstraint("amount_paid_paise >= 0", name="ck_invoice_paid_non_neg"),
+        CheckConstraint("amount_paid_paise <= total_amount_paise", name="ck_invoice_no_overpayment"),
+        Index("ix_invoices_patient_id", "patient_id"),
+        Index("ix_invoices_encounter_id", "encounter_id"),
+    )
     
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
@@ -630,6 +699,12 @@ class Invoice(AuditMixin, Base):
 class InvoiceLineItem(AuditMixin, Base):
     """Granular billable charges (e.g., bed charges, pharmacy, diagnostic tests)."""
     __tablename__ = "invoice_line_items"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_line_item_qty_pos"),
+        CheckConstraint("unit_price_paise >= 0", name="ck_line_item_unit_price_non_neg"),
+        CheckConstraint("total_price_paise >= 0", name="ck_line_item_total_non_neg"),
+        Index("ix_invoice_line_items_invoice_id", "invoice_id"),
+    )
     
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     invoice_id: Mapped[int] = mapped_column(ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False)
@@ -646,7 +721,11 @@ class InvoiceLineItem(AuditMixin, Base):
 class PaymentReceipt(AuditMixin, Base):
     """Immutable ledger of funds received against an invoice."""
     __tablename__ = "payment_receipts"
-    
+    __table_args__ = (
+        CheckConstraint("amount_paid_paise > 0", name="ck_payment_receipt_amount_pos"),
+        Index("ix_payment_receipts_invoice_id", "invoice_id"),
+    )
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     invoice_id: Mapped[int] = mapped_column(ForeignKey("invoices.id"), nullable=False)
     
@@ -665,6 +744,10 @@ class PaymentReceipt(AuditMixin, Base):
 class Appointment(AuditMixin, Base):
     """Schedules a patient visit with a doctor before a formal encounter begins."""
     __tablename__ = "appointments"
+    __table_args__ = (
+        Index("ix_appointments_doctor_time", "doctor_id", "appointment_time"),
+        Index("ix_appointments_patient_id", "patient_id"),
+    )
     
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
@@ -702,11 +785,17 @@ class MedicationMaster(AuditMixin, Base):
 class InventoryBatch(AuditMixin, Base):
     """Tracks physical stock levels, pricing, and expiry dates for specific drug batches."""
     __tablename__ = "inventory_batches"
+    __table_args__ = (
+        UniqueConstraint("medication_id", "batch_number", name="uq_med_batch_number"),
+        CheckConstraint("stock_quantity >= 0", name="ck_batch_stock_non_neg"),
+        CheckConstraint("unit_price_paise >= 0", name="ck_batch_price_non_neg"),
+        Index("ix_inventory_batches_medication_id", "medication_id"),
+    )
     
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     medication_id: Mapped[int] = mapped_column(ForeignKey("medication_master.id"), nullable=False)
     
-    batch_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    batch_number: Mapped[str] = mapped_column(String(50), nullable=False)
     expiry_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     
     stock_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -732,6 +821,11 @@ class Prescription(AuditMixin, Base):
 class PrescriptionItem(AuditMixin, Base):
     """The specific dosage instructions and requested quantities for a prescription."""
     __tablename__ = "prescription_items"
+    __table_args__ = (
+        CheckConstraint("requested_quantity > 0", name="ck_rx_req_qty_pos"),
+        CheckConstraint("dispensed_quantity >= 0", name="ck_rx_disp_qty_non_neg"),
+        CheckConstraint("dispensed_quantity <= requested_quantity", name="ck_rx_no_overdispense"),
+    )
     
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     prescription_id: Mapped[int] = mapped_column(ForeignKey("prescriptions.id", ondelete="CASCADE"), nullable=False)
