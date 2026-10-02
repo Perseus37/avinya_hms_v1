@@ -25,6 +25,7 @@ from routers.v1 import (
     patient_router,
     pharmacy_router,
     ward_router,
+    reports_router,
 )
 
 # -----------------------------------------------------------------------------
@@ -249,6 +250,7 @@ for target in (v1_app, app):
     target.include_router(pharmacy_router.router)
     target.include_router(billing_router.router)
     target.include_router(opd_router.router)
+    target.include_router(reports_router.router)
 
 app.mount("/v1", v1_app)
 

@@ -2,6 +2,8 @@ import logging
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
+from models import ReportTemplate
+from services.standard_templates import STANDARD_TEMPLATES
 from models import (
     AllergyCategoryEnum,
     AllergyMaster,
@@ -272,5 +274,17 @@ def seed_universal_hospital_data(
                 )
             )
 
+    db.commit()
+    
+    for tpl_data in STANDARD_TEMPLATES:
+        existing_tpl = db.query(ReportTemplate).filter(ReportTemplate.code == tpl_data["code"]).first()
+        if not existing_tpl:
+            db.add(
+                ReportTemplate(
+                    **tpl_data,
+                    is_system_template=True,
+                    is_active=True,
+                )
+            )
     db.commit()
     return True

@@ -216,6 +216,20 @@ class PrescriptionStatusEnum(str, PyEnum):
     DISPENSED = "DISPENSED"
     CANCELLED = "CANCELLED"
 
+# --- PHASE 10 ENUMS ---
+class ReportTypeEnum(str, PyEnum):
+    OPD_APPOINTMENT_SLIP = "OPD_APPOINTMENT_SLIP"
+    INVOICE = "INVOICE"
+    PRESCRIPTION = "PRESCRIPTION"
+    DIAGNOSTIC_REPORT = "DIAGNOSTIC_REPORT"
+    DISCHARGE_SUMMARY = "DISCHARGE_SUMMARY"
+
+
+class PageSizeEnum(str, PyEnum):
+    A4_PORTRAIT = "A4_PORTRAIT"
+    A4_LANDSCAPE = "A4_LANDSCAPE"
+    A5_PORTRAIT = "A5_PORTRAIT"
+    THERMAL_80MM = "THERMAL_80MM"
 
 # -----------------------------------------------------------------------------
 # Auditing mixin for timestamp fields
@@ -882,3 +896,30 @@ class EncounterDiagnosis(AuditMixin, Base):
 
     encounter: Mapped["PatientEncounter"] = relationship()
     diagnosis: Mapped["DiagnosisMaster"] = relationship()
+
+class ReportTemplate(AuditMixin, Base):
+    """Stores visual drag-and-drop layout schemas and compiled Jinja2 HTML templates per tenant."""
+    __tablename__ = "report_templates"
+    __table_args__ = (
+        Index("ix_report_templates_type_default", "report_type", "is_default"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    report_type: Mapped[ReportTypeEnum] = mapped_column(nullable=False, index=True)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    page_size: Mapped[PageSizeEnum] = mapped_column(default=PageSizeEnum.A4_PORTRAIT, nullable=False)
+
+    # JSON string storing the visual drag-and-drop canvas blocks, (x,y) coordinates, and widget styles
+    layout_schema: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Compiled Jinja2 HTML and CSS executed by the sandboxed print engine
+    html_template: Mapped[str] = mapped_column(Text, nullable=False)
+    css_styles: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    header_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    footer_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_system_template: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
