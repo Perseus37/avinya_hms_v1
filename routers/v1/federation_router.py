@@ -272,11 +272,14 @@ def discover_and_aggregate_patient_across_branches(
                 key = master.name.strip().lower()
                 if key not in merged_allergies:
                     rx_note = pa.reaction_description or "Adverse reaction"
+                    tagged_reaction = (
+                        rx_note if "[Source:" in rx_note else f"{rx_note} [Source: {ptr.branch_code}]"
+                    )
                     merged_allergies[key] = FederatedAllergySummary(
                         allergy_code=master.code,
                         allergy_name=master.name,
                         severity=pa.severity,
-                        reaction=f"{rx_note} [Source: {ptr.branch_code}]",
+                        reaction=tagged_reaction,
                     )
 
             branch_db.add(

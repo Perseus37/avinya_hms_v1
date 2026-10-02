@@ -91,6 +91,8 @@ lerna-debug.log*
 *.pem
 *.key
 
+backups/
+deployments/
 # ==========================================
 # 🛠️ IDE, Editors & OS Files
 # ==========================================

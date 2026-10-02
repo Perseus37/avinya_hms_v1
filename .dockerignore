@@ -13,6 +13,12 @@ __pycache__/
 *.sqlite3
 *.db
 *.log
+tests/
+backups/
+deployments/
+*.dump
+*.dump.enc
+*.md
 docker-compose*.yml
 Dockerfile
 README.md

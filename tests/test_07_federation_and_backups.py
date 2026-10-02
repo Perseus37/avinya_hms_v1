@@ -111,6 +111,8 @@ def test_03_multi_hop_patient_discovery_and_allergy_union_a_to_b_to_c(
     assert body["address"] == "Updated Address in Bengaluru (Hospital B)"
     allergy_codes = {a["allergy_code"] for a in body["active_allergies"]}
     assert allergy_codes == {"ALG_PEN", "ALG_SULFA"}
+    for alg in body["active_allergies"]:
+        assert alg["reaction"].count("[Source:") == 1
 
 
 def test_04_federation_transfer_logs_written_in_source_tenant_databases(
