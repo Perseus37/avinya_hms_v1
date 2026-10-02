@@ -29,6 +29,7 @@ from schemas.v1.schemas import (
     PatientEncounterResponse,
     PatientEncounterUpdate,
 )
+from services.auto_billing import auto_bill_ipd_bed_stay
 
 router = APIRouter(prefix="/api/adt", tags=["Admissions, Discharges & Transfers (ADT)"])
 
@@ -376,6 +377,8 @@ def discharge_patient(
     if admission.encounter:
         admission.encounter.status = EncounterStatusEnum.DISCHARGED
         admission.encounter.end_time = current_time
+
+    auto_bill_ipd_bed_stay(db, admission, current_time)
 
     db.commit()
     return {"status": "success", "message": "Patient discharged. Bed released to housekeeping."}

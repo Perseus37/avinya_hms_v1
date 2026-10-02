@@ -477,4 +477,63 @@ STANDARD_TEMPLATES: List[Dict[str, Any]] = [
         """,
         "footer_html": "<p style='margin-top:25px;'><strong>Attending Physician Signature: {{ admission.admitting_doctor_name }}</strong></p>",
     },
+    # 7. Medico-Legal Case (MLC) Police Intimation Certificate
+    {
+        "report_type": ReportTypeEnum.MLC_POLICE_REPORT,
+        "code": "SYS_MLC_POLICE_INTIMATION_A4",
+        "name": "Standard A4 Medico-Legal Case (MLC) Police Intimation Report",
+        "description": "Official forensic & casualty police intimation form for RTA, assault, poisoning, and trauma cases.",
+        "page_size": PageSizeEnum.A4_PORTRAIT,
+        "is_default": True,
+        "layout_schema": json.dumps({
+            "canvas": {"width_mm": 210, "height_mm": 297, "grid_columns": 12},
+            "widgets": [{"id": "mlc_hdr", "type": "header", "x": 0, "y": 0, "w": 12, "h": 2}],
+        }),
+        "css_styles": "",
+        "header_html": "<h1>{{ tenant.hospital_name }} ({{ tenant.branch_code }})</h1><h2>MEDICO-LEGAL CASE (MLC) POLICE INTIMATION CERTIFICATE — {{ mlc.mlc_number }}</h2>",
+        "html_template": """
+            <p><strong>To: The Station House Officer (SHO),</strong> {{ mlc.police_station_name }}</p>
+            <table>
+              <tr><td><strong>Patient Name:</strong> {{ patient.full_name }}</td><td><strong>MRN:</strong> {{ patient.mrn }}</td><td><strong>Gender:</strong> {{ patient.gender }}</td></tr>
+              <tr><td><strong>Cause of Injury:</strong> {{ mlc.cause_of_injury }}</td><td><strong>Brought By:</strong> {{ mlc.brought_by_name }} ({{ mlc.brought_by_relation }})</td><td><strong>Constable Buckle No:</strong> {{ mlc.police_constable_buckle_no }}</td></tr>
+            </table>
+            <p><strong>Identification Marks:</strong> {{ mlc.identification_marks }}</p>
+            <p><strong>Alleged History of Injury:</strong> {{ mlc.alleged_history }}</p>
+            <p><strong>FIR Number:</strong> {{ mlc.fir_number }} | <strong>Intimated At:</strong> {{ mlc.police_intimated_at }}</p>
+        """,
+        "footer_html": "<p style='margin-top:30px;'><strong>Casualty Medical Officer: {{ mlc.doctor_name }}</strong> &nbsp;&nbsp;|&nbsp;&nbsp; <strong>Receiving Police Officer Signature: ____________________</strong></p>",
+    },
+    # 8. Surgical & Anesthesia Operative Note Report
+    {
+        "report_type": ReportTypeEnum.SURGICAL_OPERATIVE_NOTE,
+        "code": "SYS_OT_OPERATIVE_NOTE_A4",
+        "name": "Standard A4 Surgical & Anesthesia Operative Record",
+        "description": "Official post-operative surgical findings, WHO checklist verification, anesthesia log, and implant serial registry.",
+        "page_size": PageSizeEnum.A4_PORTRAIT,
+        "is_default": True,
+        "layout_schema": json.dumps({
+            "canvas": {"width_mm": 210, "height_mm": 297, "grid_columns": 12},
+            "widgets": [{"id": "ot_hdr", "type": "header", "x": 0, "y": 0, "w": 12, "h": 2}],
+        }),
+        "css_styles": "",
+        "header_html": "<h1>{{ tenant.hospital_name }} ({{ tenant.branch_code }})</h1><h2>SURGICAL &amp; ANESTHESIA OPERATIVE RECORD — {{ surgery.case_number }}</h2>",
+        "html_template": """
+            <p><strong>Patient:</strong> {{ patient.full_name }} (MRN: {{ patient.mrn }}) | <strong>Operation Theatre:</strong> {{ surgery.theatre_name }}</p>
+            <p><strong>Procedure:</strong> {{ surgery.procedure_name }} | <strong>Lead Surgeon:</strong> {{ surgery.surgeon_name }}</p>
+            <p><strong>Anesthesia Type:</strong> {{ record.anesthesia_type }} (ASA Grade {{ record.asa_physical_status }}) | <strong>Est. Blood Loss:</strong> {{ record.estimated_blood_loss_ml }} mL</p>
+            <h3>Operative Findings &amp; Procedure Details</h3>
+            <p>{{ record.operative_findings }}</p>
+            <h3>Post-Operative Instructions</h3>
+            <p>{{ record.post_op_instructions }}</p>
+            <h3>Implant &amp; Prosthetic Serial Registry</h3>
+            <ul>
+              {% for imp in implants %}
+              <li><strong>{{ imp.implant_name }}</strong> ({{ imp.manufacturer }}) — S/N: {{ imp.serial_or_batch_number }} (Qty: {{ imp.quantity }})</li>
+              {% else %}
+              <li>No surgical implants recorded</li>
+              {% endfor %}
+            </ul>
+        """,
+        "footer_html": "<p style='margin-top:30px;'><strong>Lead Surgeon Signature: {{ surgery.surgeon_name }}</strong></p>",
+    },
 ]

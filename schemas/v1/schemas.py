@@ -30,6 +30,22 @@ from models import (
     UserStatusEnum,
     WardTypeEnum,
     DiagnosisTypeEnum,
+    InsuranceProviderTypeEnum,
+    PreAuthStatusEnum,
+    ClaimStatusEnum,
+    DepositStatusEnum,
+    FluidDirectionEnum,
+    MLCCauseEnum,
+    TriageAcuityEnum,
+    eMARStatusEnum,
+    AnesthesiaTypeEnum,
+    OTTheatreTypeEnum,
+    SurgeryStatusEnum,
+    BloodBagStatusEnum,
+    BloodComponentTypeEnum,
+    DicomModalityEnum,
+    TransfusionReactionTypeEnum,
+
 )
 
 T = TypeVar("T")
@@ -751,11 +767,18 @@ class InvoiceResponse(BaseModel):
     invoice_number: str
     status: InvoiceStatusEnum
     total_amount_paise: int
+    discount_amount_paise: int = 0
+    net_amount_paise: int = 0
+    discount_reason: Optional[str] = None
+    discount_approved_by_id: Optional[int] = None
     amount_paid_paise: int
     line_items: List[InvoiceLineItemResponse]
     payments: List[PaymentReceiptResponse]
     model_config = ConfigDict(from_attributes=True)
 
+class InvoiceDiscountRequest(BaseModel):
+    discount_amount_paise: int = Field(ge=0, description="Discount in paise")
+    discount_reason: str = Field(min_length=3, max_length=255, description="Mandatory audit reason for concession/waiver")
 
 # --- PHASE 7: OPD SCHEMAS ---
 class AppointmentCreate(BaseModel):
@@ -905,6 +928,224 @@ class PrescriptionDispenseRequest(BaseModel):
 DispenseRequest = PrescriptionDispenseRequest
 
 # =====================================================================
+# PHASE 9: INSURANCE, TPA, PRE-AUTH & CLAIMS SCHEMAS
+# =====================================================================
+
+class InsuranceProviderCreate(BaseModel):
+    code: str = Field(min_length=2, max_length=50)
+    name: str = Field(min_length=2, max_length=150)
+    provider_type: InsuranceProviderTypeEnum
+    contact_email: Optional[EmailStr] = None
+    contact_phone: Optional[str] = None
+
+
+class InsuranceProviderResponse(BaseModel):
+    id: int
+    code: str
+    name: str
+    provider_type: InsuranceProviderTypeEnum
+    contact_email: Optional[str] = None
+    contact_phone: Optional[str] = None
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PatientInsurancePolicyCreate(BaseModel):
+    patient_id: int
+    provider_id: int
+    plan_id: Optional[int] = None
+    policy_number: str = Field(min_length=2, max_length=100)
+    member_id: str = Field(min_length=2, max_length=100)
+    sum_insured_paise: int = Field(gt=0)
+    copay_percentage: Optional[int] = Field(default=None, ge=0, le=100)
+    valid_from: datetime
+    valid_till: datetime
+
+
+class PatientInsurancePolicyResponse(BaseModel):
+    id: int
+    patient_id: int
+    provider_id: int
+    plan_id: Optional[int] = None
+    policy_number: str
+    member_id: str
+    sum_insured_paise: int
+    copay_percentage: int
+    valid_from: datetime
+    valid_till: datetime
+    is_active: bool
+    provider: InsuranceProviderResponse
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InsurancePreAuthCreate(BaseModel):
+    encounter_id: int
+    policy_id: int
+    primary_diagnosis_id: int
+    requested_amount_paise: int = Field(gt=0)
+    clinical_justification: Optional[str] = None
+
+
+class InsurancePreAuthStatusUpdate(BaseModel):
+    status: PreAuthStatusEnum
+    approved_amount_paise: Optional[int] = Field(default=None, ge=0)
+    tpa_reference_number: Optional[str] = None
+    tpa_query_remarks: Optional[str] = None
+
+
+class InsurancePreAuthResponse(BaseModel):
+    id: int
+    encounter_id: int
+    policy_id: int
+    primary_diagnosis_id: int
+    preauth_number: str
+    status: PreAuthStatusEnum
+    requested_amount_paise: int
+    approved_amount_paise: int
+    tpa_reference_number: Optional[str] = None
+    clinical_justification: Optional[str] = None
+    tpa_query_remarks: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InsuranceClaimCreate(BaseModel):
+    invoice_id: int
+    policy_id: int
+    preauth_id: Optional[int] = None
+    remarks: Optional[str] = None
+
+
+class InsuranceClaimSettleRequest(BaseModel):
+    settled_amount_paise: int = Field(gt=0)
+    settlement_utr_reference: str = Field(min_length=3, max_length=100)
+    remarks: Optional[str] = None
+
+
+class InsuranceClaimResponse(BaseModel):
+    id: int
+    invoice_id: int
+    policy_id: int
+    preauth_id: Optional[int] = None
+    claim_number: str
+    status: ClaimStatusEnum
+    claimed_amount_paise: int
+    insurer_payable_paise: int
+    patient_copay_paise: int
+    settled_amount_paise: int
+    settlement_utr_reference: Optional[str] = None
+    remarks: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+class InsurancePlanCreate(BaseModel):
+    provider_id: int
+    code: str = Field(min_length=2, max_length=50)
+    name: str = Field(min_length=2, max_length=150)
+    default_copay_percentage: int = Field(default=0, ge=0, le=100)
+    max_room_rent_daily_paise: Optional[int] = Field(default=None, ge=0)
+    apply_tariff_automatically: bool = True
+
+
+class InsurancePlanResponse(BaseModel):
+    id: int
+    provider_id: int
+    code: str
+    name: str
+    default_copay_percentage: int
+    max_room_rent_daily_paise: Optional[int] = None
+    apply_tariff_automatically: bool
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InsurancePlanTariffUpsert(BaseModel):
+    service_id: int
+    tariff_price_paise: int = Field(ge=0)
+    is_covered: bool = True
+
+
+class InsurancePlanTariffResponse(BaseModel):
+    id: int
+    plan_id: int
+    service_id: int
+    tariff_price_paise: int
+    is_covered: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PlanComparisonEstimateRequest(BaseModel):
+    plan_ids: List[int] = Field(min_length=1)
+    service_ids: List[int] = Field(default_factory=list)
+    bed_daily_rate_paise: int = Field(default=0, ge=0)
+    stay_days: int = Field(default=1, ge=1)
+
+
+class PlanComparisonBreakdownItem(BaseModel):
+    plan_id: int
+    plan_code: str
+    plan_name: str
+    hospital_rack_total_paise: int
+    negotiated_plan_total_paise: int
+    mou_tariff_savings_paise: int
+    non_covered_excluded_paise: int
+    room_rent_excess_paise: int
+    estimated_insurer_payable_paise: int
+    estimated_patient_out_of_pocket_paise: int
+
+# =====================================================================
+# PHASE 9D: ADVANCE DEPOSITS & REFUND VOUCHER SCHEMAS
+# =====================================================================
+
+class PatientDepositCreate(BaseModel):
+    patient_id: int
+    encounter_id: Optional[int] = None
+    amount_paise: int = Field(gt=0)
+    payment_method: PaymentMethodEnum
+    transaction_reference: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class PatientDepositResponse(BaseModel):
+    id: int
+    patient_id: int
+    encounter_id: Optional[int] = None
+    deposit_number: str
+    amount_paise: int
+    remaining_balance_paise: int
+    payment_method: PaymentMethodEnum
+    transaction_reference: Optional[str] = None
+    status: DepositStatusEnum
+    notes: Optional[str] = None
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ApplyDepositToInvoiceRequest(BaseModel):
+    deposit_id: int
+    amount_to_apply_paise: Optional[int] = Field(default=None, gt=0)
+
+
+class DepositRefundRequest(BaseModel):
+    refund_amount_paise: Optional[int] = Field(default=None, gt=0)
+    refund_method: PaymentMethodEnum = PaymentMethodEnum.BANK_TRANSFER
+    transaction_reference: Optional[str] = None
+    reason: str = Field(min_length=3, max_length=255)
+
+
+class RefundVoucherResponse(BaseModel):
+    id: int
+    voucher_number: str
+    patient_id: int
+    deposit_id: Optional[int] = None
+    invoice_id: Optional[int] = None
+    refund_amount_paise: int
+    refund_method: PaymentMethodEnum
+    transaction_reference: Optional[str] = None
+    reason: str
+    approved_by_id: int
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+# =====================================================================
 # PHASE 10: ENCOUNTER VITALS, SOAP CLINICAL NOTES & ICD-10 DIAGNOSES
 # =====================================================================
 
@@ -986,4 +1227,316 @@ class EncounterDiagnosisResponse(BaseModel):
     created_by_id: Optional[int] = None
     diagnosis: DiagnosisResponse
 
+    model_config = ConfigDict(from_attributes=True)
+
+# =====================================================================
+# PHASE 11: INPATIENT NURSING eMAR, FLUID I/O & ER TRIAGE / MLC SCHEMAS
+# =====================================================================
+
+class eMARCreate(BaseModel):
+    prescription_item_id: int
+    status: eMARStatusEnum = eMARStatusEnum.ADMINISTERED
+    dose_given: str = Field(min_length=1, max_length=100)
+    scheduled_time: Optional[datetime] = None
+    notes: Optional[str] = Field(default=None, max_length=500)
+
+
+class eMARResponse(BaseModel):
+    id: int
+    encounter_id: int
+    prescription_item_id: int
+    administered_by_id: int
+    scheduled_time: Optional[datetime] = None
+    administered_at: datetime
+    status: eMARStatusEnum
+    dose_given: str
+    notes: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FluidLogCreate(BaseModel):
+    direction: FluidDirectionEnum
+    fluid_type: str = Field(min_length=2, max_length=100)
+    volume_ml: int = Field(gt=0, le=10000)
+    notes: Optional[str] = Field(default=None, max_length=255)
+
+
+class FluidLogResponse(BaseModel):
+    id: int
+    encounter_id: int
+    recorded_by_id: int
+    direction: FluidDirectionEnum
+    fluid_type: str
+    volume_ml: int
+    recorded_at: datetime
+    notes: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FluidBalanceSummaryResponse(BaseModel):
+    encounter_id: int
+    total_intake_ml: int
+    total_output_ml: int
+    net_balance_ml: int
+    logs: List[FluidLogResponse]
+
+
+class ERTriageCreate(BaseModel):
+    acuity_level: TriageAcuityEnum
+    chief_complaint: str = Field(min_length=2, max_length=255)
+    gcs_score: Optional[int] = Field(default=15, ge=3, le=15)
+    pain_scale: Optional[int] = Field(default=0, ge=0, le=10)
+    airway_status: Optional[str] = "CLEAR"
+    breathing_status: Optional[str] = "NORMAL"
+    circulation_status: Optional[str] = "STABLE"
+    is_mlc_suspected: bool = False
+    triage_notes: Optional[str] = None
+
+
+class ERTriageResponse(BaseModel):
+    id: int
+    encounter_id: int
+    triaged_by_id: int
+    acuity_level: TriageAcuityEnum
+    chief_complaint: str
+    gcs_score: Optional[int] = None
+    pain_scale: Optional[int] = None
+    airway_status: Optional[str] = None
+    breathing_status: Optional[str] = None
+    circulation_status: Optional[str] = None
+    is_mlc_suspected: bool
+    triage_notes: Optional[str] = None
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MLCCreate(BaseModel):
+    encounter_id: int
+    cause_of_injury: MLCCauseEnum
+    alleged_history: str = Field(min_length=5)
+    identification_marks: str = Field(min_length=3, max_length=255)
+    brought_by_name: str = Field(min_length=2, max_length=100)
+    brought_by_relation: Optional[str] = None
+    brought_by_phone: Optional[str] = None
+    police_station_name: str = Field(min_length=3, max_length=150)
+    police_constable_buckle_no: Optional[str] = None
+
+
+class MLCPoliceIntimationRequest(BaseModel):
+    police_constable_buckle_no: str = Field(min_length=2, max_length=50)
+    fir_number: Optional[str] = Field(default=None, max_length=100)
+
+
+class MLCResponse(BaseModel):
+    id: int
+    mlc_number: str
+    encounter_id: int
+    patient_id: int
+    registered_by_doctor_id: int
+    cause_of_injury: MLCCauseEnum
+    alleged_history: str
+    identification_marks: str
+    brought_by_name: str
+    brought_by_relation: Optional[str] = None
+    brought_by_phone: Optional[str] = None
+    police_station_name: str
+    police_constable_buckle_no: Optional[str] = None
+    police_intimated_at: Optional[datetime] = None
+    fir_number: Optional[str] = None
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+# =====================================================================
+# PHASE 12: OPERATION THEATRE (OT), SURGICAL SAFETY & IMPLANT SCHEMAS
+# =====================================================================
+
+class OperationTheatreCreate(BaseModel):
+    code: str = Field(min_length=2, max_length=50)
+    name: str = Field(min_length=2, max_length=100)
+    theatre_type: OTTheatreTypeEnum
+    floor_id: Optional[int] = None
+    hourly_rate_paise: int = Field(default=0, ge=0)
+
+
+class OperationTheatreResponse(BaseModel):
+    id: int
+    code: str
+    name: str
+    theatre_type: OTTheatreTypeEnum
+    floor_id: Optional[int] = None
+    hourly_rate_paise: int
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SurgicalScheduleCreate(BaseModel):
+    encounter_id: int
+    theatre_id: int
+    procedure_service_id: int
+    lead_surgeon_id: int
+    anesthetist_id: Optional[int] = None
+    scheduled_start_time: datetime
+    scheduled_end_time: datetime
+    pre_op_diagnosis_notes: Optional[str] = None
+
+
+class WHOChecklistUpsert(BaseModel):
+    patient_identity_confirmed: bool = False
+    site_marked: bool = False
+    consent_signed: bool = False
+    pulse_oximeter_functioning: bool = False
+    allergy_checked: bool = False
+    antibiotic_prophylaxis_given: bool = False
+    sponge_instrument_count_verified: bool = False
+    specimen_labeled: bool = True
+
+
+class WHOChecklistResponse(BaseModel):
+    id: int
+    surgery_id: int
+    verified_by_id: int
+    patient_identity_confirmed: bool
+    site_marked: bool
+    consent_signed: bool
+    pulse_oximeter_functioning: bool
+    allergy_checked: bool
+    antibiotic_prophylaxis_given: bool
+    sponge_instrument_count_verified: bool
+    specimen_labeled: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
+class OperativeRecordUpsert(BaseModel):
+    anesthesia_type: AnesthesiaTypeEnum
+    asa_physical_status: int = Field(default=1, ge=1, le=6)
+    anesthesia_notes: Optional[str] = None
+    operative_findings: str = Field(min_length=3)
+    post_op_instructions: Optional[str] = None
+    estimated_blood_loss_ml: int = Field(default=0, ge=0)
+
+
+class OperativeRecordResponse(BaseModel):
+    id: int
+    surgery_id: int
+    anesthesia_type: AnesthesiaTypeEnum
+    asa_physical_status: int
+    anesthesia_notes: Optional[str] = None
+    operative_findings: str
+    post_op_instructions: Optional[str] = None
+    estimated_blood_loss_ml: int
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SurgicalImplantCreate(BaseModel):
+    implant_name: str = Field(min_length=2, max_length=150)
+    manufacturer: Optional[str] = None
+    serial_or_batch_number: str = Field(min_length=2, max_length=100)
+    quantity: int = Field(default=1, gt=0)
+    unit_price_paise: int = Field(ge=0)
+
+
+class SurgicalImplantResponse(BaseModel):
+    id: int
+    surgery_id: int
+    implant_name: str
+    manufacturer: Optional[str] = None
+    serial_or_batch_number: str
+    quantity: int
+    unit_price_paise: int
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SurgeryStatusUpdateRequest(BaseModel):
+    status: SurgeryStatusEnum
+
+
+class SurgicalScheduleResponse(BaseModel):
+    id: int
+    case_number: str
+    encounter_id: int
+    patient_id: int
+    theatre_id: int
+    procedure_service_id: int
+    lead_surgeon_id: int
+    anesthetist_id: Optional[int] = None
+    scheduled_start_time: datetime
+    scheduled_end_time: datetime
+    actual_start_time: Optional[datetime] = None
+    actual_end_time: Optional[datetime] = None
+    status: SurgeryStatusEnum
+    pre_op_diagnosis_notes: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+# =====================================================================
+# PHASE 13: BLOOD BANK TRANSFUSION & RADIOLOGY PACS/DICOM SCHEMAS
+# =====================================================================
+
+class BloodBagCreate(BaseModel):
+    bag_number: str = Field(min_length=3, max_length=50)
+    component_type: BloodComponentTypeEnum
+    blood_group: BloodGroupEnum
+    volume_ml: int = Field(gt=0, le=1000)
+    collection_date: datetime
+    expiry_date: datetime
+    processing_fee_paise: int = Field(default=0, ge=0)
+
+
+class BloodBagResponse(BaseModel):
+    id: int
+    bag_number: str
+    component_type: BloodComponentTypeEnum
+    blood_group: BloodGroupEnum
+    volume_ml: int
+    collection_date: datetime
+    expiry_date: datetime
+    processing_fee_paise: int
+    status: BloodBagStatusEnum
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BloodCrossMatchCreate(BaseModel):
+    encounter_id: int
+    blood_bag_id: int
+    ordered_by_doctor_id: int
+
+
+class TransfusionReactionRequest(BaseModel):
+    reaction_type: TransfusionReactionTypeEnum
+    reaction_notes: str = Field(min_length=5, max_length=500)
+
+
+class BloodCrossMatchResponse(BaseModel):
+    id: int
+    encounter_id: int
+    patient_id: int
+    blood_bag_id: int
+    ordered_by_doctor_id: int
+    cross_matched_by_id: int
+    issued_at: Optional[datetime] = None
+    issued_by_id: Optional[int] = None
+    reaction_type: TransfusionReactionTypeEnum
+    reaction_notes: Optional[str] = None
+    blood_bag: BloodBagResponse
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RadiologyStudyUpsert(BaseModel):
+    study_instance_uid: str = Field(min_length=5, max_length=128)
+    accession_number: str = Field(min_length=3, max_length=64)
+    modality: DicomModalityEnum
+    pacs_viewer_url: str = Field(min_length=5, max_length=500)
+    radiation_dose_mgy: Optional[float] = Field(default=None, ge=0.0)
+    radiologist_impression: Optional[str] = None
+
+
+class RadiologyStudyResponse(BaseModel):
+    id: int
+    diagnostic_task_id: int
+    study_instance_uid: str
+    accession_number: str
+    modality: DicomModalityEnum
+    pacs_viewer_url: str
+    radiation_dose_mgy: Optional[float] = None
+    radiologist_impression: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)

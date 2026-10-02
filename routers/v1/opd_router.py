@@ -21,6 +21,8 @@ from schemas.v1.schemas import (
     PaginatedResponse,
 )
 
+from services.auto_billing import auto_bill_opd_consultation
+
 router = APIRouter(prefix="/api/opd", tags=["Outpatient Scheduling (OPD)"])
 
 
@@ -184,6 +186,7 @@ def update_appointment_status(
         if not encounter or encounter.patient_id != appointment.patient_id:
             raise HTTPException(status_code=400, detail="Encounter does not match the appointment patient.")
         appointment.encounter_id = payload.encounter_id
+        auto_bill_opd_consultation(db, appointment.patient_id, encounter.id, appointment.doctor_id)
 
     appointment.status = payload.status
     db.commit()

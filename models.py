@@ -216,6 +216,42 @@ class PrescriptionStatusEnum(str, PyEnum):
     DISPENSED = "DISPENSED"
     CANCELLED = "CANCELLED"
 
+# --- PHASE 9 ENUMS ---
+class InsuranceProviderTypeEnum(str, PyEnum):
+    TPA = "TPA"
+    INSURER = "INSURER"
+    GOVERNMENT_SCHEME = "GOVERNMENT_SCHEME"
+    CORPORATE = "CORPORATE"
+
+
+class PreAuthStatusEnum(str, PyEnum):
+    DRAFT = "DRAFT"
+    SUBMITTED = "SUBMITTED"
+    QUERY_RAISED = "QUERY_RAISED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+class ClaimStatusEnum(str, PyEnum):
+    SUBMITTED = "SUBMITTED"
+    APPROVED = "APPROVED"
+    SETTLED = "SETTLED"
+    REJECTED = "REJECTED"
+
+class PaymentMethodEnum(str, PyEnum):
+    CASH = "CASH"
+    CREDIT_CARD = "CREDIT_CARD"
+    INSURANCE = "INSURANCE"
+    UPI = "UPI"
+    BANK_TRANSFER = "BANK_TRANSFER"
+    ADVANCE_ADJUSTMENT = "ADVANCE_ADJUSTMENT"
+
+
+class DepositStatusEnum(str, PyEnum):
+    ACTIVE = "ACTIVE"
+    EXHAUSTED = "EXHAUSTED"
+    REFUNDED = "REFUNDED"
+
 # --- PHASE 10 ENUMS ---
 class ReportTypeEnum(str, PyEnum):
     OPD_APPOINTMENT_SLIP = "OPD_APPOINTMENT_SLIP"
@@ -223,13 +259,103 @@ class ReportTypeEnum(str, PyEnum):
     PRESCRIPTION = "PRESCRIPTION"
     DIAGNOSTIC_REPORT = "DIAGNOSTIC_REPORT"
     DISCHARGE_SUMMARY = "DISCHARGE_SUMMARY"
-
+    MLC_POLICE_REPORT = "MLC_POLICE_REPORT"
+    SURGICAL_OPERATIVE_NOTE = "SURGICAL_OPERATIVE_NOTE"
 
 class PageSizeEnum(str, PyEnum):
     A4_PORTRAIT = "A4_PORTRAIT"
     A4_LANDSCAPE = "A4_LANDSCAPE"
     A5_PORTRAIT = "A5_PORTRAIT"
     THERMAL_80MM = "THERMAL_80MM"
+
+# --- PHASE 11 ENUMS ---
+class eMARStatusEnum(str, PyEnum):
+    ADMINISTERED = "ADMINISTERED"
+    HELD = "HELD"
+    REFUSED = "REFUSED"
+    MISSED = "MISSED"
+
+
+class FluidDirectionEnum(str, PyEnum):
+    INTAKE = "INTAKE"
+    OUTPUT = "OUTPUT"
+
+
+class TriageAcuityEnum(str, PyEnum):
+    RED_RESUSCITATION = "RED_RESUSCITATION"
+    ORANGE_EMERGENT = "ORANGE_EMERGENT"
+    YELLOW_URGENT = "YELLOW_URGENT"
+    GREEN_LESS_URGENT = "GREEN_LESS_URGENT"
+    BLACK_DECEASED = "BLACK_DECEASED"
+
+
+class MLCCauseEnum(str, PyEnum):
+    ROAD_TRAFFIC_ACCIDENT = "ROAD_TRAFFIC_ACCIDENT"
+    ASSAULT = "ASSAULT"
+    POISONING = "POISONING"
+    BURNS = "BURNS"
+    INDUSTRIAL_ACCIDENT = "INDUSTRIAL_ACCIDENT"
+    BROUGHT_DEAD = "BROUGHT_DEAD"
+    OTHER = "OTHER"
+
+# --- PHASE 12 ENUMS ---
+class OTTheatreTypeEnum(str, PyEnum):
+    MODULAR_MAJOR = "MODULAR_MAJOR"
+    MINOR = "MINOR"
+    CARDIOTHORACIC = "CARDIOTHORACIC"
+    ORTHO_TRAUMA = "ORTHO_TRAUMA"
+    EMERGENCY_OT = "EMERGENCY_OT"
+
+
+class SurgeryStatusEnum(str, PyEnum):
+    SCHEDULED = "SCHEDULED"
+    PRE_OP_CLEARED = "PRE_OP_CLEARED"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+
+
+class AnesthesiaTypeEnum(str, PyEnum):
+    GENERAL = "GENERAL"
+    SPINAL = "SPINAL"
+    EPIDURAL = "EPIDURAL"
+    REGIONAL_BLOCK = "REGIONAL_BLOCK"
+    LOCAL_MAC = "LOCAL_MAC"
+
+# --- PHASE 13 ENUMS ---
+class BloodComponentTypeEnum(str, PyEnum):
+    WHOLE_BLOOD = "WHOLE_BLOOD"
+    PRBC = "PRBC"
+    FFP = "FFP"
+    PLATELETS = "PLATELETS"
+    CRYOPRECIPITATE = "CRYOPRECIPITATE"
+
+
+class BloodBagStatusEnum(str, PyEnum):
+    AVAILABLE = "AVAILABLE"
+    CROSS_MATCHED = "CROSS_MATCHED"
+    ISSUED = "ISSUED"
+    REACTION_HALTED = "REACTION_HALTED"
+    DISCARDED = "DISCARDED"
+
+
+class TransfusionReactionTypeEnum(str, PyEnum):
+    NONE = "NONE"
+    FEBRILE_NON_HEMOLYTIC = "FEBRILE_NON_HEMOLYTIC"
+    ALLERGIC_URTICARIA = "ALLERGIC_URTICARIA"
+    ACUTE_HEMOLYTIC = "ACUTE_HEMOLYTIC"
+    ANAPHYLACTIC = "ANAPHYLACTIC"
+    TRALI = "TRALI"
+
+
+class DicomModalityEnum(str, PyEnum):
+    CR = "CR"
+    DX = "DX"
+    CT = "CT"
+    MR = "MR"
+    US = "US"
+    MG = "MG"
+    PT = "PT"
 
 # -----------------------------------------------------------------------------
 # Auditing mixin for timestamp fields
@@ -687,8 +813,13 @@ class Invoice(AuditMixin, Base):
     __tablename__ = "invoices"
     __table_args__ = (
         CheckConstraint("total_amount_paise >= 0", name="ck_invoice_total_non_neg"),
+        CheckConstraint("discount_amount_paise >= 0", name="ck_invoice_discount_non_neg"),
+        CheckConstraint("discount_amount_paise <= total_amount_paise", name="ck_invoice_discount_le_total"),
         CheckConstraint("amount_paid_paise >= 0", name="ck_invoice_paid_non_neg"),
-        CheckConstraint("amount_paid_paise <= total_amount_paise", name="ck_invoice_no_overpayment"),
+        CheckConstraint(
+            "amount_paid_paise <= (total_amount_paise - discount_amount_paise)",
+            name="ck_invoice_no_overpayment",
+        ),
         Index("ix_invoices_patient_id", "patient_id"),
         Index("ix_invoices_encounter_id", "encounter_id"),
     )
@@ -698,13 +829,21 @@ class Invoice(AuditMixin, Base):
     invoice_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     status: Mapped[InvoiceStatusEnum] = mapped_column(default=InvoiceStatusEnum.DRAFT, nullable=False)
     total_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    discount_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    discount_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    discount_approved_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
     amount_paid_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     notes: Mapped[Optional[str]] = mapped_column(Text)
 
     patient: Mapped["Patient"] = relationship()
     encounter: Mapped[Optional["PatientEncounter"]] = relationship()
+    discount_approved_by: Mapped[Optional["User"]] = relationship(foreign_keys=[discount_approved_by_id])
     line_items: Mapped[List["InvoiceLineItem"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
     payments: Mapped[List["PaymentReceipt"]] = relationship(back_populates="invoice")
+
+    @property
+    def net_amount_paise(self) -> int:
+        return max(0, self.total_amount_paise - (self.discount_amount_paise or 0))
 
 
 class InvoiceLineItem(AuditMixin, Base):
@@ -830,6 +969,199 @@ class PrescriptionItem(AuditMixin, Base):
     medication: Mapped[MedicationMaster] = relationship()
 
 # ==========================================
+# PHASE 9: INSURANCE, TPA, PRE-AUTH & CLAIMS SETTLEMENT
+# ==========================================
+
+class InsuranceProvider(AuditMixin, Base):
+    """Master catalog of TPAs, private health insurers, government schemes (PM-JAY), and corporate payers."""
+    __tablename__ = "insurance_providers"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    provider_type: Mapped[InsuranceProviderTypeEnum] = mapped_column(nullable=False)
+    contact_email: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    contact_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+class InsurancePlan(AuditMixin, Base):
+    """Specific insurance plan or corporate tier under an InsuranceProvider with room-rent caps and MoU rules."""
+    __tablename__ = "insurance_plans"
+    __table_args__ = (
+        CheckConstraint("default_copay_percentage >= 0 AND default_copay_percentage <= 100", name="ck_plan_copay_range"),
+        CheckConstraint("max_room_rent_daily_paise IS NULL OR max_room_rent_daily_paise >= 0", name="ck_plan_room_cap_non_neg"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    provider_id: Mapped[int] = mapped_column(ForeignKey("insurance_providers.id", ondelete="CASCADE"), nullable=False, index=True)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    default_copay_percentage: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_room_rent_daily_paise: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # None = no daily room cap
+    apply_tariff_automatically: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    provider: Mapped["InsuranceProvider"] = relationship()
+    tariffs: Mapped[List["InsurancePlanTariff"]] = relationship(back_populates="plan", cascade="all, delete-orphan")
+
+
+class InsurancePlanTariff(AuditMixin, Base):
+    """Plan-specific negotiated rate card (Schedule of Charges) and coverage exclusion rules per ServiceCatalog item."""
+    __tablename__ = "insurance_plan_tariffs"
+    __table_args__ = (
+        UniqueConstraint("plan_id", "service_id", name="uq_plan_service_tariff"),
+        CheckConstraint("tariff_price_paise >= 0", name="ck_tariff_price_non_neg"),
+        Index("ix_plan_tariffs_plan_id", "plan_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("insurance_plans.id", ondelete="CASCADE"), nullable=False)
+    service_id: Mapped[int] = mapped_column(ForeignKey("service_catalog.id", ondelete="CASCADE"), nullable=False)
+    tariff_price_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_covered: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    plan: Mapped["InsurancePlan"] = relationship(back_populates="tariffs")
+    service: Mapped["ServiceCatalog"] = relationship()
+
+class PatientInsurancePolicy(AuditMixin, Base):
+    """Links a patient to an InsuranceProvider with sum insured, co-pay percentage, and validity dates."""
+    __tablename__ = "patient_insurance_policies"
+    __table_args__ = (
+        UniqueConstraint("provider_id", "policy_number", name="uq_provider_policy_number"),
+        CheckConstraint("sum_insured_paise > 0", name="ck_policy_sum_insured_pos"),
+        CheckConstraint("copay_percentage >= 0 AND copay_percentage <= 100", name="ck_policy_copay_range"),
+        Index("ix_patient_policies_patient_id", "patient_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
+    provider_id: Mapped[int] = mapped_column(ForeignKey("insurance_providers.id"), nullable=False)
+    plan_id: Mapped[Optional[int]] = mapped_column(ForeignKey("insurance_plans.id"), nullable=True)
+
+    policy_number: Mapped[str] = mapped_column(String(100), nullable=False)
+    member_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    sum_insured_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    copay_percentage: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # 0 to 100
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valid_till: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    patient: Mapped["Patient"] = relationship()
+    provider: Mapped["InsuranceProvider"] = relationship()
+    plan: Mapped[Optional["InsurancePlan"]] = relationship()
+
+class InsurancePreAuth(AuditMixin, Base):
+    """Cashless pre-authorization workflow tied to an active encounter and billable ICD-10 diagnosis."""
+    __tablename__ = "insurance_pre_auths"
+    __table_args__ = (
+        CheckConstraint("requested_amount_paise > 0", name="ck_preauth_req_amount_pos"),
+        CheckConstraint("approved_amount_paise >= 0", name="ck_preauth_app_amount_non_neg"),
+        Index("ix_preauth_encounter_id", "encounter_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id"), nullable=False)
+    policy_id: Mapped[int] = mapped_column(ForeignKey("patient_insurance_policies.id"), nullable=False)
+    primary_diagnosis_id: Mapped[int] = mapped_column(ForeignKey("diagnoses_master.id"), nullable=False)
+
+    preauth_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    status: Mapped[PreAuthStatusEnum] = mapped_column(default=PreAuthStatusEnum.SUBMITTED, nullable=False)
+    requested_amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    approved_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tpa_reference_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    clinical_justification: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tpa_query_remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    encounter: Mapped["PatientEncounter"] = relationship()
+    policy: Mapped["PatientInsurancePolicy"] = relationship()
+    primary_diagnosis: Mapped["DiagnosisMaster"] = relationship()
+
+
+class InsuranceClaim(AuditMixin, Base):
+    """Final insurance claim splitting an Invoice between Insurer Payable and Patient Co-Pay."""
+    __tablename__ = "insurance_claims"
+    __table_args__ = (
+        CheckConstraint("claimed_amount_paise > 0", name="ck_claim_claimed_pos"),
+        CheckConstraint("insurer_payable_paise >= 0", name="ck_claim_insurer_non_neg"),
+        CheckConstraint("patient_copay_paise >= 0", name="ck_claim_copay_non_neg"),
+        Index("ix_claims_invoice_id", "invoice_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    invoice_id: Mapped[int] = mapped_column(ForeignKey("invoices.id"), unique=True, nullable=False)
+    policy_id: Mapped[int] = mapped_column(ForeignKey("patient_insurance_policies.id"), nullable=False)
+    preauth_id: Mapped[Optional[int]] = mapped_column(ForeignKey("insurance_pre_auths.id"), nullable=True)
+
+    claim_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    status: Mapped[ClaimStatusEnum] = mapped_column(default=ClaimStatusEnum.SUBMITTED, nullable=False)
+
+    claimed_amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    insurer_payable_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    patient_copay_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    settled_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    settlement_utr_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    invoice: Mapped["Invoice"] = relationship()
+    policy: Mapped["PatientInsurancePolicy"] = relationship()
+    preauth: Mapped[Optional["InsurancePreAuth"]] = relationship()
+
+# ==========================================
+# PHASE 9D: PATIENT ADVANCE DEPOSITS & REFUND VOUCHERS
+# ==========================================
+
+class PatientDeposit(AuditMixin, Base):
+    """Tracks upfront IPD/OPD advance deposits collected before invoice finalization."""
+    __tablename__ = "patient_deposits"
+    __table_args__ = (
+        CheckConstraint("amount_paise > 0", name="ck_deposit_amount_pos"),
+        CheckConstraint("remaining_balance_paise >= 0", name="ck_deposit_balance_non_neg"),
+        CheckConstraint("remaining_balance_paise <= amount_paise", name="ck_deposit_balance_le_amount"),
+        Index("ix_patient_deposits_patient_id", "patient_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
+    encounter_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patient_encounters.id"), nullable=True)
+
+    deposit_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    remaining_balance_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    payment_method: Mapped[PaymentMethodEnum] = mapped_column(nullable=False)
+    transaction_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    status: Mapped[DepositStatusEnum] = mapped_column(default=DepositStatusEnum.ACTIVE, nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    patient: Mapped["Patient"] = relationship()
+    encounter: Mapped[Optional["PatientEncounter"]] = relationship()
+
+
+class RefundVoucher(AuditMixin, Base):
+    """Immutable financial audit voucher for excess deposit refunds or billing credit notes."""
+    __tablename__ = "refund_vouchers"
+    __table_args__ = (
+        CheckConstraint("refund_amount_paise > 0", name="ck_refund_amount_pos"),
+        Index("ix_refund_vouchers_patient_id", "patient_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    voucher_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
+    deposit_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patient_deposits.id"), nullable=True)
+    invoice_id: Mapped[Optional[int]] = mapped_column(ForeignKey("invoices.id"), nullable=True)
+
+    refund_amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    refund_method: Mapped[PaymentMethodEnum] = mapped_column(nullable=False)
+    transaction_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    reason: Mapped[str] = mapped_column(String(255), nullable=False)
+    approved_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    patient: Mapped["Patient"] = relationship()
+    deposit: Mapped[Optional["PatientDeposit"]] = relationship()
+    invoice: Mapped[Optional["Invoice"]] = relationship()
+    approved_by: Mapped["User"] = relationship(foreign_keys=[approved_by_id])
+
+# ==========================================
 # PHASE 10: CLINICAL EMR (VITALS, SOAP NOTES & ICD-10 DIAGNOSES)
 # ==========================================
 
@@ -923,3 +1255,311 @@ class ReportTemplate(AuditMixin, Base):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_system_template: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+# ==========================================
+# PHASE 11: INPATIENT NURSING eMAR, FLUID I/O & ER TRIAGE / MLC
+# ==========================================
+
+class MedicationAdministrationLog(AuditMixin, Base):
+    """Bedside nursing eMAR log recording individual doses administered, held, or refused."""
+    __tablename__ = "medication_administration_logs"
+    __table_args__ = (
+        Index("ix_emar_encounter_id", "encounter_id"),
+        Index("ix_emar_rx_item_id", "prescription_item_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id", ondelete="CASCADE"), nullable=False)
+    prescription_item_id: Mapped[int] = mapped_column(ForeignKey("prescription_items.id", ondelete="CASCADE"), nullable=False)
+    administered_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    scheduled_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    administered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    status: Mapped[eMARStatusEnum] = mapped_column(nullable=False)
+    dose_given: Mapped[str] = mapped_column(String(100), nullable=False)  # e.g., "500mg IV" or "1 Tablet"
+    notes: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    encounter: Mapped["PatientEncounter"] = relationship()
+    prescription_item: Mapped["PrescriptionItem"] = relationship()
+    administered_by: Mapped["User"] = relationship(foreign_keys=[administered_by_id])
+
+
+class FluidBalanceLog(AuditMixin, Base):
+    """Tracks inpatient fluid intake (IV, Oral, Blood) and output (Urine, Drain, Emesis) in mL."""
+    __tablename__ = "fluid_balance_logs"
+    __table_args__ = (
+        CheckConstraint("volume_ml > 0", name="ck_fluid_volume_pos"),
+        Index("ix_fluid_logs_encounter_id", "encounter_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id", ondelete="CASCADE"), nullable=False)
+    recorded_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    direction: Mapped[FluidDirectionEnum] = mapped_column(nullable=False)
+    fluid_type: Mapped[str] = mapped_column(String(100), nullable=False)  # e.g., "Normal Saline 0.9%", "Urine (Foley)"
+    volume_ml: Mapped[int] = mapped_column(Integer, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    encounter: Mapped["PatientEncounter"] = relationship()
+    recorded_by: Mapped["User"] = relationship(foreign_keys=[recorded_by_id])
+
+
+class ERTriageAssessment(AuditMixin, Base):
+    """5-Level emergency acuity triage assessment recorded upon ER arrival."""
+    __tablename__ = "er_triage_assessments"
+    __table_args__ = (
+        CheckConstraint("gcs_score IS NULL OR (gcs_score >= 3 AND gcs_score <= 15)", name="ck_triage_gcs_range"),
+        CheckConstraint("pain_scale IS NULL OR (pain_scale >= 0 AND pain_scale <= 10)", name="ck_triage_pain_range"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    encounter_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_encounters.id", ondelete="CASCADE"), unique=True, nullable=False, index=True
+    )
+    triaged_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    acuity_level: Mapped[TriageAcuityEnum] = mapped_column(nullable=False)
+    chief_complaint: Mapped[str] = mapped_column(String(255), nullable=False)
+    gcs_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # Glasgow Coma Scale (3-15)
+    pain_scale: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 0-10
+    airway_status: Mapped[Optional[str]] = mapped_column(String(50), default="CLEAR")
+    breathing_status: Mapped[Optional[str]] = mapped_column(String(50), default="NORMAL")
+    circulation_status: Mapped[Optional[str]] = mapped_column(String(50), default="STABLE")
+    is_mlc_suspected: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    triage_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    encounter: Mapped["PatientEncounter"] = relationship()
+    triaged_by: Mapped["User"] = relationship(foreign_keys=[triaged_by_id])
+
+
+class MedicoLegalCase(AuditMixin, Base):
+    """Official Medico-Legal Case (MLC) register for police intimation and forensic chain-of-custody."""
+    __tablename__ = "medico_legal_cases"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    mlc_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    encounter_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_encounters.id", ondelete="RESTRICT"), unique=True, nullable=False, index=True
+    )
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False, index=True)
+    registered_by_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    cause_of_injury: Mapped[MLCCauseEnum] = mapped_column(nullable=False)
+    alleged_history: Mapped[str] = mapped_column(Text, nullable=False)
+    identification_marks: Mapped[str] = mapped_column(String(255), nullable=False)
+    brought_by_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    brought_by_relation: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    brought_by_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
+    police_station_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    police_constable_buckle_no: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    police_intimated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    fir_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    encounter: Mapped["PatientEncounter"] = relationship()
+    patient: Mapped["Patient"] = relationship()
+    registered_by_doctor: Mapped["User"] = relationship(foreign_keys=[registered_by_doctor_id])
+
+# ==========================================
+# PHASE 12: OPERATION THEATRE (OT), SURGICAL SAFETY & IMPLANT BILLING
+# ==========================================
+
+class OperationTheatre(AuditMixin, Base):
+    """Master catalog of physical Operation Theatres (OT rooms) and their hourly facility rates."""
+    __tablename__ = "operation_theatres"
+    __table_args__ = (
+        CheckConstraint("hourly_rate_paise >= 0", name="ck_ot_hourly_rate_non_neg"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    theatre_type: Mapped[OTTheatreTypeEnum] = mapped_column(nullable=False)
+    floor_id: Mapped[Optional[int]] = mapped_column(ForeignKey("floors.id"), nullable=True)
+    hourly_rate_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class SurgicalSchedule(AuditMixin, Base):
+    """Schedules a surgical case in an OperationTheatre with lead surgeon, anesthetist, and procedure link."""
+    __tablename__ = "surgical_schedules"
+    __table_args__ = (
+        Index("ix_surgery_theatre_time", "theatre_id", "scheduled_start_time"),
+        Index("ix_surgery_encounter_id", "encounter_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    case_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id"), nullable=False)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
+    theatre_id: Mapped[int] = mapped_column(ForeignKey("operation_theatres.id"), nullable=False)
+    procedure_service_id: Mapped[int] = mapped_column(ForeignKey("service_catalog.id"), nullable=False)
+
+    lead_surgeon_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    anesthetist_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+    scheduled_start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    scheduled_end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    actual_start_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    actual_end_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    status: Mapped[SurgeryStatusEnum] = mapped_column(default=SurgeryStatusEnum.SCHEDULED, nullable=False)
+    pre_op_diagnosis_notes: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    encounter: Mapped["PatientEncounter"] = relationship()
+    patient: Mapped["Patient"] = relationship()
+    theatre: Mapped["OperationTheatre"] = relationship()
+    procedure_service: Mapped["ServiceCatalog"] = relationship()
+    lead_surgeon: Mapped["User"] = relationship(foreign_keys=[lead_surgeon_id])
+    anesthetist: Mapped[Optional["User"]] = relationship(foreign_keys=[anesthetist_id])
+    safety_checklist: Mapped[Optional["WHOSurgicalSafetyChecklist"]] = relationship(
+        back_populates="surgery", uselist=False, cascade="all, delete-orphan"
+    )
+    operative_record: Mapped[Optional["OperativeAnesthesiaRecord"]] = relationship(
+        back_populates="surgery", uselist=False, cascade="all, delete-orphan"
+    )
+    implants: Mapped[List["SurgicalImplantLog"]] = relationship(
+        back_populates="surgery", cascade="all, delete-orphan"
+    )
+
+
+class WHOSurgicalSafetyChecklist(AuditMixin, Base):
+    """WHO 3-Phase Surgical Safety Checklist (Sign-In, Time-Out, Sign-Out) required for OT transitions."""
+    __tablename__ = "who_surgical_safety_checklists"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    surgery_id: Mapped[int] = mapped_column(
+        ForeignKey("surgical_schedules.id", ondelete="CASCADE"), unique=True, nullable=False, index=True
+    )
+    verified_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    # Phase 1 & 2: Sign-In & Time-Out (Mandatory before IN_PROGRESS incision)
+    patient_identity_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    site_marked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    consent_signed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    pulse_oximeter_functioning: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allergy_checked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    antibiotic_prophylaxis_given: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Phase 3: Sign-Out (Mandatory before COMPLETED closure)
+    sponge_instrument_count_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    specimen_labeled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    surgery: Mapped["SurgicalSchedule"] = relationship(back_populates="safety_checklist")
+    verified_by: Mapped["User"] = relationship(foreign_keys=[verified_by_id])
+
+
+class OperativeAnesthesiaRecord(AuditMixin, Base):
+    """Intra-operative anesthesia & surgical findings record with ASA grading and blood loss tracking."""
+    __tablename__ = "operative_anesthesia_records"
+    __table_args__ = (
+        CheckConstraint("asa_physical_status >= 1 AND asa_physical_status <= 6", name="ck_asa_grade_range"),
+        CheckConstraint("estimated_blood_loss_ml >= 0", name="ck_blood_loss_non_neg"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    surgery_id: Mapped[int] = mapped_column(
+        ForeignKey("surgical_schedules.id", ondelete="CASCADE"), unique=True, nullable=False, index=True
+    )
+    anesthesia_type: Mapped[AnesthesiaTypeEnum] = mapped_column(nullable=False)
+    asa_physical_status: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # ASA Grade I to VI
+    anesthesia_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    operative_findings: Mapped[str] = mapped_column(Text, nullable=False)
+    post_op_instructions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    estimated_blood_loss_ml: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    surgery: Mapped["SurgicalSchedule"] = relationship(back_populates="operative_record")
+
+
+class SurgicalImplantLog(AuditMixin, Base):
+    """Tracks prosthetics, stents, and implants used during surgery with serial/lot traceability and auto-billing."""
+    __tablename__ = "surgical_implant_logs"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_implant_qty_pos"),
+        CheckConstraint("unit_price_paise >= 0", name="ck_implant_price_non_neg"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    surgery_id: Mapped[int] = mapped_column(
+        ForeignKey("surgical_schedules.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    implant_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    manufacturer: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    serial_or_batch_number: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    unit_price_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    surgery: Mapped["SurgicalSchedule"] = relationship(back_populates="implants")
+
+# ==========================================
+# PHASE 13: BLOOD BANK TRANSFUSION SAFETY & RADIOLOGY PACS/DICOM
+# ==========================================
+
+class BloodBagInventory(AuditMixin, Base):
+    """Tracks physical blood component bags in the hospital blood bank."""
+    __tablename__ = "blood_bag_inventory"
+    __table_args__ = (
+        CheckConstraint("volume_ml > 0", name="ck_blood_bag_vol_pos"),
+        CheckConstraint("processing_fee_paise >= 0", name="ck_blood_bag_fee_non_neg"),
+        Index("ix_blood_bags_group_status", "blood_group", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    bag_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    component_type: Mapped[BloodComponentTypeEnum] = mapped_column(nullable=False)
+    blood_group: Mapped[BloodGroupEnum] = mapped_column(nullable=False)
+    volume_ml: Mapped[int] = mapped_column(Integer, nullable=False)
+    collection_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expiry_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    processing_fee_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status: Mapped[BloodBagStatusEnum] = mapped_column(default=BloodBagStatusEnum.AVAILABLE, nullable=False)
+
+
+class BloodCrossMatchOrder(AuditMixin, Base):
+    """Links an active PatientEncounter to a compatible BloodBagInventory unit with transfusion & reaction logs."""
+    __tablename__ = "blood_cross_match_orders"
+    __table_args__ = (
+        Index("ix_cross_match_encounter_id", "encounter_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id"), nullable=False)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
+    blood_bag_id: Mapped[int] = mapped_column(ForeignKey("blood_bag_inventory.id"), nullable=False)
+    ordered_by_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    cross_matched_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    issued_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    issued_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+    reaction_type: Mapped[TransfusionReactionTypeEnum] = mapped_column(
+        default=TransfusionReactionTypeEnum.NONE, nullable=False
+    )
+    reaction_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    encounter: Mapped["PatientEncounter"] = relationship()
+    patient: Mapped["Patient"] = relationship()
+    blood_bag: Mapped["BloodBagInventory"] = relationship()
+    ordered_by_doctor: Mapped["User"] = relationship(foreign_keys=[ordered_by_doctor_id])
+    cross_matched_by: Mapped["User"] = relationship(foreign_keys=[cross_matched_by_id])
+    issued_by: Mapped[Optional["User"]] = relationship(foreign_keys=[issued_by_id])
+
+
+class RadiologyStudyMetadata(AuditMixin, Base):
+    """Stores PACS DICOM Study UID, modality, radiation dose, and viewer URL for RADIOLOGY diagnostic tasks."""
+    __tablename__ = "radiology_study_metadata"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    diagnostic_task_id: Mapped[int] = mapped_column(
+        ForeignKey("diagnostic_tasks.id", ondelete="CASCADE"), unique=True, nullable=False, index=True
+    )
+    study_instance_uid: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    accession_number: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    modality: Mapped[DicomModalityEnum] = mapped_column(nullable=False)
+    pacs_viewer_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    radiation_dose_mgy: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    radiologist_impression: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    diagnostic_task: Mapped["DiagnosticTask"] = relationship()

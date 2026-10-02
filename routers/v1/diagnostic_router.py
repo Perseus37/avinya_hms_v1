@@ -33,6 +33,10 @@ from schemas.v1.schemas import (
     TaskResultEntry,
 )
 from services.explosion_engine import explode_clinical_orders
+from services.auto_billing import (
+    auto_bill_diagnostic_order,
+    reverse_cancelled_diagnostic_order_billing,
+)   
 
 router = APIRouter(prefix="/api/diagnostics", tags=["Diagnostic Services & LIS"])
 
@@ -302,6 +306,7 @@ def place_diagnostic_order(
             )
 
     db.add_all(tasks)
+    auto_bill_diagnostic_order(db, order, payload.ordered_service_ids)
     db.commit()
     db.refresh(order)
     return order
@@ -382,9 +387,9 @@ def cancel_diagnostic_order(
         if task.status in [TaskStatusEnum.PENDING, TaskStatusEnum.SAMPLE_COLLECTED, TaskStatusEnum.IN_PROGRESS]:
             task.status = TaskStatusEnum.CANCELLED
 
+    reverse_cancelled_diagnostic_order_billing(db, order)
     db.commit()
     return {"status": "success", "message": f"Order {order_id} and associated pending tasks cancelled."}
-
 
 @router.get("/orders/{order_id}/tasks", response_model=PaginatedResponse[DiagnosticTaskResponse])
 def list_order_tasks(
