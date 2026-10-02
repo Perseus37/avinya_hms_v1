@@ -47,7 +47,8 @@ def test_02_block_vitals_and_notes_on_closed_encounter(client, multi_tenant_env,
     from models import EncounterStatusEnum, PatientEncounter
 
     _, enc = _create_active_opd_encounter(client, doctor_headers)
-
+    client.delete(f"/v1/api/adt/encounters/{enc['id']}", headers=doctor_headers)
+    
     # Mark the encounter as DISCHARGED
     DefaultSession = sessionmaker(bind=multi_tenant_env["tenant_engines"]["hms_default"])
     with DefaultSession() as db:
