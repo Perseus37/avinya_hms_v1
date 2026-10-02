@@ -44,9 +44,16 @@ def restore_encrypted_backup(
             "--clean",
             "--if-exists",
             "--no-owner",
+            "--no-acl",
             str(temp_dump),
         ]
-        subprocess.run(cmd, env=env, check=True)
+        res = subprocess.run(cmd, env=env, capture_output=True, text=True)
+        if res.returncode != 0:
+            stderr_text = res.stderr or ""
+            if "FATAL:" in stderr_text:
+                raise RuntimeError(f"pg_restore failed with fatal error:\n{stderr_text}")
+            logger.warning("pg_restore completed with non-fatal warnings:\n%s", stderr_text.strip())
+
         logger.info("Successfully restored encrypted backup into database '%s'.", target_db_name)
 
         if promote_to_cloud:

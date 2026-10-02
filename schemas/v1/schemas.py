@@ -29,6 +29,7 @@ from models import (
     TaskStatusEnum,
     UserStatusEnum,
     WardTypeEnum,
+    DiagnosisTypeEnum,
 )
 
 T = TypeVar("T")
@@ -902,3 +903,87 @@ class PrescriptionDispenseRequest(BaseModel):
 
 
 DispenseRequest = PrescriptionDispenseRequest
+
+# =====================================================================
+# PHASE 10: ENCOUNTER VITALS, SOAP CLINICAL NOTES & ICD-10 DIAGNOSES
+# =====================================================================
+
+class EncounterVitalCreate(BaseModel):
+    temperature_f: Optional[float] = Field(default=None, ge=85.0, le=115.0)
+    pulse_bpm: Optional[int] = Field(default=None, ge=20, le=300)
+    bp_systolic: Optional[int] = Field(default=None, ge=40, le=300)
+    bp_diastolic: Optional[int] = Field(default=None, ge=20, le=200)
+    respiratory_rate: Optional[int] = Field(default=None, ge=4, le=100)
+    spo2_percent: Optional[int] = Field(default=None, ge=30, le=100)
+    weight_kg: Optional[float] = Field(default=None, gt=0.0, le=500.0)
+    height_cm: Optional[float] = Field(default=None, gt=20.0, le=300.0)
+    notes: Optional[str] = Field(default=None, max_length=500)
+
+
+class EncounterVitalResponse(BaseModel):
+    id: int
+    encounter_id: int
+    temperature_f: Optional[float] = None
+    pulse_bpm: Optional[int] = None
+    bp_systolic: Optional[int] = None
+    bp_diastolic: Optional[int] = None
+    respiratory_rate: Optional[int] = None
+    spo2_percent: Optional[int] = None
+    weight_kg: Optional[float] = None
+    height_cm: Optional[float] = None
+    bmi: Optional[float] = None
+    notes: Optional[str] = None
+    created_by_id: Optional[int] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ClinicalNoteCreate(BaseModel):
+    subjective_notes: Optional[str] = None
+    objective_notes: Optional[str] = None
+    assessment_notes: Optional[str] = None
+    plan_notes: Optional[str] = None
+
+
+class ClinicalNoteUpdate(BaseModel):
+    subjective_notes: Optional[str] = None
+    objective_notes: Optional[str] = None
+    assessment_notes: Optional[str] = None
+    plan_notes: Optional[str] = None
+
+
+class ClinicalNoteResponse(BaseModel):
+    id: int
+    encounter_id: int
+    subjective_notes: Optional[str] = None
+    objective_notes: Optional[str] = None
+    assessment_notes: Optional[str] = None
+    plan_notes: Optional[str] = None
+    is_signed: bool
+    signed_at: Optional[datetime] = None
+    signed_by_id: Optional[int] = None
+    created_by_id: Optional[int] = None
+    updated_by_id: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EncounterDiagnosisCreate(BaseModel):
+    diagnosis_id: int
+    diagnosis_type: DiagnosisTypeEnum = DiagnosisTypeEnum.PRIMARY
+    clinical_remarks: Optional[str] = Field(default=None, max_length=500)
+
+
+class EncounterDiagnosisResponse(BaseModel):
+    id: int
+    encounter_id: int
+    diagnosis_id: int
+    diagnosis_type: DiagnosisTypeEnum
+    clinical_remarks: Optional[str] = None
+    created_by_id: Optional[int] = None
+    diagnosis: DiagnosisResponse
+
+    model_config = ConfigDict(from_attributes=True)

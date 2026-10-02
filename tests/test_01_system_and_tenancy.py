@@ -94,3 +94,22 @@ def test_09_pagination_boundary_validation(client, superuser_headers):
 
     res_bad_size = client.get("/v1/api/auth/users?page=1&page_size=500", headers=superuser_headers)
     assert res_bad_size.status_code == 400
+
+def test_10_rate_limiter_blocks_excessive_login_attempts(client):
+    """Scenario 10: Exceeding 10 login requests per minute from the same IP returns 429 Too Many Requests."""
+    for _ in range(10):
+        res = client.post(
+            "/v1/api/auth/login",
+            headers={"X-Hospital-Subdomain": "default"},
+            json={"email": "nonexistent@default.com", "password": " password123"},
+        )
+        assert res.status_code == 401
+
+    # 11th attempt within the 60s window is blocked by RateLimiter with 429
+    blocked_res = client.post(
+        "/v1/api/auth/login",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={"email": "nonexistent@default.com", "password": "password123"},
+    )
+    assert blocked_res.status_code == 429
+    assert "rate limit exceeded" in blocked_res.json()["message"].lower()

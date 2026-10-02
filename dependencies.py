@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from control_models import FederatedNode
-from database import TenantContext, get_control_db, get_db, resolve_tenant_context
+from database import TenantContext, get_control_db, get_db, resolve_tenant_context, get_redis
 from models import Permission, Role, User, UserStatusEnum
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/api/auth/login")
@@ -112,3 +112,44 @@ def get_federated_node(
     node.last_used_at = datetime.now(timezone.utc)
     control_db.commit()
     return node
+
+class RateLimiter:
+    """
+    Fail-open Redis fixed-window rate limiter.
+    Protects sensitive endpoints (login, federation discovery) without breaking
+    the application if Redis is temporarily unreachable.
+    """
+
+    def __init__(self, scope: str, max_requests: int, window_seconds: int = 60):
+        self.scope = scope
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+
+    def __call__(self, request: Request, redis_client=Depends(get_redis)) -> None:
+        if not redis_client:
+            return
+
+        client_ip = request.client.host if request.client else "unknown"
+        fed_prefix = request.headers.get("X-Federation-API-Key", "")[:14]
+        actor = fed_prefix if fed_prefix else client_ip
+        key = f"rl:{self.scope}:{actor}"
+
+        try:
+            current = redis_client.get(key)
+            if current is not None and int(current) >= self.max_requests:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=f"Rate limit exceeded ({self.max_requests} requests per {self.window_seconds}s). Please retry shortly.",
+                )
+            if hasattr(redis_client, "incr"):
+                count = redis_client.incr(key)
+                if count == 1 and hasattr(redis_client, "expire"):
+                    redis_client.expire(key, self.window_seconds)
+            else:
+                new_val = int(current or 0) + 1
+                redis_client.set(key, str(new_val), ex=self.window_seconds)
+        except HTTPException:
+            raise
+        except Exception:
+            # Fail-open if Redis connection drops
+            return

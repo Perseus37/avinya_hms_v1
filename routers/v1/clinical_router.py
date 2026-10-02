@@ -1,33 +1,52 @@
+from datetime import datetime, timezone
+from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.orm import Session
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
+from sqlalchemy.orm import Session, joinedload
 
 from database import get_db, get_redis, resolve_tenant_context
 from dependencies import RequirePermission
 from models import (
     AllergyMaster,
     ChiefComplaintMaster,
+    ClinicalNote,
     ComorbidityMaster,
     DiagnosisMaster,
+    DiagnosisTypeEnum,
+    EncounterDiagnosis,
+    EncounterStatusEnum,
+    EncounterVital,
+    PatientEncounter,
     PhysicalExaminationMaster,
     User,
 )
+
 from schemas.v1.schemas import (
     AllergyCreate,
     AllergyResponse,
     AllergyUpdate,
-    CPOEAllergyCheckRequest,
     ChiefComplaintCreate,
     ChiefComplaintResponse,
     ChiefComplaintUpdate,
-    ComorbidityCreate,
+    CPOEAllergyCheckRequest,
     ComorbidityResponse,
+    ComorbidityCreate,
     ComorbidityUpdate,
-    DiagnosisCreate,
     DiagnosisResponse,
+    DiagnosisCreate,
     DiagnosisUpdate,
-    PhysicalExamCreate,
     PhysicalExamResponse,
+    PhysicalExamCreate,
     PhysicalExamUpdate,
+    EncounterVitalCreate,
+    EncounterVitalResponse,
+    ClinicalNoteCreate,
+    ClinicalNoteResponse,
+    ClinicalNoteUpdate,
+    EncounterDiagnosisCreate,
+    EncounterDiagnosisResponse,
 )
 from services.cpoe import check_allergy_hard_stop
 from services.taxonomy_cache import get_department_taxonomy, invalidate_department_taxonomy_cache
@@ -394,3 +413,225 @@ def run_cpoe_allergy_check(
 ):
     check_allergy_hard_stop(db, payload.patient_id, payload.allergen_keywords)
     return {"status": "SAFE", "message": "No severe/anaphylactic allergy conflicts detected."}
+
+
+def _get_active_encounter_or_raise(db: Session, encounter_id: int) -> PatientEncounter:
+    enc = db.get(PatientEncounter, encounter_id)
+    if not enc:
+        raise HTTPException(status_code=404, detail="Encounter not found.")
+    if enc.status != EncounterStatusEnum.ACTIVE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot record clinical chart entries on a {enc.status.value} encounter.",
+        )
+    return enc
+
+
+@router.post(
+    "/encounters/{encounter_id}/vitals",
+    response_model=EncounterVitalResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def record_encounter_vitals(
+    encounter_id: int,
+    payload: EncounterVitalCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("adt:write")),
+):
+    _get_active_encounter_or_raise(db, encounter_id)
+
+    calculated_bmi: Optional[float] = None
+    if payload.weight_kg and payload.height_cm:
+        height_m = payload.height_cm / 100.0
+        calculated_bmi = round(payload.weight_kg / (height_m * height_m), 2)
+
+    vital = EncounterVital(
+        encounter_id=encounter_id,
+        bmi=calculated_bmi,
+        created_by_id=current_user.id,
+        updated_by_id=current_user.id,
+        **payload.model_dump(),
+    )
+    db.add(vital)
+    db.commit()
+    db.refresh(vital)
+    return vital
+
+
+@router.get("/encounters/{encounter_id}/vitals", response_model=List[EncounterVitalResponse])
+def list_encounter_vitals(
+    encounter_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("adt:read")),
+):
+    if not db.get(PatientEncounter, encounter_id):
+        raise HTTPException(status_code=404, detail="Encounter not found.")
+    stmt = (
+        select(EncounterVital)
+        .where(EncounterVital.encounter_id == encounter_id)
+        .order_by(EncounterVital.id.asc())
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+@router.post(
+    "/encounters/{encounter_id}/notes",
+    response_model=ClinicalNoteResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_soap_clinical_note(
+    encounter_id: int,
+    payload: ClinicalNoteCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("opd:write")),
+):
+    _get_active_encounter_or_raise(db, encounter_id)
+    note = ClinicalNote(
+        encounter_id=encounter_id,
+        is_signed=False,
+        created_by_id=current_user.id,
+        updated_by_id=current_user.id,
+        **payload.model_dump(),
+    )
+    db.add(note)
+    db.commit()
+    db.refresh(note)
+    return note
+
+
+@router.get("/encounters/{encounter_id}/notes", response_model=List[ClinicalNoteResponse])
+def list_soap_clinical_notes(
+    encounter_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("adt:read")),
+):
+    if not db.get(PatientEncounter, encounter_id):
+        raise HTTPException(status_code=404, detail="Encounter not found.")
+    stmt = (
+        select(ClinicalNote)
+        .where(ClinicalNote.encounter_id == encounter_id)
+        .order_by(ClinicalNote.id.asc())
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+@router.put("/notes/{note_id}", response_model=ClinicalNoteResponse)
+def update_soap_clinical_note(
+    note_id: int,
+    payload: ClinicalNoteUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("opd:write")),
+):
+    note = db.get(ClinicalNote, note_id)
+    if not note:
+        raise HTTPException(status_code=404, detail="Clinical note not found.")
+    if note.is_signed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Medico-Legal Lock: Signed clinical notes are immutable and cannot be modified.",
+        )
+    _get_active_encounter_or_raise(db, note.encounter_id)
+
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(note, field, value)
+    note.updated_by_id = current_user.id
+
+    db.commit()
+    db.refresh(note)
+    return note
+
+
+@router.patch("/notes/{note_id}/sign", response_model=ClinicalNoteResponse)
+def sign_off_clinical_note(
+    note_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("opd:write")),
+):
+    note = db.get(ClinicalNote, note_id)
+    if not note:
+        raise HTTPException(status_code=404, detail="Clinical note not found.")
+    if note.is_signed:
+        raise HTTPException(status_code=409, detail="Clinical note is already signed.")
+
+    note.is_signed = True
+    note.signed_at = datetime.now(timezone.utc)
+    note.signed_by_id = current_user.id
+    note.updated_by_id = current_user.id
+    db.commit()
+    db.refresh(note)
+    return note
+
+
+@router.post(
+    "/encounters/{encounter_id}/diagnoses",
+    response_model=EncounterDiagnosisResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def attach_encounter_diagnosis(
+    encounter_id: int,
+    payload: EncounterDiagnosisCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("opd:write")),
+):
+    _get_active_encounter_or_raise(db, encounter_id)
+
+    diag_master = db.get(DiagnosisMaster, payload.diagnosis_id)
+    if not diag_master or not diag_master.is_active:
+        raise HTTPException(status_code=404, detail="Active ICD-10 diagnosis not found.")
+
+    if payload.diagnosis_type == DiagnosisTypeEnum.PRIMARY:
+        existing_primary = db.execute(
+            select(EncounterDiagnosis).where(
+                EncounterDiagnosis.encounter_id == encounter_id,
+                EncounterDiagnosis.diagnosis_type == DiagnosisTypeEnum.PRIMARY,
+            )
+        ).scalar_one_or_none()
+        if existing_primary:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Encounter already has a PRIMARY diagnosis. Use SECONDARY or PROVISIONAL.",
+            )
+
+    dup_diag = db.execute(
+        select(EncounterDiagnosis).where(
+            EncounterDiagnosis.encounter_id == encounter_id,
+            EncounterDiagnosis.diagnosis_id == payload.diagnosis_id,
+        )
+    ).scalar_one_or_none()
+    if dup_diag:
+        raise HTTPException(status_code=409, detail="This ICD-10 diagnosis is already attached to the encounter.")
+
+    enc_diag = EncounterDiagnosis(
+        encounter_id=encounter_id,
+        diagnosis_id=payload.diagnosis_id,
+        diagnosis_type=payload.diagnosis_type,
+        clinical_remarks=payload.clinical_remarks,
+        created_by_id=current_user.id,
+        updated_by_id=current_user.id,
+    )
+    db.add(enc_diag)
+    db.commit()
+
+    stmt = (
+        select(EncounterDiagnosis)
+        .options(joinedload(EncounterDiagnosis.diagnosis))
+        .where(EncounterDiagnosis.id == enc_diag.id)
+    )
+    return db.execute(stmt).scalar_one()
+
+
+@router.get("/encounters/{encounter_id}/diagnoses", response_model=List[EncounterDiagnosisResponse])
+def list_encounter_diagnoses(
+    encounter_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("adt:read")),
+):
+    if not db.get(PatientEncounter, encounter_id):
+        raise HTTPException(status_code=404, detail="Encounter not found.")
+    stmt = (
+        select(EncounterDiagnosis)
+        .options(joinedload(EncounterDiagnosis.diagnosis))
+        .where(EncounterDiagnosis.encounter_id == encounter_id)
+        .order_by(EncounterDiagnosis.id.asc())
+    )
+    return list(db.execute(stmt).scalars().all())

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from control_models import FederatedNode, GlobalPatientPointer, TenantRegistry
 from database import get_control_db, get_db, resolve_tenant_context, tenant_engine_pool
-from dependencies import RequirePermission, get_federated_node, validate_pagination
+from dependencies import RateLimiter, RequirePermission, get_federated_node, validate_pagination
 from models import (
     AllergyMaster,
     AllergySeverityEnum,
@@ -210,6 +210,7 @@ def discover_and_aggregate_patient_across_branches(
     purpose: str = Query(default="CONTINUITY_OF_CARE", min_length=3, max_length=255),
     calling_node: FederatedNode = Depends(get_federated_node),
     control_db: Session = Depends(get_control_db),
+    _: None = Depends(RateLimiter(scope="fed_discover", max_requests=60, window_seconds=60)),
 ):
     """
     SOLVES HOSPITAL A -> B -> C ROUTING:

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from database import get_db, resolve_tenant_context
-from dependencies import RequirePermission, get_current_user, validate_pagination
+from dependencies import RateLimiter, RequirePermission, get_current_user, validate_pagination
 from models import Department, DoctorProfile, Permission, Role, User, UserRole, UserStatusEnum
 from schemas.v1.schemas import (
     DepartmentCreate,
@@ -50,7 +50,7 @@ class CustomPermissionCreate(BaseModel):
 # Authentication and session domain
 # -----------------------------------------------------------------------------
 @router.post("/login", response_model=TokenResponse)
-def login(payload: UserLogin, request: Request, db: Session = Depends(get_db)):
+def login(payload: UserLogin, request: Request, db: Session = Depends(get_db), _: None = Depends(RateLimiter(scope="auth_login", max_requests=10, window_seconds=60)),):
     """Authenticates a user against the active hospital database and signs a tenant-isolated JWT."""
     tenant = resolve_tenant_context(request)
     user = db.query(User).filter(User.email == payload.email).first()

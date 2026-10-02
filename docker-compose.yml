@@ -84,6 +84,18 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+        
+  backup-sidecar:
+    image: avinya-hms-api:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["sh", "-c", "while true; do python backup_service.py; sleep 21600; done"]
+    volumes:
+      - hms_backups:/app/backups
+    depends_on:
+      db:
+        condition: service_healthy
 
   onboarding-portal:
     image: avinya-hms-api:latest

@@ -12,6 +12,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -152,6 +153,10 @@ class EncounterStatusEnum(str, PyEnum):
     DISCHARGED = "DISCHARGED"
     CANCELLED = "CANCELLED"
 
+class DiagnosisTypeEnum(str, PyEnum):
+    PRIMARY = "PRIMARY"
+    SECONDARY = "SECONDARY"
+    PROVISIONAL = "PROVISIONAL"
 
 class AdmissionTypeEnum(str, PyEnum):
     ROUTINE = "ROUTINE"
@@ -809,3 +814,71 @@ class PrescriptionItem(AuditMixin, Base):
 
     prescription: Mapped[Prescription] = relationship(back_populates="items")
     medication: Mapped[MedicationMaster] = relationship()
+
+# ==========================================
+# PHASE 10: CLINICAL EMR (VITALS, SOAP NOTES & ICD-10 DIAGNOSES)
+# ==========================================
+
+class EncounterVital(AuditMixin, Base):
+    """Time-series nursing and clinical vitals recorded during an active PatientEncounter."""
+    __tablename__ = "encounter_vitals"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    encounter_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_encounters.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    temperature_f: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pulse_bpm: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    bp_systolic: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    bp_diastolic: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    respiratory_rate: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    spo2_percent: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    weight_kg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    height_cm: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bmi: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    encounter: Mapped["PatientEncounter"] = relationship()
+
+
+class ClinicalNote(AuditMixin, Base):
+    """Structured SOAP clinical consultation note with medico-legal sign-off lock."""
+    __tablename__ = "clinical_notes"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    encounter_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_encounters.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    subjective_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    objective_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    assessment_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    plan_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    is_signed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    signed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    signed_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+    encounter: Mapped["PatientEncounter"] = relationship()
+    signed_by: Mapped[Optional["User"]] = relationship(foreign_keys=[signed_by_id])
+
+
+class EncounterDiagnosis(AuditMixin, Base):
+    """Links an active PatientEncounter to ICD-10 DiagnosisMaster entries."""
+    __tablename__ = "encounter_diagnoses"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    encounter_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_encounters.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    diagnosis_id: Mapped[int] = mapped_column(
+        ForeignKey("diagnoses_master.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    diagnosis_type: Mapped[DiagnosisTypeEnum] = mapped_column(
+        default=DiagnosisTypeEnum.PRIMARY, nullable=False
+    )
+    clinical_remarks: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    encounter: Mapped["PatientEncounter"] = relationship()
+    diagnosis: Mapped["DiagnosisMaster"] = relationship()
