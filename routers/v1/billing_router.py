@@ -31,7 +31,6 @@ router = APIRouter(prefix="/api/billing", tags=["Enterprise Billing & Ledger"])
 
 
 def _generate_doc_number(prefix: str) -> str:
-    """M5 FIX: Date-prefixed 48-bit identifier to prevent birthday-bound collisions."""
     date_prefix = datetime.now(timezone.utc).strftime("%Y%m%d")
     return f"{prefix}-{date_prefix}-{uuid.uuid4().hex[:12].upper()}"
 
@@ -43,9 +42,8 @@ def _generate_doc_number(prefix: str) -> str:
 def create_invoice(
     payload: InvoiceCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("process_billing")),
+    _: User = Depends(RequirePermission("billing:write")),
 ):
-    """M8 FIX: Validates that the patient exists and that any linked encounter belongs to that patient."""
     patient = db.get(Patient, payload.patient_id)
     if not patient or not patient.is_active:
         raise HTTPException(status_code=404, detail="Active patient not found.")
@@ -62,6 +60,7 @@ def create_invoice(
         status=InvoiceStatusEnum.DRAFT,
         total_amount_paise=0,
         amount_paid_paise=0,
+        notes=payload.notes,
     )
     db.add(invoice)
     db.commit()
@@ -76,7 +75,7 @@ def list_invoices(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("process_billing")),
+    _: User = Depends(RequirePermission("billing:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     query = db.query(Invoice).options(joinedload(Invoice.line_items), joinedload(Invoice.payments))
@@ -95,7 +94,7 @@ def list_invoices(
 def get_invoice(
     invoice_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("process_billing")),
+    _: User = Depends(RequirePermission("billing:read")),
 ):
     invoice = (
         db.query(Invoice)
@@ -113,9 +112,8 @@ def add_line_item(
     invoice_id: int,
     payload: InvoiceLineItemCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("process_billing")),
+    _: User = Depends(RequirePermission("billing:write")),
 ):
-    """C1 & C7 FIX: Row-locks the invoice and enforces authoritative pricing from ServiceCatalog."""
     if payload.quantity <= 0:
         raise HTTPException(status_code=400, detail="Line item quantity must be strictly positive.")
     if payload.service_id is None:
@@ -154,9 +152,8 @@ def remove_line_item(
     invoice_id: int,
     item_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("process_billing")),
+    _: User = Depends(RequirePermission("billing:reverse")),
 ):
-    """C7 FIX: Locks invoice and blocks deletion of dispensed pharmacy charges."""
     stmt = select(Invoice).where(Invoice.id == invoice_id).with_for_update()
     invoice = db.execute(stmt).scalar_one_or_none()
     if not invoice:
@@ -172,7 +169,6 @@ def remove_line_item(
     if not item:
         raise HTTPException(status_code=404, detail="Line item not found on this invoice.")
 
-    # C7 FIX: Prevent erasing pharmacy charges for stock already dispensed to the patient
     if item.service_id is None and item.description.startswith("PHARMACY:"):
         raise HTTPException(
             status_code=403,
@@ -189,11 +185,15 @@ def remove_line_item(
 def finalize_invoice(
     invoice_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("process_billing")),
+    _: User = Depends(RequirePermission("billing:write")),
 ):
-    """M8 FIX: Locks invoice and blocks finalizing empty/zero-value invoices."""
-    stmt = select(Invoice).options(joinedload(Invoice.line_items)).where(Invoice.id == invoice_id).with_for_update()
-    invoice = db.execute(stmt).scalar_one_or_none()
+    stmt = (
+        select(Invoice)
+        .options(joinedload(Invoice.line_items))
+        .where(Invoice.id == invoice_id)
+        .with_for_update()
+    )
+    invoice = db.execute(stmt).unique().scalar_one_or_none()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found.")
     if invoice.status != InvoiceStatusEnum.DRAFT:
@@ -201,7 +201,7 @@ def finalize_invoice(
     if not invoice.line_items or invoice.total_amount_paise <= 0:
         raise HTTPException(status_code=400, detail="Cannot finalize an invoice with zero line items or zero total.")
 
-    invoice.status = InvoiceStatusEnum.FINALIZED
+    invoice.status = InvoiceStatusEnum.UNPAID
     db.commit()
     db.refresh(invoice)
     return invoice
@@ -211,7 +211,7 @@ def finalize_invoice(
 def void_invoice(
     invoice_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("process_billing")),
+    _: User = Depends(RequirePermission("billing:reverse")),
 ):
     stmt = select(Invoice).where(Invoice.id == invoice_id).with_for_update()
     invoice = db.execute(stmt).scalar_one_or_none()
@@ -237,9 +237,8 @@ def record_payment(
     payload: PaymentReceiptCreate,
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("process_billing")),
+    _: User = Depends(RequirePermission("billing:write")),
 ):
-    """C1 & C7 FIX: Locks invoice, enforces idempotency against double-clicks, and blocks overpayment."""
     if payload.amount_paid_paise <= 0:
         raise HTTPException(status_code=400, detail="Payment amount must be strictly positive.")
 
@@ -293,7 +292,7 @@ def record_payment(
 def list_invoice_payments(
     invoice_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("process_billing")),
+    _: User = Depends(RequirePermission("billing:read")),
 ):
     return (
         db.query(PaymentReceipt)
@@ -308,9 +307,8 @@ def reverse_payment(
     invoice_id: int,
     receipt_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("process_billing")),
+    _: User = Depends(RequirePermission("billing:reverse")),
 ):
-    """C7 FIX: Locks invoice and accurately recalculates status across PAID, PARTIAL, and FINALIZED."""
     stmt = select(Invoice).where(Invoice.id == invoice_id).with_for_update()
     invoice = db.execute(stmt).scalar_one_or_none()
     if not invoice:
@@ -326,7 +324,7 @@ def reverse_payment(
 
     invoice.amount_paid_paise = max(0, invoice.amount_paid_paise - receipt.amount_paid_paise)
     if invoice.amount_paid_paise == 0:
-        invoice.status = InvoiceStatusEnum.FINALIZED
+        invoice.status = InvoiceStatusEnum.UNPAID
     elif invoice.amount_paid_paise < invoice.total_amount_paise:
         invoice.status = InvoiceStatusEnum.PARTIAL
     else:

@@ -1,30 +1,38 @@
-"""Pydantic schemas for the Avinya HMS API.
+"""Pydantic schemas for the Avinya HMS API."""
 
-Schemas are grouped by the same business domains used in the routes so request
-and response payloads stay easy to follow and maintain.
-"""
-from pydantic import BaseModel, EmailStr, ConfigDict,Field
 from datetime import datetime
-from typing import Optional, Generic, TypeVar, List
+from typing import Generic, List, Optional, TypeVar
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
 from models import (
-    GenderEnum,
-    UserStatusEnum,
-    WardTypeEnum,
-    RoomTypeEnum,
-    BedTypeEnum,
-    BedStatusEnum,
+    AdmissionTypeEnum,
     AllergyCategoryEnum,
     AllergySeverityEnum,
+    AppointmentStatusEnum,
+    BedStatusEnum,
+    BedTypeEnum,
+    BloodGroupEnum,
     BodySystemEnum,
+    DischargeDispositionEnum,
+    EncounterStatusEnum,
+    EncounterTypeEnum,
+    GenderEnum,
+    InvoiceStatusEnum,
+    MedicationFormEnum,
+    OrderStatusEnum,
+    PaymentMethodEnum,
+    PrescriptionStatusEnum,
+    RoomTypeEnum,
+    ServiceTypeEnum,
+    SeverityEnum,
     ShiftTypeEnum,
-    ServiceTypeEnum, 
-    OrderStatusEnum, 
-    TaskStatusEnum
+    TaskStatusEnum,
+    UserStatusEnum,
+    WardTypeEnum,
 )
-# -----------------------------------------------------------------------------
-# Shared generic schemas
-# -----------------------------------------------------------------------------
+
 T = TypeVar("T")
+
 
 class PaginatedResponse(BaseModel, Generic[T]):
     success: bool = True
@@ -33,12 +41,13 @@ class PaginatedResponse(BaseModel, Generic[T]):
     page_size: int
     items: List[T]
 
+
 # -----------------------------------------------------------------------------
 # Inter-Branch / Multi-Tenant Federation Schemas
 # -----------------------------------------------------------------------------
 class FederatedClientCreate(BaseModel):
-    branch_code: str = Field(min_length=2, max_length=50, description="Unique branch or tenant code, e.g., AVINYA-BLR-01")
-    name: str = Field(min_length=3, max_length=150, description="Display name of the branch or partner hospital")
+    branch_code: str = Field(min_length=2, max_length=50)
+    name: str = Field(min_length=3, max_length=150)
 
 
 class FederatedClientCreatedResponse(BaseModel):
@@ -46,7 +55,7 @@ class FederatedClientCreatedResponse(BaseModel):
     branch_code: str
     name: str
     api_key_prefix: str
-    raw_api_key: str = Field(description="Store securely. This raw key is shown only once.")
+    raw_api_key: str
     is_active: bool
 
 
@@ -74,12 +83,13 @@ class FederatedPatientSummaryResponse(BaseModel):
     date_of_birth: datetime
     gender: GenderEnum
     blood_group: Optional[BloodGroupEnum] = None
-    phone_number: str
+    phone_number: Optional[str] = None
     email: Optional[EmailStr] = None
     address: Optional[str] = None
     emergency_contact_name: Optional[str] = None
     emergency_contact_phone: Optional[str] = None
     active_allergies: list[FederatedAllergySummary] = []
+
 
 # -----------------------------------------------------------------------------
 # Authentication and IAM schemas
@@ -105,6 +115,20 @@ class RoleResponse(BaseModel):
     id: int
     code: str
     name: str
+    description: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RoleUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class PermissionResponse(BaseModel):
+    id: int
+    code: str
+    description: Optional[str]
+    module: str
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -117,7 +141,8 @@ class DoctorProfileCreate(BaseModel):
     medical_registration_number: str
     registration_valid_till: datetime
     consultation_fee_paise: int
-    consultation_duration_minutes: int = 15  # Default fallback
+    consultation_duration_minutes: int = 15
+
 
 class UserCreate(BaseModel):
     login_id: str
@@ -128,6 +153,12 @@ class UserCreate(BaseModel):
     gender: GenderEnum = GenderEnum.OTHER
     role_ids: List[int]
     doctor_profile: Optional[DoctorProfileCreate] = None
+
+
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    gender: Optional[GenderEnum] = None
 
 
 class UserMeResponse(BaseModel):
@@ -154,6 +185,14 @@ class FloorUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+class FloorResponse(BaseModel):
+    id: int
+    floor_number: int
+    name: str
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
 class WardCreate(BaseModel):
     floor_id: int
     department_id: int
@@ -166,6 +205,14 @@ class WardUpdate(BaseModel):
     name: Optional[str] = None
     ward_type: Optional[WardTypeEnum] = None
     is_active: Optional[bool] = None
+
+
+class WardResponse(BaseModel):
+    id: int
+    code: str
+    name: str
+    ward_type: WardTypeEnum
+    model_config = ConfigDict(from_attributes=True)
 
 
 class BedSchema(BaseModel):
@@ -191,43 +238,6 @@ class WardMapResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class WardResponse(BaseModel):
-    id: int
-    code: str
-    name: str
-    ward_type: WardTypeEnum
-    model_config = ConfigDict(from_attributes=True)
-
-
-class FloorResponse(BaseModel):
-    id: int
-    floor_number: int
-    name: str
-    is_active: bool
-    model_config = ConfigDict(from_attributes=True)
-
-class RoomResponse(BaseModel):
-    id: int
-    ward_id: int
-    room_number: str
-    room_type: RoomTypeEnum
-    bed_capacity: int
-    is_active: bool
-    model_config = ConfigDict(from_attributes=True)
-
-class ShiftAssignmentResponse(BaseModel):
-    id: int
-    ward_id: int
-    nurse_user_id: int
-    shift_type: ShiftTypeEnum
-    shift_date: datetime
-    handoff_notes: Optional[str] = None
-    handed_off_at: Optional[datetime] = None
-    model_config = ConfigDict(from_attributes=True)
-
-class ShiftHandoffRequest(BaseModel):
-    handoff_notes: str = Field(min_length=1, description="Clinical handoff summary notes")
-
 class RoomCreate(BaseModel):
     ward_id: int
     room_number: str
@@ -240,6 +250,16 @@ class RoomUpdate(BaseModel):
     room_type: Optional[RoomTypeEnum] = None
     bed_capacity: Optional[int] = None
     is_active: Optional[bool] = None
+
+
+class RoomResponse(BaseModel):
+    id: int
+    ward_id: int
+    room_number: str
+    room_type: RoomTypeEnum
+    bed_capacity: int
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
 
 
 class BedCreate(BaseModel):
@@ -261,20 +281,49 @@ class ShiftAssignmentCreate(BaseModel):
     handoff_notes: Optional[str] = None
 
 
+class ShiftAssignmentResponse(BaseModel):
+    id: int
+    ward_id: int
+    nurse_user_id: int
+    shift_type: ShiftTypeEnum
+    shift_date: datetime
+    handoff_notes: Optional[str] = None
+    handed_off_at: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ShiftHandoffRequest(BaseModel):
+    handoff_notes: str = Field(min_length=1, description="Clinical handoff summary notes")
+
+
 # -----------------------------------------------------------------------------
 # Patient and clinical schemas
 # -----------------------------------------------------------------------------
 class PatientCreate(BaseModel):
-    mrn: str
+    mrn: Optional[str] = None
     full_name: str
     date_of_birth: datetime
     gender: GenderEnum
+    phone_number: Optional[str] = "0000000000"
+    abha_number: Optional[str] = None
+    email: Optional[EmailStr] = None
+    blood_group: Optional[BloodGroupEnum] = None
+    address: Optional[str] = None
+    emergency_contact_name: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
 
 
 class PatientUpdate(BaseModel):
     full_name: Optional[str] = None
     date_of_birth: Optional[datetime] = None
     gender: Optional[GenderEnum] = None
+    phone_number: Optional[str] = None
+    abha_number: Optional[str] = None
+    email: Optional[EmailStr] = None
+    blood_group: Optional[BloodGroupEnum] = None
+    address: Optional[str] = None
+    emergency_contact_name: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
     is_active: Optional[bool] = None
 
 
@@ -284,28 +333,72 @@ class PatientResponse(BaseModel):
     full_name: str
     date_of_birth: datetime
     gender: GenderEnum
+    phone_number: Optional[str] = None
+    abha_number: Optional[str] = None
+    email: Optional[str] = None
+    blood_group: Optional[BloodGroupEnum] = None
+    address: Optional[str] = None
+    emergency_contact_name: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
     is_active: bool
     model_config = ConfigDict(from_attributes=True)
 
 
 class PatientAllergyCreate(BaseModel):
-    patient_id: int
+    patient_id: Optional[int] = None
     allergy_id: int
     severity: AllergySeverityEnum
+    reaction: Optional[str] = None
     reaction_description: Optional[str] = None
 
 
-class AllergyMasterCreate(BaseModel):
+class AllergyCreate(BaseModel):
+    department_id: int
+    code: str
+    name: str
+    category: AllergyCategoryEnum = AllergyCategoryEnum.DRUG
+    default_severity: AllergySeverityEnum = AllergySeverityEnum.MODERATE
+
+
+AllergyMasterCreate = AllergyCreate
+
+
+class AllergyUpdate(BaseModel):
+    department_id: Optional[int] = None
+    code: Optional[str] = None
+    name: Optional[str] = None
+    category: Optional[AllergyCategoryEnum] = None
+    default_severity: Optional[AllergySeverityEnum] = None
+    is_active: Optional[bool] = None
+
+
+class AllergyResponse(BaseModel):
+    id: int
     department_id: int
     code: str
     name: str
     category: AllergyCategoryEnum
     default_severity: AllergySeverityEnum
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
 
 
-class AllergyCheckRequest(BaseModel):
+class PatientAllergyResponse(BaseModel):
+    id: int
+    allergy_id: int
+    severity: AllergySeverityEnum
+    reaction_description: Optional[str] = None
+    is_active: bool
+    allergy: AllergyResponse
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CPOEAllergyCheckRequest(BaseModel):
     patient_id: int
     allergen_keywords: List[str]
+
+
+AllergyCheckRequest = CPOEAllergyCheckRequest
 
 
 class TaxonomyResponse(BaseModel):
@@ -318,11 +411,45 @@ class ChiefComplaintCreate(BaseModel):
     name: str
 
 
+class ChiefComplaintUpdate(BaseModel):
+    department_id: Optional[int] = None
+    code: Optional[str] = None
+    name: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class ChiefComplaintResponse(BaseModel):
+    id: int
+    department_id: int
+    code: str
+    name: str
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ComorbidityCreate(BaseModel):
     department_id: int
     code: str
     name: str
     icd10_code: Optional[str] = None
+
+
+class ComorbidityUpdate(BaseModel):
+    department_id: Optional[int] = None
+    code: Optional[str] = None
+    name: Optional[str] = None
+    icd10_code: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class ComorbidityResponse(BaseModel):
+    id: int
+    department_id: int
+    code: str
+    name: str
+    icd10_code: Optional[str] = None
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DiagnosisCreate(BaseModel):
@@ -334,17 +461,62 @@ class DiagnosisCreate(BaseModel):
     parent_diagnosis_id: Optional[int] = None
 
 
+class DiagnosisUpdate(BaseModel):
+    department_id: Optional[int] = None
+    icd10_code: Optional[str] = None
+    short_description: Optional[str] = None
+    full_description: Optional[str] = None
+    is_billable: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+class DiagnosisResponse(BaseModel):
+    id: int
+    department_id: int
+    icd10_code: str
+    short_description: str
+    full_description: str
+    is_billable: bool
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
 class PhysicalExamCreate(BaseModel):
     department_id: int
     body_system: BodySystemEnum
     code: str
     name: str
 
+
+class PhysicalExamUpdate(BaseModel):
+    department_id: Optional[int] = None
+    body_system: Optional[BodySystemEnum] = None
+    code: Optional[str] = None
+    name: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class PhysicalExamResponse(BaseModel):
+    id: int
+    department_id: int
+    body_system: BodySystemEnum
+    code: str
+    name: str
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
 # --- PHASE 4: CATALOG & MDM SCHEMAS ---
 class ServiceCategoryCreate(BaseModel):
     department_id: int
     code: str
     name: str
+
+
+class ServiceCategoryUpdate(BaseModel):
+    name: Optional[str] = None
+    is_active: Optional[bool] = None
+
 
 class ServiceCategoryResponse(BaseModel):
     id: int
@@ -353,6 +525,7 @@ class ServiceCategoryResponse(BaseModel):
     name: str
     is_active: bool
     model_config = ConfigDict(from_attributes=True)
+
 
 class ServiceCatalogCreate(BaseModel):
     category_id: int
@@ -364,6 +537,13 @@ class ServiceCatalogCreate(BaseModel):
     cpt_code: Optional[str] = None
     is_order_set: bool = False
 
+
+class ServiceCatalogUpdate(BaseModel):
+    name: Optional[str] = None
+    base_price_paise: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
 class ServiceCatalogResponse(BaseModel):
     id: int
     category_id: int
@@ -374,20 +554,13 @@ class ServiceCatalogResponse(BaseModel):
     is_order_set: bool
     is_active: bool
     model_config = ConfigDict(from_attributes=True)
-    
-class ServiceCategoryUpdate(BaseModel):
-    name: Optional[str] = None
-    is_active: Optional[bool] = None
 
-class ServiceCatalogUpdate(BaseModel):
-    name: Optional[str] = None
-    base_price_paise: Optional[int] = None
-    is_active: Optional[bool] = None
 
 class ServiceBundleMappingCreate(BaseModel):
     parent_service_id: int
     child_service_id: int
     quantity: int = 1
+
 
 class ServiceBundleMappingResponse(BaseModel):
     parent_service_id: int
@@ -396,15 +569,13 @@ class ServiceBundleMappingResponse(BaseModel):
     child_service: ServiceCatalogResponse
     model_config = ConfigDict(from_attributes=True)
 
+
 # --- PHASE 4: DIAGNOSTIC CPOE SCHEMAS ---
 class DiagnosticOrderCreate(BaseModel):
     patient_id: int
     clinical_notes: Optional[str] = None
-    ordered_service_ids: List[int] 
-    """
-    The engine will resolve this list: if an ID is an 'order_set', 
-    it will explode it into child IDs. If it is a direct test, it creates a task.
-    """
+    ordered_service_ids: List[int]
+
 
 class DiagnosticTaskResponse(BaseModel):
     id: int
@@ -413,6 +584,7 @@ class DiagnosticTaskResponse(BaseModel):
     status: TaskStatusEnum
     result_value: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
+
 
 class DiagnosticOrderResponse(BaseModel):
     id: int
@@ -423,14 +595,17 @@ class DiagnosticOrderResponse(BaseModel):
     tasks: List[DiagnosticTaskResponse]
     model_config = ConfigDict(from_attributes=True)
 
+
 class DiagnosticOrderUpdate(BaseModel):
     clinical_notes: Optional[str] = None
     status: Optional[OrderStatusEnum] = None
+
 
 class TaskResultEntry(BaseModel):
     result_value: str
     result_notes: Optional[str] = None
     status: TaskStatusEnum = TaskStatusEnum.RESULT_ENTERED
+
 
 # --- DEPARTMENT SCHEMAS ---
 class DepartmentCreate(BaseModel):
@@ -438,56 +613,30 @@ class DepartmentCreate(BaseModel):
     name: str
     ndhm_speciality_code: Optional[str] = None
 
+
 class DepartmentUpdate(BaseModel):
     name: Optional[str] = None
     ndhm_speciality_code: Optional[str] = None
     is_active: Optional[bool] = None
 
+
 class DepartmentResponse(BaseModel):
     id: int
     code: str
     name: str
-    ndhm_speciality_code: Optional[str]
+    ndhm_speciality_code: Optional[str] = None
     is_active: bool
     model_config = ConfigDict(from_attributes=True)
 
-# --- ROLE & PERMISSION SCHEMAS ---
-class RoleUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-
-class PermissionResponse(BaseModel):
-    id: int
-    code: str
-    description: Optional[str]
-    module: str
-    model_config = ConfigDict(from_attributes=True)
-
-# --- USER SCHEMAS ---
-class UserUpdate(BaseModel):
-    full_name: Optional[str] = None
-    phone_number: Optional[str] = None
-    gender: Optional[GenderEnum] = None
-
-class PatientAllergyResponse(BaseModel):
-    id: int
-    allergy_id: int
-    severity: AllergySeverityEnum
-    reaction_description: Optional[str]
-    is_active: bool
-    allergy: AllergyMasterCreate # Nests the master data details
-    model_config = ConfigDict(from_attributes=True)
-
-from models import EncounterTypeEnum, EncounterStatusEnum, AdmissionTypeEnum, DischargeDispositionEnum
 
 # --- PHASE 5: ENCOUNTER & ADT SCHEMAS ---
-
 class PatientEncounterCreate(BaseModel):
     patient_id: int
     encounter_type: EncounterTypeEnum
     primary_doctor_id: int
     department_id: int
     chief_complaint_notes: Optional[str] = None
+
 
 class PatientEncounterResponse(BaseModel):
     id: int
@@ -500,11 +649,13 @@ class PatientEncounterResponse(BaseModel):
     department_id: int
     model_config = ConfigDict(from_attributes=True)
 
+
 class InpatientAdmissionCreate(BaseModel):
     encounter_id: int
     admission_type: AdmissionTypeEnum
     admitting_doctor_id: int
     assigned_bed_id: int
+
 
 class InpatientAdmissionResponse(BaseModel):
     id: int
@@ -516,10 +667,12 @@ class InpatientAdmissionResponse(BaseModel):
     discharge_disposition: Optional[DischargeDispositionEnum] = None
     model_config = ConfigDict(from_attributes=True)
 
+
 class BedTransferRequest(BaseModel):
     admission_id: int
     new_bed_id: int
     transfer_reason: str
+
 
 class BedTransferResponse(BaseModel):
     id: int
@@ -530,20 +683,22 @@ class BedTransferResponse(BaseModel):
     transfer_reason: Optional[str]
     model_config = ConfigDict(from_attributes=True)
 
+
 class ClinicalDischargeRequest(BaseModel):
     discharge_disposition: DischargeDispositionEnum
     discharge_summary: str
+
 
 class PatientEncounterUpdate(BaseModel):
     primary_doctor_id: Optional[int] = None
     department_id: Optional[int] = None
     chief_complaint_notes: Optional[str] = None
 
+
 class InpatientAdmissionUpdate(BaseModel):
     admission_type: Optional[AdmissionTypeEnum] = None
     admitting_doctor_id: Optional[int] = None
 
-from models import InvoiceStatusEnum, PaymentMethodEnum
 
 # --- PHASE 6: BILLING SCHEMAS ---
 class InvoiceCreate(BaseModel):
@@ -551,19 +706,23 @@ class InvoiceCreate(BaseModel):
     encounter_id: Optional[int] = None
     notes: Optional[str] = None
 
+
 class InvoiceLineItemCreate(BaseModel):
     service_id: Optional[int] = None
     description: str
     quantity: int = Field(gt=0, description="Quantity must be strictly positive")
     unit_price_paise: int = Field(ge=0, description="Price cannot be negative")
 
+
 class InvoiceUpdate(BaseModel):
     notes: Optional[str] = None
+
 
 class PaymentReceiptCreate(BaseModel):
     amount_paid_paise: int = Field(gt=0, description="Payment must be strictly positive")
     payment_method: PaymentMethodEnum
     transaction_reference: Optional[str] = None
+
 
 class InvoiceLineItemResponse(BaseModel):
     id: int
@@ -574,6 +733,7 @@ class InvoiceLineItemResponse(BaseModel):
     total_price_paise: int
     model_config = ConfigDict(from_attributes=True)
 
+
 class PaymentReceiptResponse(BaseModel):
     id: int
     receipt_number: str
@@ -581,6 +741,7 @@ class PaymentReceiptResponse(BaseModel):
     payment_method: PaymentMethodEnum
     transaction_reference: Optional[str]
     model_config = ConfigDict(from_attributes=True)
+
 
 class InvoiceResponse(BaseModel):
     id: int
@@ -594,7 +755,6 @@ class InvoiceResponse(BaseModel):
     payments: List[PaymentReceiptResponse]
     model_config = ConfigDict(from_attributes=True)
 
-from models import AppointmentStatusEnum
 
 # --- PHASE 7: OPD SCHEMAS ---
 class AppointmentCreate(BaseModel):
@@ -604,13 +764,16 @@ class AppointmentCreate(BaseModel):
     appointment_time: datetime
     reason_for_visit: Optional[str] = None
 
+
 class AppointmentUpdate(BaseModel):
     appointment_time: Optional[datetime] = None
     reason_for_visit: Optional[str] = None
 
+
 class AppointmentStatusUpdate(BaseModel):
     status: AppointmentStatusEnum
-    encounter_id: Optional[int] = None # Attached when status moves to IN_CONSULTATION
+    encounter_id: Optional[int] = None
+
 
 class AppointmentResponse(BaseModel):
     id: int
@@ -623,7 +786,6 @@ class AppointmentResponse(BaseModel):
     encounter_id: Optional[int]
     model_config = ConfigDict(from_attributes=True)
 
-from models import MedicationFormEnum, PrescriptionStatusEnum
 
 # --- PHASE 8: PHARMACY SCHEMAS ---
 class MedicationMasterCreate(BaseModel):
@@ -633,31 +795,21 @@ class MedicationMasterCreate(BaseModel):
     form: MedicationFormEnum
     strength: str
 
+
+MedicationCreate = MedicationMasterCreate
+
+
 class MedicationMasterUpdate(BaseModel):
     brand_name: Optional[str] = None
     generic_name: Optional[str] = None
+    form: Optional[MedicationFormEnum] = None
+    dosage_form: Optional[MedicationFormEnum] = None
+    strength: Optional[str] = None
     is_active: Optional[bool] = None
 
-class InventoryBatchCreate(BaseModel):
-    medication_id: int
-    batch_number: str
-    expiry_date: datetime
-    stock_quantity: int
-    unit_price_paise: int
 
-class InventoryStockAdjustment(BaseModel):
-    # Can be negative for write-offs, but should not be zero
-    quantity_adjustment: int = Field(default=..., description="Must not be zero")
+MedicationUpdate = MedicationMasterUpdate
 
-class PrescriptionItemCreate(BaseModel):
-    medication_id: int
-    dosage_instruction: str
-    requested_quantity: int
-
-class PrescriptionCreate(BaseModel):
-    encounter_id: int
-    clinical_notes: Optional[str] = None
-    items: List[PrescriptionItemCreate]
 
 class MedicationMasterResponse(BaseModel):
     id: int
@@ -669,6 +821,24 @@ class MedicationMasterResponse(BaseModel):
     is_active: bool
     model_config = ConfigDict(from_attributes=True)
 
+
+MedicationResponse = MedicationMasterResponse
+
+
+class InventoryBatchCreate(BaseModel):
+    medication_id: int
+    batch_number: str
+    expiry_date: datetime
+    stock_quantity: int
+    unit_price_paise: int
+
+
+class InventoryBatchUpdate(BaseModel):
+    batch_number: Optional[str] = None
+    expiry_date: Optional[datetime] = None
+    unit_price_paise: Optional[int] = None
+
+
 class InventoryBatchResponse(BaseModel):
     id: int
     medication_id: int
@@ -679,6 +849,28 @@ class InventoryBatchResponse(BaseModel):
     medication: MedicationMasterResponse
     model_config = ConfigDict(from_attributes=True)
 
+
+class InventoryStockAdjustment(BaseModel):
+    quantity_adjustment: int = Field(default=..., description="Must not be zero")
+
+
+class PrescriptionItemCreate(BaseModel):
+    medication_id: int
+    dosage_instruction: str
+    requested_quantity: int
+
+
+class PrescriptionCreate(BaseModel):
+    encounter_id: int
+    clinical_notes: Optional[str] = None
+    items: List[PrescriptionItemCreate]
+
+
+class PrescriptionUpdate(BaseModel):
+    clinical_notes: Optional[str] = None
+    status: Optional[PrescriptionStatusEnum] = None
+
+
 class PrescriptionItemResponse(BaseModel):
     id: int
     medication_id: int
@@ -687,6 +879,7 @@ class PrescriptionItemResponse(BaseModel):
     dispensed_quantity: int
     medication: MedicationMasterResponse
     model_config = ConfigDict(from_attributes=True)
+
 
 class PrescriptionResponse(BaseModel):
     id: int
@@ -697,15 +890,15 @@ class PrescriptionResponse(BaseModel):
     items: List[PrescriptionItemResponse]
     model_config = ConfigDict(from_attributes=True)
 
+
 class DispenseItem(BaseModel):
     prescription_item_id: int
     batch_id: int
     quantity_to_dispense: int = Field(gt=0, description="Cannot dispense negative or zero stock")
 
+
 class PrescriptionDispenseRequest(BaseModel):
     items: List[DispenseItem]
 
-class InventoryBatchUpdate(BaseModel):
-    batch_number: Optional[str] = None
-    expiry_date: Optional[datetime] = None
-    unit_price_paise: Optional[int] = None
+
+DispenseRequest = PrescriptionDispenseRequest

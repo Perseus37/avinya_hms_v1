@@ -16,7 +16,6 @@ from dependencies import RequirePermission, validate_pagination
 from models import Bed, BedStatusEnum, Department, Floor, NursingShiftAssignment, PhysicalRoom, User, Ward
 from schemas.v1.schemas import (
     BedCreate,
-    BedSchema,
     BedStatusUpdate,
     FloorCreate,
     FloorResponse,
@@ -37,17 +36,13 @@ from schemas.v1.schemas import (
 router = APIRouter(prefix="/api/ip", tags=["Ward & Asset Management"])
 
 
-# -----------------------------------------------------------------------------
-# Ward and facility master data domain
-# -----------------------------------------------------------------------------
 @router.get("/wards", response_model=PaginatedResponse[WardResponse])
 def list_wards(
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("view_ward_map")),
+    _: User = Depends(RequirePermission("wards:read")),
 ):
-    """Lists active hospital wards with pagination support."""
     page, page_size = validate_pagination(page, page_size)
     query = db.query(Ward).filter(Ward.is_active == True).order_by(Ward.id.asc())
     total = query.count()
@@ -59,9 +54,8 @@ def list_wards(
 def create_ward(
     payload: WardCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("wards:write")),
 ):
-    """M3 FIX: Creates a new hospital ward mapped to a floor and department."""
     floor = db.get(Floor, payload.floor_id)
     if not floor or not floor.is_active:
         raise HTTPException(status_code=404, detail="Active floor not found.")
@@ -86,9 +80,8 @@ def list_floors(
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("view_ward_map")),
+    _: User = Depends(RequirePermission("wards:read")),
 ):
-    """Lists active hospital floors with pagination support."""
     page, page_size = validate_pagination(page, page_size)
     query = db.query(Floor).filter(Floor.is_active == True).order_by(Floor.floor_number.asc())
     total = query.count()
@@ -102,9 +95,8 @@ def list_ward_rooms(
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("view_ward_map")),
+    _: User = Depends(RequirePermission("wards:read")),
 ):
-    """M3 FIX: Returns RoomResponse (including id) instead of RoomUpdate."""
     page, page_size = validate_pagination(page, page_size)
     query = (
         db.query(PhysicalRoom)
@@ -119,9 +111,8 @@ def list_ward_rooms(
 @router.get("/beds/map-view", response_model=list[WardMapResponse])
 def get_map_view(
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("view_ward_map")),
+    _: User = Depends(RequirePermission("wards:read")),
 ):
-    """H7 FIX: Filters out deactivated wards and orders deterministically."""
     stmt = (
         select(Ward)
         .where(Ward.is_active == True)
@@ -135,9 +126,8 @@ def get_map_view(
 def create_floor(
     payload: FloorCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("wards:write")),
 ):
-    """Create a hospital floor entry used to organize ward hierarchy."""
     existing = db.query(Floor).filter(Floor.floor_number == payload.floor_number).first()
     if existing:
         raise HTTPException(status_code=409, detail="Floor number already exists.")
@@ -151,9 +141,8 @@ def create_floor(
 def create_room(
     payload: RoomCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("wards:write")),
 ):
-    """Create a room within a ward and define its capacity and room specification."""
     ward = db.get(Ward, payload.ward_id)
     if not ward or not ward.is_active:
         raise HTTPException(status_code=404, detail="Active ward not found.")
@@ -174,9 +163,8 @@ def create_room(
 def create_bed(
     payload: BedCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("wards:write")),
 ):
-    """Create a new bed instance under a room with default availability state."""
     room = db.get(PhysicalRoom, payload.room_id)
     if not room or not room.is_active:
         raise HTTPException(status_code=404, detail="Active room not found.")
@@ -198,7 +186,7 @@ def update_ward(
     ward_id: int,
     payload: WardUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("wards:write")),
 ):
     ward = db.get(Ward, ward_id)
     if not ward:
@@ -218,7 +206,7 @@ def update_floor(
     floor_id: int,
     payload: FloorUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("wards:write")),
 ):
     floor = db.get(Floor, floor_id)
     if not floor:
@@ -236,7 +224,7 @@ def update_room(
     room_id: int,
     payload: RoomUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("wards:write")),
 ):
     room = db.get(PhysicalRoom, room_id)
     if not room:
@@ -257,7 +245,7 @@ def update_room(
 def deactivate_floor(
     floor_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("wards:delete")),
 ):
     floor = db.get(Floor, floor_id)
     if not floor:
@@ -271,7 +259,7 @@ def deactivate_floor(
 def deactivate_ward(
     ward_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("wards:delete")),
 ):
     ward = db.get(Ward, ward_id)
     if not ward:
@@ -285,7 +273,7 @@ def deactivate_ward(
 def deactivate_room(
     room_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("wards:delete")),
 ):
     room = db.get(PhysicalRoom, room_id)
     if not room:
@@ -299,9 +287,8 @@ def deactivate_room(
 def remove_bed(
     bed_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("wards:delete")),
 ):
-    """H7 FIX: Prevents moving an actively occupied bed to maintenance."""
     bed = db.get(Bed, bed_id)
     if not bed:
         raise HTTPException(status_code=404, detail="Bed not found")
@@ -315,24 +302,19 @@ def remove_bed(
     return {"status": "success", "message": f"Bed ID {bed_id} moved to maintenance."}
 
 
-# -----------------------------------------------------------------------------
-# Bed and shift operations domain
-# -----------------------------------------------------------------------------
 @router.patch("/beds/{bed_id}/status")
 def update_bed_status(
     bed_id: int,
     payload: BedStatusUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("wards:write")),
 ):
-    """H7 FIX: Protects occupied beds from manual status overrides and catches only DB lock errors."""
     try:
         stmt = select(Bed).where(Bed.id == bed_id).with_for_update(nowait=True)
         bed = db.execute(stmt).scalar_one_or_none()
         if not bed:
             raise HTTPException(status_code=404, detail="Bed identifier not found")
 
-        # H7 FIX: Occupancy must be driven strictly through ADT admit/transfer/discharge
         if bed.status == BedStatusEnum.OCCUPIED or bed.current_admission_id is not None:
             raise HTTPException(
                 status_code=409,
@@ -361,9 +343,8 @@ def get_ward_shifts(
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("view_ward_map")),
+    _: User = Depends(RequirePermission("wards:read")),
 ):
-    """M3 FIX: Returns ShiftAssignmentResponse with ID and handoff timestamps."""
     page, page_size = validate_pagination(page, page_size)
     query = (
         db.query(NursingShiftAssignment)
@@ -379,9 +360,8 @@ def get_ward_shifts(
 def assign_nursing_shift(
     payload: ShiftAssignmentCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("wards:write")),
 ):
-    """Assign a nurse to a unit shift and initialize a handoff audit trail."""
     ward = db.get(Ward, payload.ward_id)
     if not ward or not ward.is_active:
         raise HTTPException(status_code=404, detail="Active ward not found.")
@@ -404,9 +384,8 @@ def complete_shift_handoff(
     shift_id: int,
     payload: ShiftHandoffRequest,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders") or RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("wards:write")),
 ):
-    """M6 FIX: Accepts clinical handoff notes in the request body instead of URL query parameters."""
     shift = db.get(NursingShiftAssignment, shift_id)
     if not shift:
         raise HTTPException(status_code=404, detail="Nursing shift assignment not found.")

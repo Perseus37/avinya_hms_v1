@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from database import get_db
-from dependencies import RequirePermission, validate_pagination
+from dependencies import RequirePermission, user_has_permission, validate_pagination
 from models import (
     DiagnosticOrder,
     DiagnosticTask,
@@ -44,7 +44,7 @@ router = APIRouter(prefix="/api/diagnostics", tags=["Diagnostic Services & LIS"]
 def create_service_category(
     payload: ServiceCategoryCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("mdm:write")),
 ):
     existing = db.query(ServiceCategory).filter(ServiceCategory.code == payload.code).first()
     if existing:
@@ -61,7 +61,7 @@ def list_service_categories(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders") or RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("diagnostics:read", "mdm:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     query = db.query(ServiceCategory).filter(ServiceCategory.is_active == True).order_by(ServiceCategory.id.asc())
@@ -74,7 +74,7 @@ def list_service_categories(
 def get_service_category(
     category_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders") or RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("diagnostics:read", "mdm:read")),
 ):
     category = db.get(ServiceCategory, category_id)
     if not category or not category.is_active:
@@ -87,7 +87,7 @@ def update_service_category(
     category_id: int,
     payload: ServiceCategoryUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("mdm:write")),
 ):
     category = db.get(ServiceCategory, category_id)
     if not category:
@@ -105,7 +105,7 @@ def update_service_category(
 def deactivate_service_category(
     category_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("mdm:delete")),
 ):
     category = db.get(ServiceCategory, category_id)
     if not category:
@@ -119,7 +119,7 @@ def deactivate_service_category(
 def create_service_catalog_item(
     payload: ServiceCatalogCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("mdm:write")),
 ):
     existing = db.query(ServiceCatalog).filter(ServiceCatalog.code == payload.code).first()
     if existing:
@@ -136,7 +136,7 @@ def list_service_catalog(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders") or RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("diagnostics:read", "mdm:read", "billing:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     query = db.query(ServiceCatalog).filter(ServiceCatalog.is_active == True).order_by(ServiceCatalog.id.asc())
@@ -149,7 +149,7 @@ def list_service_catalog(
 def get_service_catalog_item(
     item_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders") or RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("diagnostics:read", "mdm:read", "billing:read")),
 ):
     item = db.get(ServiceCatalog, item_id)
     if not item or not item.is_active:
@@ -162,7 +162,7 @@ def update_service_catalog_item(
     item_id: int,
     payload: ServiceCatalogUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("mdm:write")),
 ):
     item = db.get(ServiceCatalog, item_id)
     if not item:
@@ -182,7 +182,7 @@ def update_service_catalog_item(
 def deactivate_service_catalog_item(
     item_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("mdm:delete")),
 ):
     item = db.get(ServiceCatalog, item_id)
     if not item:
@@ -196,9 +196,8 @@ def deactivate_service_catalog_item(
 def map_bundle_child(
     payload: ServiceBundleMappingCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("mdm:write")),
 ):
-    """H4 FIX: Validates self-references, child existence, and duplicate mappings at write time."""
     if payload.parent_service_id == payload.child_service_id:
         raise HTTPException(status_code=400, detail="A bundle cannot reference itself as a child service.")
     if payload.quantity < 1:
@@ -233,9 +232,8 @@ def map_bundle_child(
 def get_bundle_mappings(
     parent_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders") or RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("diagnostics:read", "mdm:read")),
 ):
-    """H3 FIX: Eager-loads child_service so ServiceBundleMappingResponse serializes cleanly."""
     parent = db.get(ServiceCatalog, parent_id)
     if not parent or not parent.is_order_set:
         raise HTTPException(status_code=404, detail="Parent package not found or is not an order set.")
@@ -253,7 +251,7 @@ def remove_bundle_mapping(
     parent_id: int,
     child_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("mdm:delete")),
 ):
     stmt = select(ServiceBundleMapping).where(
         ServiceBundleMapping.parent_service_id == parent_id,
@@ -275,9 +273,8 @@ def remove_bundle_mapping(
 def place_diagnostic_order(
     payload: DiagnosticOrderCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(RequirePermission("write_cpoe_orders")),
+    current_user: User = Depends(RequirePermission("diagnostics:write")),
 ):
-    """Places a clinical order and executes the Order Explosion Engine to generate department tasks."""
     patient = db.get(Patient, payload.patient_id)
     if not patient or not patient.is_active:
         raise HTTPException(status_code=404, detail="Active patient not found.")
@@ -316,7 +313,7 @@ def list_diagnostic_orders(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders")),
+    _: User = Depends(RequirePermission("diagnostics:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     query = db.query(DiagnosticOrder).options(joinedload(DiagnosticOrder.tasks))
@@ -333,7 +330,7 @@ def list_diagnostic_orders(
 def get_diagnostic_order(
     order_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders")),
+    _: User = Depends(RequirePermission("diagnostics:read")),
 ):
     order = (
         db.query(DiagnosticOrder)
@@ -351,7 +348,7 @@ def update_diagnostic_order(
     order_id: int,
     payload: DiagnosticOrderUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders")),
+    _: User = Depends(RequirePermission("diagnostics:write")),
 ):
     order = db.get(DiagnosticOrder, order_id)
     if not order:
@@ -372,7 +369,7 @@ def update_diagnostic_order(
 def cancel_diagnostic_order(
     order_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders")),
+    _: User = Depends(RequirePermission("diagnostics:verify", "diagnostics:write")),
 ):
     order = db.query(DiagnosticOrder).options(joinedload(DiagnosticOrder.tasks)).filter(DiagnosticOrder.id == order_id).first()
     if not order:
@@ -395,7 +392,7 @@ def list_order_tasks(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders")),
+    _: User = Depends(RequirePermission("diagnostics:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     query = db.query(DiagnosticTask).filter(DiagnosticTask.order_id == order_id).order_by(DiagnosticTask.id.asc())
@@ -409,7 +406,7 @@ def get_department_task_queue(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders")),
+    _: User = Depends(RequirePermission("diagnostics:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     query = (
@@ -427,9 +424,9 @@ def submit_task_result(
     task_id: int,
     payload: TaskResultEntry,
     db: Session = Depends(get_db),
-    current_user: User = Depends(RequirePermission("write_cpoe_orders")),
+    current_user: User = Depends(RequirePermission("diagnostics:write", "diagnostics:verify")),
 ):
-    """H8 FIX: Enforces task lifecycle, checks parent order status, and prevents self-verification."""
+    """H8 FIX: Enforces task lifecycle, checks action-specific permission, and prevents self-verification."""
     task = (
         db.query(DiagnosticTask)
         .options(joinedload(DiagnosticTask.order).joinedload(DiagnosticOrder.tasks))
@@ -438,10 +435,8 @@ def submit_task_result(
     )
     if not task:
         raise HTTPException(status_code=404, detail="Task not found.")
-
     if not task.order or task.order.status == OrderStatusEnum.CANCELLED:
         raise HTTPException(status_code=400, detail="Cannot submit results for a cancelled order.")
-
     if task.status in [TaskStatusEnum.VERIFIED, TaskStatusEnum.CANCELLED]:
         raise HTTPException(
             status_code=409,
@@ -461,13 +456,9 @@ def submit_task_result(
             detail=f"Invalid lifecycle transition from {task.status.value} to {payload.status.value}.",
         )
 
-    if payload.status == TaskStatusEnum.RESULT_ENTERED:
-        task.result_value = payload.result_value
-        task.result_notes = payload.result_notes
-        task.performed_by_id = current_user.id
-        task.status = TaskStatusEnum.RESULT_ENTERED
-
-    elif payload.status == TaskStatusEnum.VERIFIED:
+    if payload.status == TaskStatusEnum.VERIFIED:
+        if not user_has_permission(db, current_user, "diagnostics:verify"):
+            raise HTTPException(status_code=403, detail="Access denied: 'diagnostics:verify' permission required to verify results.")
         if task.performed_by_id is None:
             raise HTTPException(status_code=400, detail="Task must have entered results before verification.")
         if task.performed_by_id == current_user.id and not current_user.is_superuser:
@@ -478,9 +469,14 @@ def submit_task_result(
         task.verified_by_id = current_user.id
         task.status = TaskStatusEnum.VERIFIED
     else:
+        if not user_has_permission(db, current_user, "diagnostics:write"):
+            raise HTTPException(status_code=403, detail="Access denied: 'diagnostics:write' permission required to enter results.")
+        if payload.status == TaskStatusEnum.RESULT_ENTERED:
+            task.result_value = payload.result_value
+            task.result_notes = payload.result_notes
+            task.performed_by_id = current_user.id
         task.status = payload.status
 
-    # Automatically roll up status to the parent DiagnosticOrder
     all_tasks = task.order.tasks
     if all(t.status == TaskStatusEnum.VERIFIED for t in all_tasks):
         task.order.status = OrderStatusEnum.COMPLETED

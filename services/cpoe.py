@@ -1,14 +1,14 @@
 """Clinical safety checks for CPOE order validation.
 
-This module prevents unsafe medication or treatment ordering when the patient has
-an active allergy match in their recorded clinical history.
+This module prevents unsafe medication or treatment ordering when the patient
+has an active allergy match in their recorded clinical history.
 """
+
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from models import AllergyMaster, PatientAllergy, SeverityEnum
+from models import AllergyMaster, AllergySeverityEnum, PatientAllergy
 
-# Common beta-lactam / drug-class cross-reactivity groups for baseline clinical safety
 CROSS_REACTIVITY_GROUPS: list[set[str]] = [
     {"penicillin", "amoxicillin", "ampicillin", "piperacillin", "augmentin", "amoxil"},
     {"sulfa", "sulfonamide", "sulfamethoxazole", "trimethoprim-sulfamethoxazole", "bactrim", "septra"},
@@ -43,7 +43,7 @@ def check_allergy_hard_stop(session: Session, patient_id: int, allergen_keywords
         .where(
             PatientAllergy.patient_id == patient_id,
             PatientAllergy.is_active == True,
-            PatientAllergy.severity.in_([SeverityEnum.SEVERE, SeverityEnum.ANAPHYLACTIC]),
+            PatientAllergy.severity.in_([AllergySeverityEnum.SEVERE, AllergySeverityEnum.ANAPHYLACTIC]),
         )
     )
     charted_allergies = session.execute(stmt).all()
@@ -52,11 +52,12 @@ def check_allergy_hard_stop(session: Session, patient_id: int, allergen_keywords
         charted_name = allergy_master.name.strip().lower()
         for kw in expanded_keywords:
             if kw in charted_name or charted_name in kw:
+                reaction_text = patient_allergy.reaction_description or "Severe adverse reaction"
                 raise HTTPException(
                     status_code=409,
                     detail=(
                         f"CLINICAL HARD-STOP: Patient has an active {patient_allergy.severity.value} "
-                        f"allergy to '{allergy_master.name}' (Reaction: {patient_allergy.reaction}). "
+                        f"allergy to '{allergy_master.name}' (Reaction: {reaction_text}). "
                         f"Order blocked."
                     ),
                 )

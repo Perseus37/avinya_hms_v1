@@ -42,10 +42,14 @@ router = APIRouter(prefix="/api/pharmacy", tags=["Pharmacy & Inventory Managemen
 
 
 def _generate_invoice_number() -> str:
-    """M5 FIX: Uses a date prefix + 48 random bits to eliminate birthday-bound collisions."""
     date_prefix = datetime.now(timezone.utc).strftime("%Y%m%d")
     return f"INV-{date_prefix}-{uuid.uuid4().hex[:12].upper()}"
 
+def _ensure_utc(dt: datetime) -> datetime:
+    """Ensures a datetime is timezone-aware in UTC before comparison."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 # -----------------------------------------------------------------------------
 # Formulary & Inventory Stock Control
@@ -54,7 +58,7 @@ def _generate_invoice_number() -> str:
 def add_medication_to_formulary(
     payload: MedicationCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm") or RequirePermission("manage_pharmacy")),
+    _: User = Depends(RequirePermission("pharmacy:write", "mdm:write")),
 ):
     existing = db.query(MedicationMaster).filter(MedicationMaster.code == payload.code).first()
     if existing:
@@ -72,9 +76,8 @@ def list_medications(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders") or RequirePermission("manage_pharmacy") or RequirePermission("manage_clinical_mdm")),
+    _: User = Depends(RequirePermission("pharmacy:read", "mdm:read")),
 ):
-    """C5 & H14 FIX: Requires clinical/pharmacy permission and enforces pagination bounds."""
     page, page_size = validate_pagination(page, page_size)
     query = db.query(MedicationMaster).filter(MedicationMaster.is_active == True).order_by(MedicationMaster.id.asc())
     total = query.count()
@@ -87,7 +90,7 @@ def update_medication(
     med_id: int,
     payload: MedicationUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm") or RequirePermission("manage_pharmacy")),
+    _: User = Depends(RequirePermission("pharmacy:write", "mdm:write")),
 ):
     med = db.get(MedicationMaster, med_id)
     if not med:
@@ -97,8 +100,10 @@ def update_medication(
         med.generic_name = payload.generic_name
     if payload.brand_name is not None:
         med.brand_name = payload.brand_name
-    if payload.dosage_form is not None:
-        med.dosage_form = payload.dosage_form
+    if payload.form is not None:
+        med.form = payload.form
+    elif payload.dosage_form is not None:
+        med.form = payload.dosage_form
     if payload.strength is not None:
         med.strength = payload.strength
     if payload.is_active is not None:
@@ -113,7 +118,7 @@ def update_medication(
 def deactivate_medication(
     med_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_clinical_mdm") or RequirePermission("manage_pharmacy")),
+    _: User = Depends(RequirePermission("pharmacy:void", "mdm:delete")),
 ):
     med = db.get(MedicationMaster, med_id)
     if not med:
@@ -127,13 +132,13 @@ def deactivate_medication(
 def receive_inventory_batch(
     payload: InventoryBatchCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_pharmacy")),
+    _: User = Depends(RequirePermission("pharmacy:write")),
 ):
     if payload.stock_quantity <= 0:
         raise HTTPException(status_code=400, detail="Initial batch stock quantity must be greater than zero.")
     if payload.unit_price_paise < 0:
         raise HTTPException(status_code=400, detail="Unit price cannot be negative.")
-    if payload.expiry_date <= datetime.now(timezone.utc):
+    if _ensure_utc(payload.expiry_date) <= datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Cannot receive an already expired inventory batch.")
 
     med = db.get(MedicationMaster, payload.medication_id)
@@ -153,10 +158,10 @@ def list_inventory_batches(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_pharmacy")),
+    _: User = Depends(RequirePermission("pharmacy:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
-    query = db.query(InventoryBatch).filter(InventoryBatch.stock_quantity > 0)
+    query = db.query(InventoryBatch).options(joinedload(InventoryBatch.medication)).filter(InventoryBatch.stock_quantity > 0)
     if medication_id:
         query = query.filter(InventoryBatch.medication_id == medication_id)
 
@@ -171,9 +176,8 @@ def update_inventory_batch(
     batch_id: int,
     payload: InventoryBatchUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_pharmacy")),
+    _: User = Depends(RequirePermission("pharmacy:write")),
 ):
-    """H9 FIX: Prevents altering expiry_date or unit_price_paise once a batch is received."""
     batch = db.get(InventoryBatch, batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found.")
@@ -191,7 +195,7 @@ def adjust_inventory_stock(
     batch_id: int,
     payload: InventoryStockAdjustment,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_pharmacy")),
+    _: User = Depends(RequirePermission("pharmacy:write")),
 ):
     if payload.quantity_adjustment == 0:
         raise HTTPException(status_code=400, detail="Quantity adjustment cannot be zero.")
@@ -218,9 +222,8 @@ def adjust_inventory_stock(
 def void_inventory_batch(
     batch_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("manage_pharmacy")),
+    _: User = Depends(RequirePermission("pharmacy:void")),
 ):
-    """H9 FIX: Soft-zeros batch stock instead of hard-deleting historical lot records."""
     try:
         stmt = select(InventoryBatch).where(InventoryBatch.id == batch_id).with_for_update(nowait=True)
         batch = db.execute(stmt).scalar_one_or_none()
@@ -242,9 +245,8 @@ def void_inventory_batch(
 def write_prescription(
     payload: PrescriptionCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(RequirePermission("write_cpoe_orders")),
+    current_user: User = Depends(RequirePermission("pharmacy:write")),
 ):
-    """C4 & H9 FIX: Validates active encounter, active medications, positive quantities, and allergy hard-stop."""
     if not payload.items:
         raise HTTPException(status_code=400, detail="Prescription must contain at least one medication item.")
 
@@ -268,7 +270,6 @@ def write_prescription(
             raise HTTPException(status_code=400, detail=f"Medication '{med.brand_name}' is inactive and cannot be prescribed.")
         allergen_keywords.extend([med.brand_name, med.generic_name])
 
-    # C4 FIX: Enforce clinical allergy hard-stop on the server
     check_allergy_hard_stop(db, encounter.patient_id, allergen_keywords)
 
     prescription = Prescription(
@@ -302,10 +303,10 @@ def list_prescriptions(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders") or RequirePermission("manage_pharmacy")),
+    _: User = Depends(RequirePermission("pharmacy:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
-    query = db.query(Prescription).options(joinedload(Prescription.items))
+    query = db.query(Prescription).options(joinedload(Prescription.items).joinedload(PrescriptionItem.medication))
     if encounter_id:
         query = query.filter(Prescription.encounter_id == encounter_id)
     if status_filter:
@@ -321,12 +322,11 @@ def list_prescriptions(
 def get_prescription(
     prescription_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders") or RequirePermission("manage_pharmacy")),
+    _: User = Depends(RequirePermission("pharmacy:read")),
 ):
-    """C5 FIX: Requires clinical or pharmacy permission rather than open authentication."""
     rx = (
         db.query(Prescription)
-        .options(joinedload(Prescription.items))
+        .options(joinedload(Prescription.items).joinedload(PrescriptionItem.medication))
         .filter(Prescription.id == prescription_id)
         .first()
     )
@@ -340,7 +340,7 @@ def update_prescription(
     prescription_id: int,
     payload: PrescriptionUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders")),
+    _: User = Depends(RequirePermission("pharmacy:write")),
 ):
     rx = db.get(Prescription, prescription_id)
     if not rx:
@@ -362,7 +362,7 @@ def update_prescription(
 def cancel_prescription(
     prescription_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("write_cpoe_orders")),
+    _: User = Depends(RequirePermission("pharmacy:void")),
 ):
     rx = db.query(Prescription).options(joinedload(Prescription.items)).filter(Prescription.id == prescription_id).first()
     if not rx:
@@ -380,9 +380,8 @@ def dispense_medication(
     prescription_id: int,
     payload: DispenseRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(RequirePermission("manage_pharmacy")),
+    current_user: User = Depends(RequirePermission("pharmacy:write")),
 ):
-    """H9 & C7 FIX: Row-locks prescription items, inventory batches, and the target invoice."""
     if not payload.items:
         raise HTTPException(status_code=400, detail="Dispense request must include at least one item.")
 
@@ -397,7 +396,6 @@ def dispense_medication(
         if not prescription or prescription.status in [PrescriptionStatusEnum.DISPENSED, PrescriptionStatusEnum.CANCELLED]:
             raise HTTPException(status_code=400, detail="Prescription is invalid, cancelled, or already fully dispensed.")
 
-        # Lock existing DRAFT invoice or create one safely
         stmt_inv = (
             select(Invoice)
             .where(
@@ -426,7 +424,6 @@ def dispense_medication(
             if disp_item.quantity_to_dispense <= 0:
                 raise HTTPException(status_code=400, detail="Quantity to dispense must be strictly positive.")
 
-            # H9 FIX: Lock the PrescriptionItem row to prevent concurrent over-dispensing
             stmt_item = (
                 select(PrescriptionItem)
                 .where(
@@ -443,13 +440,12 @@ def dispense_medication(
             if disp_item.quantity_to_dispense > remaining_qty:
                 raise HTTPException(status_code=400, detail="Cannot dispense more than the remaining prescribed quantity.")
 
-            # Lock the InventoryBatch row
             stmt_batch = select(InventoryBatch).where(InventoryBatch.id == disp_item.batch_id).with_for_update(nowait=True)
             batch = db.execute(stmt_batch).scalar_one_or_none()
             if not batch or batch.medication_id != rx_item.medication_id:
                 raise HTTPException(status_code=400, detail="Invalid batch ID for the requested medication.")
 
-            if batch.expiry_date <= datetime.now(timezone.utc):
+            if _ensure_utc(batch.expiry_date) <= datetime.now(timezone.utc):
                 raise HTTPException(status_code=409, detail=f"Batch {batch.batch_number} is EXPIRED. Dispensing blocked.")
 
             if batch.stock_quantity < disp_item.quantity_to_dispense:
@@ -464,7 +460,7 @@ def dispense_medication(
             med = db.get(MedicationMaster, rx_item.medication_id)
             if med is None:
                 raise HTTPException(status_code=400, detail="Medication not found for the prescription item.")
-            
+
             line_item = InvoiceLineItem(
                 invoice_id=invoice.id,
                 service_id=None,

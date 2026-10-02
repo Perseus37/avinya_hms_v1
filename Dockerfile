@@ -11,12 +11,15 @@ RUN groupadd --system avinya && useradd --system --gid avinya --create-home avin
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --root-user-action=ignore -r requirements.txt
 
 COPY --chown=avinya:avinya . .
+
+RUN mkdir -p /app/backups /app/deployments && chown -R avinya:avinya /app
 
 USER avinya
 

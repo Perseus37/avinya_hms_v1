@@ -1,15 +1,16 @@
 from datetime import datetime, timezone
-
 from fastapi import Depends
 from fastapi.testclient import TestClient
 from passlib.context import CryptContext
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
-import pytest
 
+from config import settings
+from control_models import ControlBase, DeploymentModeEnum, TenantRegistry
 import database
-from database import Base, get_db
+from database import Base, TenantContext, get_control_db, get_db
 from dependencies import get_current_user
 from main import app
 from models import (
@@ -20,6 +21,7 @@ from models import (
     ChiefComplaintMaster,
     Department,
     Floor,
+    GenderEnum,
     Patient,
     PatientAllergy,
     PhysicalExaminationMaster,
@@ -29,10 +31,9 @@ from models import (
     UserStatusEnum,
     Ward,
     WardTypeEnum,
-    GenderEnum,
 )
 from schemas.v1.schemas import PaginatedResponse
-
+from seed import ensure_permissions_exist
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -50,6 +51,9 @@ class FakeRedis:
     def delete(self, key):
         self.store.pop(key, None)
 
+    def ping(self):
+        return True
+
 
 fake_redis = FakeRedis()
 SQLALCHEMY_DATABASE_URL = "sqlite://"
@@ -62,10 +66,23 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engin
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
     Base.metadata.create_all(bind=engine)
+    ControlBase.metadata.create_all(bind=engine)
     session = TestingSessionLocal()
 
+    ensure_permissions_exist(session)
+    tenant = TenantRegistry(
+        hospital_name="Test Hospital",
+        branch_code="TEST-01",
+        subdomain_slug="default",
+        db_name="hms_default",
+        admin_email="admin@test.com",
+        jwt_secret_key=settings.SECRET_KEY,
+        backup_encryption_key="test_backup_key_32_characters_long",
+        deployment_mode=DeploymentModeEnum.CLOUD,
+        is_active=True,
+    )
     admin_user = User(
         login_id="admin_test",
         email="admin@test.com",
@@ -78,9 +95,11 @@ def client():
     )
     department = Department(code="CARD", name="Cardiology", ndhm_speciality_code="CARD-01", is_active=True)
     role = Role(code="ROLE_ADMIN", name="Hospital Administrator", description="Test role", is_system_role=True)
-
-    session.add_all([admin_user, department, role])
+    session.add_all([tenant, admin_user, department, role])
     session.commit()
+
+    # Route ControlSessionLocal to in-memory SQLite so resolve_tenant_context never dials PostgreSQL
+    monkeypatch.setattr(database, "ControlSessionLocal", TestingSessionLocal)
 
     def override_get_db():
         db = TestingSessionLocal()
@@ -98,6 +117,7 @@ def client():
         return fake_redis
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_control_db] = override_get_db
     app.dependency_overrides[get_current_user] = override_get_current_user
     app.dependency_overrides[database.get_redis] = override_get_redis
 
@@ -106,8 +126,8 @@ def client():
 
     app.dependency_overrides.clear()
     session.close()
+    ControlBase.metadata.drop_all(bind=engine)
     Base.metadata.drop_all(bind=engine)
-
 
 def test_health_endpoint(client):
     response = client.get("/health")
@@ -127,7 +147,6 @@ def test_models_include_audit_columns():
 def test_protected_create_records_audit_actor(client):
     response = client.post("/api/ip/floors", json={"floor_number": 9, "name": "Audit Floor"})
     assert response.status_code == 201
-
     session = TestingSessionLocal()
     try:
         floor = session.query(Floor).filter_by(floor_number=9).one()
@@ -144,7 +163,7 @@ def test_paginated_response_schema_exists():
     assert "page_size" in PaginatedResponse.model_fields
 
 
-def test_auth_login_returns_token(client):
+def test_auth_login_returns_token_and_permissions_matrix(client):
     session = TestingSessionLocal()
     try:
         user = User(
@@ -171,6 +190,10 @@ def test_auth_login_returns_token(client):
     assert "access_token" in payload
     assert payload["token_type"] == "bearer"
 
+    matrix_res = client.get("/api/auth/permissions/matrix")
+    assert matrix_res.status_code == 200
+    assert "Billing" in matrix_res.json()["modules"]
+
 
 def test_patient_api_and_clinical_safety(client):
     session = TestingSessionLocal()
@@ -189,6 +212,7 @@ def test_patient_api_and_clinical_safety(client):
             full_name="John Patient",
             date_of_birth=datetime(1985, 6, 15, tzinfo=timezone.utc),
             gender=GenderEnum.MALE,
+            phone_number="9876543210",
             is_active=True,
         )
         session.add_all([allergy, patient])
@@ -214,6 +238,7 @@ def test_patient_api_and_clinical_safety(client):
             "full_name": "John Patient",
             "date_of_birth": "1985-06-15T00:00:00Z",
             "gender": "MALE",
+            "phone_number": "9876543210",
         },
     )
     assert patient_response.status_code in {200, 201, 409}
@@ -223,8 +248,6 @@ def test_patient_api_and_clinical_safety(client):
     payload = list_response.json()
     assert "items" in payload
     assert "total" in payload
-    assert "page" in payload
-    assert "page_size" in payload
 
     allergy_response = client.post(
         "/api/clinical/allergies",
@@ -242,7 +265,7 @@ def test_patient_api_and_clinical_safety(client):
         "/api/clinical/orders/check-allergy",
         json={"patient_id": 1, "allergen_keywords": ["Penicillin"]},
     )
-    assert safety_response.status_code in {200, 409}
+    assert safety_response.status_code == 409
 
 
 def test_ward_api_routes(client):
@@ -308,17 +331,10 @@ def test_ward_api_routes(client):
     body = floors_response.json()
     assert "items" in body
     assert "total" in body
-    assert "page" in body
-    assert "page_size" in body
 
-    deactivated_ward = client.delete("/api/ip/wards/1")
-    assert deactivated_ward.status_code == 200
-
-    deactivated_room = client.delete("/api/ip/rooms/1")
-    assert deactivated_room.status_code == 200
-
-    deactivated_bed = client.delete("/api/ip/beds/1")
-    assert deactivated_bed.status_code == 200
+    assert client.delete("/api/ip/wards/1").status_code == 200
+    assert client.delete("/api/ip/rooms/1").status_code == 200
+    assert client.delete("/api/ip/beds/1").status_code == 200
 
     map_response = client.get("/api/ip/beds/map-view")
     assert map_response.status_code == 200

@@ -1,60 +1,111 @@
-version: '3.8'
-
 services:
+  reverse-proxy:
+    image: traefik:v2.11
+    restart: unless-stopped
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
   db:
     image: postgres:15-alpine
+    restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: avinya_hms
+      TZ: "Asia/Kolkata"
+      PGTZ: "Asia/Kolkata"
+    command: ["postgres", "-c", "timezone=Asia/Kolkata"]
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - hms_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user -d avinya_hms"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 3s
       timeout: 3s
       retries: 5
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - hms_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
 
-  # 1. The Single-Use Migration Container
-  api-migration:
-    build: .
-    profiles: [tools]
-    command: alembic upgrade head
+  mailserver:
+    image: ghcr.io/docker-mailserver/docker-mailserver:latest
+    hostname: mail.${BASE_DOMAIN}
+    restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      DATABASE_URL: postgresql://user:password@db:5432/avinya_hms
-    depends_on:
-      db:
-        condition: service_healthy
+      OVERRIDE_HOSTNAME: mail.${BASE_DOMAIN}
+      PERMIT_DOCKER: network
+      SMTP_ONLY: 1
+      ONE_DIR: 1
+      ENABLE_SPAMASSASSIN: 0
+      ENABLE_CLAMAV: 0
+      ENABLE_FAIL2BAN: 0
+    volumes:
+      - hms_maildata:/var/mail
+      - hms_mailstate:/var/mail-state
 
-  # 2. The Single-Use Seeding Container (NEW STEP)
-  api-seed:
-    build: .
-    profiles: [tools]
-    command: python seed.py
-    environment:
-      DATABASE_URL: postgresql://user:password@db:5432/avinya_hms
-    depends_on:
-      db:
-        condition: service_healthy
-      api-migration:
-        condition: service_completed_successfully # Seeds only after schema updates
-
-  # 3. The Scalable API Containers (UPDATED DEPENDENCIES)
   api:
     build: .
+    image: avinya-hms-api:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TZ: "Asia/Kolkata"
+      PGTZ: "Asia/Kolkata"
     ports:
       - "8000:8000"
-    environment:
-      DATABASE_URL: postgresql://user:password@db:5432/avinya_hms
-      REDIS_URL: redis://redis:6379/0
-      SECRET_KEY: ${SECRET_KEY}
+    volumes:
+      - hms_backups:/app/backups
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.hms-api.rule=HostRegexp(`{subdomain:[a-z0-9-]+}.${BASE_DOMAIN}`)"
+      - "traefik.http.services.hms-api.loadbalancer.server.port=8000"
     depends_on:
       db:
-        condition: service_started
-      api-seed:
-        condition: service_completed_successfully # API now safely waits for migrations AND seed data
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  onboarding-portal:
+    image: avinya-hms-api:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["uvicorn", "onboarding_portal:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./deployments:/app/deployments
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.onboard.rule=Host(`onboard.${BASE_DOMAIN}`)"
+      - "traefik.http.services.onboard.loadbalancer.server.port=8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  hms_pgdata:
+  hms_redisdata:
+  hms_maildata:
+  hms_mailstate:
+  hms_backups:

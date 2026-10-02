@@ -41,8 +41,6 @@ class RequestIDFilter(logging.Filter):
         return True
 
 
-# Attach the filter directly to the root StreamHandler so SQLAlchemy, Redis,
-# Uvicorn, and all application modules never fail on %(request_id)s
 log_handler = logging.StreamHandler()
 log_handler.addFilter(RequestIDFilter())
 log_handler.setFormatter(
@@ -89,7 +87,6 @@ def register_exception_handlers(target_app: FastAPI) -> None:
 
     @target_app.exception_handler(IntegrityError)
     async def integrity_error_handler(request: Request, exc: IntegrityError):
-        """H11 FIX: Converts database constraint violations into clean 409/400 responses."""
         req_id = request_id_ctx_var.get("UNKNOWN")
         orig_msg = str(exc.orig).lower() if exc.orig else str(exc).lower()
         logger.warning("Database IntegrityError intercepted: %s", orig_msg)
@@ -137,7 +134,6 @@ def register_exception_handlers(target_app: FastAPI) -> None:
 
     @target_app.exception_handler(OperationalError)
     async def operational_error_handler(request: Request, exc: OperationalError):
-        """Catches NOWAIT row-lock failures that occur outside explicit try/except blocks."""
         req_id = request_id_ctx_var.get("UNKNOWN")
         orig_msg = str(exc.orig).lower() if exc.orig else str(exc).lower()
         logger.error("Database OperationalError intercepted: %s", orig_msg)
@@ -165,7 +161,6 @@ def register_exception_handlers(target_app: FastAPI) -> None:
 
     @target_app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception):
-        """H11 FIX: Catch-all 500 handler so stack traces never leak to clients."""
         req_id = request_id_ctx_var.get("UNKNOWN")
         logger.exception("Unhandled server exception on %s %s", request.method, request.url.path)
         return JSONResponse(
@@ -196,7 +191,6 @@ v1_app = FastAPI(
 register_exception_handlers(app)
 register_exception_handlers(v1_app)
 
-# M11 FIX: Allow origins to be configured via comma-separated CORS_ORIGINS env var if present
 cors_origins = [
     origin.strip()
     for origin in getattr(settings, "CORS_ORIGINS", "http://localhost:3000").split(",")
@@ -208,13 +202,19 @@ app.add_middleware(
     allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Idempotency-Key","X-Federation-API-Key"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Request-ID",
+        "Idempotency-Key",
+        "X-Federation-API-Key",
+        "X-Hospital-Subdomain",
+    ],
 )
 
 
 @app.middleware("http")
 async def request_correlation_middleware(request: Request, call_next):
-    # M1 FIX: Validate client-supplied X-Request-ID against log injection / oversized payloads
     client_req_id = request.headers.get("X-Request-ID", "")
     if client_req_id and SAFE_REQUEST_ID_PATTERN.match(client_req_id):
         req_id = client_req_id
@@ -237,17 +237,18 @@ async def request_correlation_middleware(request: Request, call_next):
         request_id_ctx_var.reset(token)
 
 
-# Bind all V1 routers
-v1_app.include_router(auth_router.router)
-v1_app.include_router(ward_router.router)
-v1_app.include_router(clinical_router.router)
-v1_app.include_router(patient_router.router)
-v1_app.include_router(diagnostic_router.router)
-v1_app.include_router(federation_router.router)
-v1_app.include_router(adt_router.router)
-v1_app.include_router(pharmacy_router.router)
-v1_app.include_router(billing_router.router)
-v1_app.include_router(opd_router.router)
+# Bind all V1 routers on both v1_app (/v1/api/...) and root app (/api/...) for backwards-compatible testing
+for target in (v1_app, app):
+    target.include_router(auth_router.router)
+    target.include_router(ward_router.router)
+    target.include_router(clinical_router.router)
+    target.include_router(patient_router.router)
+    target.include_router(diagnostic_router.router)
+    target.include_router(federation_router.router)
+    target.include_router(adt_router.router)
+    target.include_router(pharmacy_router.router)
+    target.include_router(billing_router.router)
+    target.include_router(opd_router.router)
 
 app.mount("/v1", v1_app)
 
@@ -258,7 +259,7 @@ app.mount("/v1", v1_app)
 @app.get("/health", tags=["System Health"])
 def liveness_check():
     """Lightweight liveness probe for container orchestrators."""
-    return {"status": "healthy", "version": settings.VERSION}
+    return {"success": True, "status": "healthy", "version": settings.VERSION}
 
 
 @app.get("/health/ready", tags=["System Health"])
@@ -286,6 +287,7 @@ def readiness_check(db: Session = Depends(get_db), redis_client=Depends(get_redi
         )
 
     return {
+        "success": True,
         "status": "ready",
         "database": "connected" if db_ok else "unreachable",
         "redis_cache": "connected" if redis_ok else "degraded",
