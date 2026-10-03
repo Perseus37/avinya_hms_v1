@@ -84,6 +84,16 @@ def test_02_control_plane_circuit_breaker_key_rotation_admin_reset_and_fleet_syn
     assert sync_res.status_code == 200
     assert sync_res.json()["synced_tenants_count"] >= 3
 
+    # Verify On-Premise RAM Bootstrap & Canonical Template Sync Manifest
+    manifest_res = cp_client.get(
+        "/api/onprem/sync-manifest",
+        headers={"X-Federation-API-Key": rot_res.json()["new_federation_api_key"]},
+    )
+    assert manifest_res.status_code == 200
+    manifest_data = manifest_res.json()
+    assert manifest_data["canonical_system_templates_count"] >= 10
+    assert "jwt_secret_key" in manifest_data["in_memory_secrets"]
+
 
 def test_03_executive_command_center_bed_occupancy_alos_readmissions_and_arpob(
     client, superuser_headers

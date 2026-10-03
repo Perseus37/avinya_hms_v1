@@ -10,29 +10,11 @@ services:
       - "80:80"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      - public-net
-
-  kms:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: kms
-    image: avinya-hms-kms:latest
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      KMS_INTERNAL_ROOT_KEY: ${KMS_INTERNAL_ROOT_KEY:-avinya_local_dev_fallback_kek_32b}
-      KMS_INTERNAL_AUTH_TOKEN: ${KMS_INTERNAL_AUTH_TOKEN:-local_kms_internal_token}
-    networks:
-      - internal-net
 
   db:
     image: postgres:15-alpine
     restart: unless-stopped
-    env_file:
-      - .env
+    env_file: .env
     environment:
       TZ: "Asia/Kolkata"
       PGTZ: "Asia/Kolkata"
@@ -46,8 +28,6 @@ services:
       interval: 3s
       timeout: 3s
       retries: 5
-    networks:
-      - internal-net
 
   redis:
     image: redis:7-alpine
@@ -62,28 +42,6 @@ services:
       interval: 3s
       timeout: 3s
       retries: 5
-    networks:
-      - internal-net
-
-  mailserver:
-    image: ghcr.io/docker-mailserver/docker-mailserver:latest
-    hostname: mail.${BASE_DOMAIN}
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      OVERRIDE_HOSTNAME: mail.${BASE_DOMAIN}
-      PERMIT_DOCKER: network
-      SMTP_ONLY: 1
-      ONE_DIR: 1
-      ENABLE_SPAMASSASSIN: 0
-      ENABLE_CLAMAV: 0
-      ENABLE_FAIL2BAN: 0
-    volumes:
-      - hms_maildata:/var/mail
-      - hms_mailstate:/var/mail-state
-    networks:
-      - internal-net
 
   api:
     build:
@@ -92,13 +50,10 @@ services:
       target: production
     image: avinya-hms-api:latest
     restart: unless-stopped
-    env_file:
-      - .env
+    env_file: .env
     environment:
       TZ: "Asia/Kolkata"
       PGTZ: "Asia/Kolkata"
-      INTERNAL_KMS_URL: "http://kms:8002"
-      KMS_INTERNAL_AUTH_TOKEN: ${KMS_INTERNAL_AUTH_TOKEN:-local_kms_internal_token}
     ports:
       - "8000:8000"
     volumes:
@@ -112,39 +67,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      kms:
-        condition: service_started
-    networks:
-      - internal-net
-      - public-net
-
-  backup-sidecar:
-    image: avinya-hms-api:latest
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      INTERNAL_KMS_URL: "http://kms:8002"
-      KMS_INTERNAL_AUTH_TOKEN: ${KMS_INTERNAL_AUTH_TOKEN:-local_kms_internal_token}
-    command: ["sh", "-c", "while true; do python backend/scripts/backup_service.py; sleep 21600; done"]
-    volumes:
-      - hms_backups:/app/backups
-    depends_on:
-      db:
-        condition: service_healthy
-      kms:
-        condition: service_started
-    networks:
-      - internal-net
 
   onboarding-portal:
     image: avinya-hms-api:latest
     restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      INTERNAL_KMS_URL: "http://kms:8002"
-      KMS_INTERNAL_AUTH_TOKEN: ${KMS_INTERNAL_AUTH_TOKEN:-local_kms_internal_token}
+    env_file: .env
     command: ["uvicorn", "onboarding_portal:onboarding_app", "--host", "0.0.0.0", "--port", "8080"]
     ports:
       - "127.0.0.1:8080:8080"
@@ -157,16 +84,19 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      kms:
-        condition: service_started
-    networks:
-      - internal-net
-      - public-net
 
-  # -------------------------------------------------------------------
-  # STAGE PROFILE: ISOLATED TEST RUNNER
-  # Run via: docker compose --profile test run --rm test-runner
-  # -------------------------------------------------------------------
+  backup-sidecar:
+    image: avinya-hms-api:latest
+    restart: unless-stopped
+    env_file: .env
+    command: ["python", "backend/scripts/backup_service.py", "--daemon"]
+    volumes:
+      - hms_backups:/app/backups
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Only runs on 'dev' when you explicitly run: docker compose --profile test run --rm test-runner
   test-runner:
     build:
       context: .
@@ -176,41 +106,10 @@ services:
     profiles: ["test"]
     environment:
       ENVIRONMENT: "testing"
-      INTERNAL_KMS_URL: ""
     volumes:
       - .:/app
-
-  # -------------------------------------------------------------------
-  # STAGE PROFILE: DATABASE MIGRATION & TEMPLATE SYNC
-  # Run via: docker compose --profile sync run --rm fleet-sync
-  # -------------------------------------------------------------------
-  fleet-sync:
-    image: avinya-hms-api:latest
-    profiles: ["sync"]
-    env_file:
-      - .env
-    environment:
-      INTERNAL_KMS_URL: "http://kms:8002"
-      KMS_INTERNAL_AUTH_TOKEN: ${KMS_INTERNAL_AUTH_TOKEN:-local_kms_internal_token}
-    command: ["python", "backend/scripts/prestart.py"]
-    depends_on:
-      db:
-        condition: service_healthy
-      kms:
-        condition: service_started
-    networks:
-      - internal-net
-
-networks:
-  public-net:
-    driver: bridge
-  internal-net:
-    driver: bridge
-    internal: true
 
 volumes:
   hms_pgdata:
   hms_redisdata:
-  hms_maildata:
-  hms_mailstate:
   hms_backups:

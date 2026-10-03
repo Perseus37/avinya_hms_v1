@@ -42,8 +42,9 @@ from models import (
     UserStatusEnum,
 )
 from seed import pwd_context, seed_universal_hospital_data
-from seed import seed_universal_hospital_data
-from security.envelope import encrypt_tenant_secret
+from security.envelope import encrypt_tenant_secret, decrypt_tenant_secret
+from dependencies import get_federated_node
+from services.standard_templates import STANDARD_TEMPLATES
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("avinya.onboarding_portal")
@@ -198,7 +199,7 @@ def build_onprem_zip_bundle(slug: str, env_content: str) -> bytes:
     image: avinya-hms-api:latest
     restart: unless-stopped
     env_file: .env
-    command: ["sh", "-c", "while true; do python backup_service.py; sleep 21600; done"]
+    command: ["python", "backend/scripts/backup_service.py", "--daemon"]
     volumes:
       - ./backups:/app/backups
     depends_on:
@@ -302,6 +303,9 @@ def provision_hospital(
             tenant_db.commit()
         t_engine.dispose()
 
+    encrypted_jwt = encrypt_tenant_secret(jwt_secret)
+    encrypted_backup = encrypt_tenant_secret(backup_key)
+
     subdomain_url = f"https://{slug}.{settings.BASE_DOMAIN}"
     tenant_entry = TenantRegistry(
         hospital_name=req.hospital_name,
@@ -309,8 +313,8 @@ def provision_hospital(
         subdomain_slug=slug,
         db_name=target_db_name,
         admin_email=req.admin_email,
-        jwt_secret_key=encrypt_tenant_secret(jwt_secret),
-        backup_encryption_key=encrypt_tenant_secret(backup_key),
+        jwt_secret_key=encrypted_jwt,
+        backup_encryption_key=encrypted_backup,
         deployment_mode=req.deployment_mode,
         api_base_url=subdomain_url,
         is_active=True,
@@ -329,15 +333,15 @@ def provision_hospital(
     out_dir = Path("deployments")
     out_dir.mkdir(exist_ok=True)
     env_content = (
-        f"# HMS Configuration Bundle - {req.hospital_name} ({branch_code})\n"
+        f"# HMS On-Premise Appliance Bootstrap - {req.hospital_name} ({branch_code})\n"
         f"# Mode: {req.deployment_mode.value} | Generated: {datetime.now(timezone.utc).isoformat()}\n"
+        f"# NOTE: JWT & Backup Encryption Keys are fetched into RAM at boot via CONTROL_PLANE_SYNC_URL\n"
         f'HOSPITAL_NAME="{req.hospital_name}"\n'
         f'HOSPITAL_BRANCH_CODE="{branch_code}"\n'
         f'DEFAULT_TENANT_SLUG="{slug}"\n'
         f"POSTGRES_DB={target_db_name}\n"
-        f"SECRET_KEY={jwt_secret}\n"
+        f"CONTROL_PLANE_SYNC_URL=https://onboard.{settings.BASE_DOMAIN}/api/onprem/sync-manifest\n"
         f"FEDERATION_API_KEY={raw_fed_key}\n"
-        f"BACKUP_ENCRYPTION_KEY={backup_key}\n"
         f"SEED_ADMIN_EMAIL={req.admin_email}\n"
         f"SEED_ADMIN_PASSWORD={admin_password}\n"
     )
@@ -576,6 +580,51 @@ def emergency_reset_tenant_admin_password(
         "one_time_password": new_password,
     }
 
+@onboarding_app.get("/api/onprem/sync-manifest")
+def get_onprem_in_memory_bootstrap_and_sync_manifest(
+    calling_node: FederatedNode = Depends(get_federated_node),
+    control_db: Session = Depends(get_control_db),
+):
+    """
+    Authenticated via X-Federation-API-Key.
+    Allows On-Premise hospital appliances to:
+    1. Fetch their JWT & Backup encryption keys directly into RAM on boot (zero plaintext keys on local disk).
+    2. Pull canonical system print templates and MDM dictionary versions to prevent configuration drift.
+    """
+    tenant = control_db.execute(
+        select(TenantRegistry).where(
+            TenantRegistry.branch_code == calling_node.branch_code,
+            TenantRegistry.is_active == True,
+        )
+    ).scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=403, detail="Tenant is suspended or not registered.")
+
+    return {
+        "status": "ACTIVE",
+        "hospital_name": tenant.hospital_name,
+        "branch_code": tenant.branch_code,
+        "subdomain_slug": tenant.subdomain_slug,
+        "deployment_mode": tenant.deployment_mode.value,
+        "in_memory_secrets": {
+            "jwt_secret_key": decrypt_tenant_secret(tenant.jwt_secret_key),
+            "backup_encryption_key": decrypt_tenant_secret(tenant.backup_encryption_key),
+        },
+        "canonical_system_templates_count": len(STANDARD_TEMPLATES),
+        "canonical_system_templates": [
+            {
+                "report_type": t["report_type"].value,
+                "code": t["code"],
+                "name": t["name"],
+                "page_size": t["page_size"].value,
+                "html_template": t["html_template"],
+                "header_html": t["header_html"],
+                "footer_html": t["footer_html"],
+            }
+            for t in STANDARD_TEMPLATES
+        ],
+        "maintenance_window_cron": "0 0 3 * * *",
+    }
 
 @onboarding_app.get("/api/tenants/{slug}/telemetry")
 def get_tenant_operational_telemetry(

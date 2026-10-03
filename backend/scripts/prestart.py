@@ -12,6 +12,8 @@ from control_models import ControlBase, DeploymentModeEnum, TenantRegistry
 from database import ControlSessionLocal, build_db_url, control_engine, ensure_postgres_db_exists
 from seed import ensure_permissions_exist, seed_universal_hospital_data
 
+from security.envelope import encrypt_tenant_secret
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("avinya.prestart")
 
@@ -58,8 +60,8 @@ def run_prestart() -> None:
                         subdomain_slug=settings.DEFAULT_TENANT_SLUG,
                         db_name=default_db,
                         admin_email=settings.SEED_ADMIN_EMAIL,
-                        jwt_secret_key=settings.SECRET_KEY,
-                        backup_encryption_key=secrets.token_urlsafe(32),
+                        jwt_secret_key=encrypt_tenant_secret(settings.SECRET_KEY),
+                        backup_encryption_key=encrypt_tenant_secret(secrets.token_urlsafe(32)),
                         deployment_mode=DeploymentModeEnum.CLOUD,
                         is_active=True,
                     )
