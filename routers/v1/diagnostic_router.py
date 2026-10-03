@@ -449,10 +449,29 @@ def submit_task_result(
         )
 
     valid_transitions = {
-        TaskStatusEnum.PENDING: [TaskStatusEnum.SAMPLE_COLLECTED, TaskStatusEnum.IN_PROGRESS, TaskStatusEnum.RESULT_ENTERED],
-        TaskStatusEnum.SAMPLE_COLLECTED: [TaskStatusEnum.IN_PROGRESS, TaskStatusEnum.RESULT_ENTERED],
-        TaskStatusEnum.IN_PROGRESS: [TaskStatusEnum.RESULT_ENTERED],
-        TaskStatusEnum.RESULT_ENTERED: [TaskStatusEnum.RESULT_ENTERED, TaskStatusEnum.VERIFIED],
+        TaskStatusEnum.PENDING: [
+            TaskStatusEnum.SAMPLE_COLLECTED,
+            TaskStatusEnum.SAMPLE_REJECTED,
+            TaskStatusEnum.IN_PROGRESS,
+            TaskStatusEnum.RESULT_ENTERED,
+        ],
+        TaskStatusEnum.SAMPLE_COLLECTED: [
+            TaskStatusEnum.SAMPLE_REJECTED,
+            TaskStatusEnum.IN_PROGRESS,
+            TaskStatusEnum.RESULT_ENTERED,
+        ],
+        TaskStatusEnum.SAMPLE_REJECTED: [
+            TaskStatusEnum.SAMPLE_COLLECTED,
+            TaskStatusEnum.IN_PROGRESS,
+        ],
+        TaskStatusEnum.IN_PROGRESS: [
+            TaskStatusEnum.SAMPLE_REJECTED,
+            TaskStatusEnum.RESULT_ENTERED,
+        ],
+        TaskStatusEnum.RESULT_ENTERED: [
+            TaskStatusEnum.RESULT_ENTERED,
+            TaskStatusEnum.VERIFIED,
+        ],
     }
 
     if payload.status not in valid_transitions.get(task.status, []):
@@ -476,9 +495,19 @@ def submit_task_result(
     else:
         if not user_has_permission(db, current_user, "diagnostics:write"):
             raise HTTPException(status_code=403, detail="Access denied: 'diagnostics:write' permission required to enter results.")
-        if payload.status == TaskStatusEnum.RESULT_ENTERED:
+        if payload.status == TaskStatusEnum.SAMPLE_REJECTED:
+            if not payload.rejection_reason or len(payload.rejection_reason.strip()) < 3:
+                raise HTTPException(
+                    status_code=400,
+                    detail="A valid rejection_reason is mandatory when marking a sample as SAMPLE_REJECTED.",
+                )
+            task.rejection_reason = payload.rejection_reason
+        elif payload.status == TaskStatusEnum.RESULT_ENTERED:
+            if not payload.result_value:
+                raise HTTPException(status_code=400, detail="result_value is required when status is RESULT_ENTERED.")
             task.result_value = payload.result_value
             task.result_notes = payload.result_notes
+            task.is_critical_panic = payload.is_critical_panic
             task.performed_by_id = current_user.id
         task.status = payload.status
 
@@ -490,3 +519,16 @@ def submit_task_result(
 
     db.commit()
     return {"status": "success", "message": f"Task {task_id} status advanced to {task.status.value}."}
+
+@router.get("/tasks/panic-alerts", response_model=list[DiagnosticTaskResponse])
+def list_critical_panic_lab_alerts(
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("diagnostics:read", "opd:read", "adt:read")),
+):
+    """Returns all diagnostic tasks flagged with critical life-threatening panic values."""
+    stmt = (
+        select(DiagnosticTask)
+        .where(DiagnosticTask.is_critical_panic == True)
+        .order_by(DiagnosticTask.id.desc())
+    )
+    return list(db.execute(stmt).scalars().all())

@@ -21,6 +21,9 @@ from models import (
     PatientEncounter,
     PhysicalExaminationMaster,
     User,
+    EncounterPhysicalExam,
+    Patient,
+    PatientComorbidity,
 )
 
 from schemas.v1.schemas import (
@@ -47,6 +50,10 @@ from schemas.v1.schemas import (
     ClinicalNoteUpdate,
     EncounterDiagnosisCreate,
     EncounterDiagnosisResponse,
+    EncounterPhysicalExamCreate,
+    EncounterPhysicalExamResponse,
+    PatientComorbidityCreate,
+    PatientComorbidityResponse,
 )
 from services.cpoe import check_allergy_hard_stop
 from services.taxonomy_cache import get_department_taxonomy, invalidate_department_taxonomy_cache
@@ -633,5 +640,130 @@ def list_encounter_diagnoses(
         .options(joinedload(EncounterDiagnosis.diagnosis))
         .where(EncounterDiagnosis.encounter_id == encounter_id)
         .order_by(EncounterDiagnosis.id.asc())
+    )
+    return list(db.execute(stmt).scalars().all())
+
+# =====================================================================
+# PHASE 15A: PATIENT COMORBIDITIES & ENCOUNTER SYSTEMIC PHYSICAL EXAMS
+# =====================================================================
+
+@router.post(
+    "/patients/{patient_id}/comorbidities",
+    response_model=PatientComorbidityResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def chart_patient_comorbidity(
+    patient_id: int,
+    payload: PatientComorbidityCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("patients:write", "opd:write", "adt:write")),
+):
+    patient = db.get(Patient, patient_id)
+    if not patient or not patient.is_active:
+        raise HTTPException(status_code=404, detail="Active patient not found.")
+
+    cm = db.get(ComorbidityMaster, payload.comorbidity_id)
+    if not cm or not cm.is_active:
+        raise HTTPException(status_code=404, detail="Active comorbidity master item not found.")
+
+    existing = db.execute(
+        select(PatientComorbidity).where(
+            PatientComorbidity.patient_id == patient_id,
+            PatientComorbidity.comorbidity_id == payload.comorbidity_id,
+        )
+    ).scalar_one_or_none()
+
+    if existing:
+        existing.clinical_remarks = payload.clinical_remarks
+        existing.is_active = True
+        existing.recorded_by_id = current_user.id
+        db.commit()
+        pc_id = existing.id
+    else:
+        pc = PatientComorbidity(
+            patient_id=patient_id,
+            comorbidity_id=payload.comorbidity_id,
+            recorded_by_id=current_user.id,
+            clinical_remarks=payload.clinical_remarks,
+            is_active=True,
+        )
+        db.add(pc)
+        db.commit()
+        pc_id = pc.id
+
+    stmt = (
+        select(PatientComorbidity)
+        .options(joinedload(PatientComorbidity.comorbidity))
+        .where(PatientComorbidity.id == pc_id)
+    )
+    return db.execute(stmt).scalar_one()
+
+
+@router.get("/patients/{patient_id}/comorbidities", response_model=List[PatientComorbidityResponse])
+def list_patient_comorbidities(
+    patient_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("patients:read", "opd:read", "adt:read")),
+):
+    stmt = (
+        select(PatientComorbidity)
+        .options(joinedload(PatientComorbidity.comorbidity))
+        .where(PatientComorbidity.patient_id == patient_id, PatientComorbidity.is_active == True)
+        .order_by(PatientComorbidity.id.asc())
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+@router.post(
+    "/encounters/{encounter_id}/physical-exams",
+    response_model=EncounterPhysicalExamResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def record_encounter_physical_exam(
+    encounter_id: int,
+    payload: EncounterPhysicalExamCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("opd:write", "adt:write")),
+):
+    _get_active_encounter_or_raise(db, encounter_id)
+    exam_master = db.get(PhysicalExaminationMaster, payload.exam_master_id)
+    if not exam_master or not exam_master.is_active:
+        raise HTTPException(status_code=404, detail="Active physical examination master item not found.")
+
+    if not payload.is_normal and (not payload.findings_notes or len(payload.findings_notes.strip()) < 3):
+        raise HTTPException(
+            status_code=400,
+            detail="Clinical findings_notes are mandatory when marking a physical examination as abnormal (is_normal=False).",
+        )
+
+    rec = EncounterPhysicalExam(
+        encounter_id=encounter_id,
+        exam_master_id=payload.exam_master_id,
+        recorded_by_id=current_user.id,
+        is_normal=payload.is_normal,
+        findings_notes=payload.findings_notes,
+    )
+    db.add(rec)
+    db.commit()
+
+    stmt = (
+        select(EncounterPhysicalExam)
+        .options(joinedload(EncounterPhysicalExam.exam_master))
+        .where(EncounterPhysicalExam.id == rec.id)
+    )
+    return db.execute(stmt).scalar_one()
+
+
+@router.get("/encounters/{encounter_id}/physical-exams", response_model=List[EncounterPhysicalExamResponse])
+def list_encounter_physical_exams(
+    encounter_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("opd:read", "adt:read")),
+):
+    stmt = (
+        select(EncounterPhysicalExam)
+        .options(joinedload(EncounterPhysicalExam.exam_master))
+        .where(EncounterPhysicalExam.encounter_id == encounter_id)
+        .order_by(EncounterPhysicalExam.id.asc())
     )
     return list(db.execute(stmt).scalars().all())

@@ -134,6 +134,7 @@ class OrderStatusEnum(str, PyEnum):
 class TaskStatusEnum(str, PyEnum):
     PENDING = "PENDING"
     SAMPLE_COLLECTED = "SAMPLE_COLLECTED"
+    SAMPLE_REJECTED = "SAMPLE_REJECTED"
     IN_PROGRESS = "IN_PROGRESS"
     RESULT_ENTERED = "RESULT_ENTERED"
     VERIFIED = "VERIFIED"
@@ -180,15 +181,6 @@ class InvoiceStatusEnum(str, PyEnum):
     PARTIAL = "PARTIAL"
     PAID = "PAID"
     VOID = "VOID"
-
-
-class PaymentMethodEnum(str, PyEnum):
-    CASH = "CASH"
-    CREDIT_CARD = "CREDIT_CARD"
-    INSURANCE = "INSURANCE"
-    UPI = "UPI"
-    BANK_TRANSFER = "BANK_TRANSFER"
-
 
 # --- PHASE 7 ENUMS ---
 class AppointmentStatusEnum(str, PyEnum):
@@ -261,6 +253,8 @@ class ReportTypeEnum(str, PyEnum):
     DISCHARGE_SUMMARY = "DISCHARGE_SUMMARY"
     MLC_POLICE_REPORT = "MLC_POLICE_REPORT"
     SURGICAL_OPERATIVE_NOTE = "SURGICAL_OPERATIVE_NOTE"
+    BIRTH_CERTIFICATE = "BIRTH_CERTIFICATE"
+    DEATH_CERTIFICATE_MCCD = "DEATH_CERTIFICATE_MCCD"
 
 class PageSizeEnum(str, PyEnum):
     A4_PORTRAIT = "A4_PORTRAIT"
@@ -356,6 +350,19 @@ class DicomModalityEnum(str, PyEnum):
     US = "US"
     MG = "MG"
     PT = "PT"
+
+class DeliveryModeEnum(str, PyEnum):
+    NORMAL_VAGINAL = "NORMAL_VAGINAL"
+    LSCS_CESAREAN = "LSCS_CESAREAN"
+    ASSISTED_FORCEPS_VACUUM = "ASSISTED_FORCEPS_VACUUM"
+
+
+class MannerOfDeathEnum(str, PyEnum):
+    NATURAL = "NATURAL"
+    ACCIDENTAL = "ACCIDENTAL"
+    SUICIDAL = "SUICIDAL"
+    HOMICIDAL = "HOMICIDAL"
+    PENDING_INVESTIGATION = "PENDING_INVESTIGATION"
 
 # -----------------------------------------------------------------------------
 # Auditing mixin for timestamp fields
@@ -742,6 +749,8 @@ class DiagnosticTask(AuditMixin, Base):
     status: Mapped[TaskStatusEnum] = mapped_column(default=TaskStatusEnum.PENDING, nullable=False)
     result_value: Mapped[Optional[str]] = mapped_column(Text)
     result_notes: Mapped[Optional[str]] = mapped_column(Text)
+    is_critical_panic: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    rejection_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     performed_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
     verified_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
 
@@ -897,6 +906,7 @@ class Appointment(AuditMixin, Base):
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
     appointment_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[AppointmentStatusEnum] = mapped_column(default=AppointmentStatusEnum.SCHEDULED, nullable=False)
+    token_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     reason_for_visit: Mapped[Optional[str]] = mapped_column(String(255))
     encounter_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patient_encounters.id"))
 
@@ -1563,3 +1573,146 @@ class RadiologyStudyMetadata(AuditMixin, Base):
     radiologist_impression: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     diagnostic_task: Mapped["DiagnosticTask"] = relationship()
+
+# ==========================================
+# PHASE 15A: PHARMACY RETURNS, OPD LEAVES, COMORBIDITIES & PHYSICAL EXAMS
+# ==========================================
+
+class PharmacyReturnLog(AuditMixin, Base):
+    """Tracks ward/patient returns of dispensed medications back into InventoryBatch with auto-credit/refund."""
+    __tablename__ = "pharmacy_return_logs"
+    __table_args__ = (
+        CheckConstraint("returned_quantity > 0", name="ck_pharm_return_qty_pos"),
+        CheckConstraint("credit_amount_paise >= 0", name="ck_pharm_return_credit_non_neg"),
+        Index("ix_pharm_returns_rx_id", "prescription_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    prescription_id: Mapped[int] = mapped_column(ForeignKey("prescriptions.id", ondelete="CASCADE"), nullable=False)
+    prescription_item_id: Mapped[int] = mapped_column(ForeignKey("prescription_items.id", ondelete="CASCADE"), nullable=False)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("inventory_batches.id"), nullable=False)
+    returned_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    returned_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    credit_amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    return_reason: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    prescription: Mapped["Prescription"] = relationship()
+    prescription_item: Mapped["PrescriptionItem"] = relationship()
+    batch: Mapped["InventoryBatch"] = relationship()
+    returned_by: Mapped["User"] = relationship(foreign_keys=[returned_by_id])
+
+
+class DoctorLeave(AuditMixin, Base):
+    """Blocks OPD appointment scheduling when a consulting doctor is on leave or emergency OT duty."""
+    __tablename__ = "doctor_leaves"
+    __table_args__ = (
+        Index("ix_doctor_leaves_doc_time", "doctor_id", "start_time", "end_time"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reason: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    doctor: Mapped["User"] = relationship(foreign_keys=[doctor_id])
+
+
+class PatientComorbidity(AuditMixin, Base):
+    """Links a Patient to chronic conditions from ComorbidityMaster across episodes of care."""
+    __tablename__ = "patient_comorbidities"
+    __table_args__ = (
+        UniqueConstraint("patient_id", "comorbidity_id", name="uq_patient_comorbidity"),
+        Index("ix_patient_comorbidities_patient_id", "patient_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
+    comorbidity_id: Mapped[int] = mapped_column(ForeignKey("comorbidities_master.id", ondelete="RESTRICT"), nullable=False)
+    recorded_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    clinical_remarks: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    patient: Mapped["Patient"] = relationship()
+    comorbidity: Mapped["ComorbidityMaster"] = relationship()
+    recorded_by: Mapped["User"] = relationship(foreign_keys=[recorded_by_id])
+
+
+class EncounterPhysicalExam(AuditMixin, Base):
+    """Links an active PatientEncounter to systemic PhysicalExaminationMaster findings."""
+    __tablename__ = "encounter_physical_exams"
+    __table_args__ = (
+        Index("ix_encounter_phys_exams_enc_id", "encounter_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id", ondelete="CASCADE"), nullable=False)
+    exam_master_id: Mapped[int] = mapped_column(ForeignKey("physical_examinations_master.id", ondelete="RESTRICT"), nullable=False)
+    recorded_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    is_normal: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    findings_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    encounter: Mapped["PatientEncounter"] = relationship()
+    exam_master: Mapped["PhysicalExaminationMaster"] = relationship()
+    recorded_by: Mapped["User"] = relationship(foreign_keys=[recorded_by_id])
+
+# ==========================================
+# PHASE 15B: MATERNITY BIRTH REGISTER (AUTO-NEWBORN MRN) & MORTALITY / MCCD REGISTER
+# ==========================================
+
+class BirthRecord(AuditMixin, Base):
+    """Statutory Maternity Birth Register that auto-registers live newborns into the Master Patient Index (MPI)."""
+    __tablename__ = "birth_records"
+    __table_args__ = (
+        CheckConstraint("birth_weight_kg > 0.0 AND birth_weight_kg <= 10.0", name="ck_birth_weight_range"),
+        CheckConstraint("apgar_1min >= 0 AND apgar_1min <= 10", name="ck_apgar_1_range"),
+        CheckConstraint("apgar_5min >= 0 AND apgar_5min <= 10", name="ck_apgar_5_range"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    certificate_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    mother_encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id"), nullable=False, index=True)
+    mother_patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False, index=True)
+    newborn_patient_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patients.id"), nullable=True, index=True)
+    attending_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    baby_full_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    baby_gender: Mapped[GenderEnum] = mapped_column(nullable=False)
+    baby_blood_group: Mapped[Optional[BloodGroupEnum]] = mapped_column(nullable=True)
+    time_of_birth: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    delivery_mode: Mapped[DeliveryModeEnum] = mapped_column(nullable=False)
+    birth_weight_kg: Mapped[float] = mapped_column(Float, nullable=False)
+    apgar_1min: Mapped[int] = mapped_column(Integer, nullable=False)
+    apgar_5min: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_stillborn: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    clinical_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    mother_encounter: Mapped["PatientEncounter"] = relationship()
+    mother_patient: Mapped["Patient"] = relationship(foreign_keys=[mother_patient_id])
+    newborn_patient: Mapped[Optional["Patient"]] = relationship(foreign_keys=[newborn_patient_id])
+    attending_doctor: Mapped["User"] = relationship(foreign_keys=[attending_doctor_id])
+
+
+class DeathRecord(AuditMixin, Base):
+    """Statutory Form 4 Medical Certificate of Cause of Death (MCCD) & Mortality Register."""
+    __tablename__ = "death_records"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    certificate_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id"), unique=True, nullable=False, index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), unique=True, nullable=False, index=True)
+    certified_by_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    immediate_cause_diagnosis_id: Mapped[int] = mapped_column(ForeignKey("diagnoses_master.id"), nullable=False)
+
+    time_of_death: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    manner_of_death: Mapped[MannerOfDeathEnum] = mapped_column(default=MannerOfDeathEnum.NATURAL, nullable=False)
+    antecedent_cause_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_autopsy_advised: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    body_handed_over_to: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+
+    encounter: Mapped["PatientEncounter"] = relationship()
+    patient: Mapped["Patient"] = relationship()
+    certified_by_doctor: Mapped["User"] = relationship(foreign_keys=[certified_by_doctor_id])
+    immediate_cause_diagnosis: Mapped["DiagnosisMaster"] = relationship()

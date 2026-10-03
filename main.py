@@ -30,6 +30,8 @@ from routers.v1 import (
     nursing_er_router,
     ot_router,
     blood_pacs_router,
+    analytics_router,
+    vital_registries_router,
 )
 
 # -----------------------------------------------------------------------------
@@ -250,6 +252,7 @@ for target in (v1_app, app):
     target.include_router(patient_router.router)
     target.include_router(diagnostic_router.router)
     target.include_router(federation_router.router)
+    target.include_router(vital_registries_router.router)
     target.include_router(adt_router.router)
     target.include_router(pharmacy_router.router)
     target.include_router(billing_router.router)
@@ -259,6 +262,7 @@ for target in (v1_app, app):
     target.include_router(insurance_router.router)
     target.include_router(nursing_er_router.router)
     target.include_router(blood_pacs_router.router)
+    target.include_router(analytics_router.router)
 
 app.mount("/v1", v1_app)
 

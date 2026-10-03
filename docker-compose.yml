@@ -102,7 +102,7 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    command: ["uvicorn", "onboarding_portal:app", "--host", "0.0.0.0", "--port", "8080"]
+    command: ["uvicorn", "onboarding_portal:onboarding_app", "--host", "0.0.0.0", "--port", "8080"]
     ports:
       - "127.0.0.1:8080:8080"
     volumes:

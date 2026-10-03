@@ -16,6 +16,11 @@ from models import (
     InpatientAdmission,
     PatientEncounter,
     User,
+    DischargeDispositionEnum,
+    InsurancePreAuth,
+    Invoice,
+    InvoiceStatusEnum,
+    PreAuthStatusEnum,
 )
 from schemas.v1.schemas import (
     BedTransferRequest,
@@ -357,6 +362,42 @@ def discharge_patient(
     if not admission or admission.discharge_time is not None:
         raise HTTPException(status_code=400, detail="Admission record is invalid or already discharged.")
 
+    # Phase 15B: Financial Clearance Gate ("No-Dues Gate") before routine discharge
+    if not payload.force_financial_override and payload.discharge_disposition not in [
+        DischargeDispositionEnum.DECEASED,
+        DischargeDispositionEnum.AGAINST_MEDICAL_ADVICE,
+    ]:
+        unpaid_invoices = list(
+            db.execute(
+                select(Invoice).where(
+                    Invoice.encounter_id == admission.encounter_id,
+                    Invoice.status.in_([InvoiceStatusEnum.UNPAID, InvoiceStatusEnum.PARTIAL]),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        unsettled_balance_paise = sum(
+            max(0, inv.net_amount_paise - inv.amount_paid_paise) for inv in unpaid_invoices
+        )
+        if unsettled_balance_paise > 0:
+            approved_preauth = db.execute(
+                select(InsurancePreAuth).where(
+                    InsurancePreAuth.encounter_id == admission.encounter_id,
+                    InsurancePreAuth.status == PreAuthStatusEnum.APPROVED,
+                    InsurancePreAuth.approved_amount_paise >= unsettled_balance_paise,
+                )
+            ).scalar_one_or_none()
+            if not approved_preauth:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Financial Clearance Gate: Cannot complete routine discharge while finalized invoice has an "
+                        f"unsettled balance of {unsettled_balance_paise} paise. Settle bill, obtain cashless pre-auth approval, "
+                        f"or pass force_financial_override=True."
+                    ),
+                )
+            
     current_time = datetime.now(timezone.utc)
     admission.discharge_time = current_time
     admission.discharge_disposition = payload.discharge_disposition

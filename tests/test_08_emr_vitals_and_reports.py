@@ -379,3 +379,50 @@ def test_15_sandboxed_jinja2_blocks_ssti_code_execution_attempts(client, superus
     )
     assert ssti_res.status_code == 400
     assert "security violation" in ssti_res.json()["message"].lower()
+
+def test_16_expanded_variable_catalog_covers_all_7_report_types_and_renders_invoice_discounts_and_claims(
+    client, superuser_headers, doctor_headers, billing_headers
+):
+    """
+    Scenario 16: Verify GET /api/reports/templates/variables/{report_type} exposes draggable tokens
+    for all 7 ReportTypeEnum types (including MLC_POLICE_REPORT, SURGICAL_OPERATIVE_NOTE, Invoice Discounts/Claims,
+    and Radiology PACS DICOM fields), and that printing a discounted invoice renders the net payable & discount reason.
+    """
+    for r_type in [
+        "OPD_APPOINTMENT_SLIP",
+        "INVOICE",
+        "PRESCRIPTION",
+        "DIAGNOSTIC_REPORT",
+        "DISCHARGE_SUMMARY",
+        "MLC_POLICE_REPORT",
+        "SURGICAL_OPERATIVE_NOTE",
+    ]:
+        res = client.get(f"/v1/api/reports/templates/variables/{r_type}", headers=doctor_headers)
+        assert res.status_code == 200
+        assert len(res.json()["groups"]) >= 2
+
+    # Verify INVOICE variable catalog includes discount and insurance_claim tokens
+    inv_vars = client.get("/v1/api/reports/templates/variables/INVOICE", headers=billing_headers).json()["groups"]
+    all_inv_tokens = [v["token"] for g in inv_vars for v in g.get("variables", [])]
+    assert "{{ invoice.discount_inr }}" in all_inv_tokens
+    assert "{{ invoice.net_inr }}" in all_inv_tokens
+    assert "{{ insurance_claim.insurer_payable_inr }}" in all_inv_tokens
+
+    # Create a discounted invoice and verify /print renders the discount and net payable
+    cat = client.post("/v1/api/diagnostics/categories", headers=superuser_headers, json={"department_id": 1, "code": "CAT_RPT16", "name": "Report 16"}).json()
+    svc = client.post("/v1/api/diagnostics/catalog", headers=superuser_headers, json={"category_id": cat["id"], "code": "SVC_RPT16", "name": "Full Body Checkup", "service_type": "PACKAGE", "base_price_paise": 200000, "is_order_set": False}).json()
+    p, _ = _create_active_opd_encounter(client, doctor_headers)
+
+    inv = client.post("/v1/api/billing/invoices", headers=billing_headers, json={"patient_id": p["id"]}).json()
+    client.post(f"/v1/api/billing/invoices/{inv['id']}/items", headers=billing_headers, json={"service_id": svc["id"], "description": "Checkup", "quantity": 1, "unit_price_paise": 200000})
+    client.patch(f"/v1/api/billing/invoices/{inv['id']}/finalize", headers=billing_headers)
+    client.patch(
+        f"/v1/api/billing/invoices/{inv['id']}/discount",
+        headers=superuser_headers,
+        json={"discount_amount_paise": 50000, "discount_reason": "Staff Family 25% Waiver"},
+    )
+
+    print_res = client.get(f"/v1/api/billing/invoices/{inv['id']}/print", headers=billing_headers)
+    assert print_res.status_code == 200
+    assert "Staff Family 25% Waiver" in print_res.text
+    assert "₹1,500.00" in print_res.text

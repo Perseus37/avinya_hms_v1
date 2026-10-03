@@ -5,6 +5,10 @@ from sqlalchemy.engine import URL
 
 
 class Settings(BaseSettings):
+
+    ENVIRONMENT: str = "development"  # Set to "production" in live deployments
+    CONTROL_PLANE_MASTER_KEY: Optional[str] = None  # When set, protects onboarding_app.py endpoints
+    
     # 1. Platform & Default Tenant Identity
     PLATFORM_NAME: str
     BASE_DOMAIN: str

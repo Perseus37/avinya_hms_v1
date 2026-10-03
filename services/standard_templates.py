@@ -110,13 +110,26 @@ VARIABLE_CATALOG: Dict[ReportTypeEnum, List[Dict[str, Any]]] = {
     ],
     ReportTypeEnum.INVOICE: COMMON_GROUPS + [
         {
-            "group_name": "Invoice Totals & Status",
+            "group_name": "Invoice Totals, Discounts & Net Payable",
             "variables": [
                 {"label": "Invoice Number", "token": "{{ invoice.invoice_number }}", "sample": "INV-20261002-A1B2"},
                 {"label": "Invoice Status", "token": "{{ invoice.status }}", "sample": "PAID"},
-                {"label": "Total Amount (₹)", "token": "{{ invoice.total_inr }}", "sample": "₹500.00"},
-                {"label": "Amount Paid (₹)", "token": "{{ invoice.paid_inr }}", "sample": "₹500.00"},
+                {"label": "Gross Total (₹)", "token": "{{ invoice.total_inr }}", "sample": "₹10,000.00"},
+                {"label": "Discount / Concession (₹)", "token": "{{ invoice.discount_inr }}", "sample": "₹1,000.00"},
+                {"label": "Discount Reason", "token": "{{ invoice.discount_reason }}", "sample": "Senior Citizen 10% Concession"},
+                {"label": "Net Payable Amount (₹)", "token": "{{ invoice.net_inr }}", "sample": "₹9,000.00"},
+                {"label": "Amount Paid (₹)", "token": "{{ invoice.paid_inr }}", "sample": "₹9,000.00"},
                 {"label": "Balance Due (₹)", "token": "{{ invoice.balance_inr }}", "sample": "₹0.00"},
+            ],
+        },
+        {
+            "group_name": "Insurance & TPA Claim Split (If Applicable)",
+            "variables": [
+                {"label": "Claim Number", "token": "{{ insurance_claim.claim_number }}", "sample": "CLM-20261002-99A1"},
+                {"label": "Claim Status", "token": "{{ insurance_claim.status }}", "sample": "SETTLED"},
+                {"label": "Insurer Approved Payable (₹)", "token": "{{ insurance_claim.insurer_payable_inr }}", "sample": "₹7,200.00"},
+                {"label": "Patient Co-Pay Share (₹)", "token": "{{ insurance_claim.patient_copay_inr }}", "sample": "₹1,800.00"},
+                {"label": "TPA / Insurer UTR Ref", "token": "{{ insurance_claim.settlement_utr_reference }}", "sample": "NEFT-STAR-UTR9988"},
             ],
         },
         {
@@ -128,6 +141,17 @@ VARIABLE_CATALOG: Dict[ReportTypeEnum, List[Dict[str, Any]]] = {
                 {"label": "Qty", "token": "{{ item.quantity }}"},
                 {"label": "Unit Price", "token": "{{ item.unit_price_inr }}"},
                 {"label": "Total Price", "token": "{{ item.total_price_inr }}"},
+            ],
+        },
+        {
+            "group_name": "Payment & Advance Adjustment Receipts",
+            "is_table": True,
+            "iterator": "payments",
+            "columns": [
+                {"label": "Receipt Number", "token": "{{ p.receipt_number }}"},
+                {"label": "Amount Paid (₹)", "token": "{{ p.amount_inr }}"},
+                {"label": "Payment Method (CASH/UPI/INSURANCE/ADVANCE_ADJUSTMENT)", "token": "{{ p.payment_method }}"},
+                {"label": "Transaction / Deposit Ref", "token": "{{ p.transaction_reference }}"},
             ],
         },
     ],
@@ -159,11 +183,11 @@ VARIABLE_CATALOG: Dict[ReportTypeEnum, List[Dict[str, Any]]] = {
             "variables": [
                 {"label": "Order ID", "token": "{{ order.id }}", "sample": "42"},
                 {"label": "Ordering Doctor", "token": "{{ order.ordering_doctor_name }}", "sample": "Dr. Gregory House"},
-                {"label": "Clinical Notes", "token": "{{ order.clinical_notes }}", "sample": "Rule out anemia"},
+                {"label": "Clinical Notes", "token": "{{ order.clinical_notes }}", "sample": "Rule out anemia / pulmonary embolism"},
             ],
         },
         {
-            "group_name": "Verified Lab & Radiology Tasks",
+            "group_name": "Verified Lab & Radiology PACS Tasks",
             "is_table": True,
             "iterator": "tasks",
             "columns": [
@@ -172,6 +196,10 @@ VARIABLE_CATALOG: Dict[ReportTypeEnum, List[Dict[str, Any]]] = {
                 {"label": "Reference / Notes", "token": "{{ task.result_notes }}"},
                 {"label": "Performed By", "token": "{{ task.performed_by_name }}"},
                 {"label": "Verified By", "token": "{{ task.verified_by_name }}"},
+                {"label": "DICOM Modality", "token": "{{ task.dicom_modality }}"},
+                {"label": "DICOM Accession No", "token": "{{ task.dicom_accession_number }}"},
+                {"label": "PACS Viewer URL", "token": "{{ task.pacs_viewer_url }}"},
+                {"label": "Radiologist Impression", "token": "{{ task.radiologist_impression }}"},
             ],
         },
     ],
@@ -185,6 +213,81 @@ VARIABLE_CATALOG: Dict[ReportTypeEnum, List[Dict[str, Any]]] = {
                 {"label": "Discharge Instructions", "token": "{{ admission.discharge_summary }}", "sample": "Follow up in OPD after 7 days."},
             ],
         },
+        {
+            "group_name": "Encounter ICD-10 Diagnoses",
+            "is_table": True,
+            "iterator": "diagnoses",
+            "columns": [
+                {"label": "Diagnosis Type (PRIMARY/SECONDARY)", "token": "{{ d.diagnosis_type }}"},
+                {"label": "ICD-10 Code", "token": "{{ d.icd10_code }}"},
+                {"label": "Description", "token": "{{ d.short_description }}"},
+            ],
+        },
+    ],
+    ReportTypeEnum.MLC_POLICE_REPORT: COMMON_GROUPS + [
+        {
+            "group_name": "Medico-Legal Case & Police Intimation Details",
+            "variables": [
+                {"label": "MLC Number", "token": "{{ mlc.mlc_number }}", "sample": "MLC-20261002-88F1"},
+                {"label": "Cause of Injury", "token": "{{ mlc.cause_of_injury }}", "sample": "ROAD_TRAFFIC_ACCIDENT"},
+                {"label": "Alleged History", "token": "{{ mlc.alleged_history }}", "sample": "Two-wheeler collision near Hitech City"},
+                {"label": "Identification Marks", "token": "{{ mlc.identification_marks }}", "sample": "Mole on right cheek"},
+                {"label": "Brought By Name & Relation", "token": "{{ mlc.brought_by_name }} ({{ mlc.brought_by_relation }})", "sample": "Ramesh Kumar (Brother)"},
+                {"label": "Police Station Name", "token": "{{ mlc.police_station_name }}", "sample": "Madhapur Police Station"},
+                {"label": "Constable Buckle No", "token": "{{ mlc.police_constable_buckle_no }}", "sample": "PC-4421-CYB"},
+                {"label": "FIR Number", "token": "{{ mlc.fir_number }}", "sample": "FIR-2026-0891"},
+                {"label": "Police Intimated Timestamp", "token": "{{ mlc.police_intimated_at }}", "sample": "2026-10-02 20:15 IST"},
+                {"label": "Casualty Medical Officer", "token": "{{ mlc.doctor_name }}", "sample": "Dr. Gregory House"},
+            ],
+        },
+    ],
+    ReportTypeEnum.SURGICAL_OPERATIVE_NOTE: COMMON_GROUPS + [
+        {
+            "group_name": "Surgery, Theatre & Anesthesia Details",
+            "variables": [
+                {"label": "Surgical Case Number", "token": "{{ surgery.case_number }}", "sample": "OT-20261002-11A2"},
+                {"label": "Operation Theatre", "token": "{{ surgery.theatre_name }}", "sample": "Modular Theatre 1 (OT_MOD_1)"},
+                {"label": "Procedure Name", "token": "{{ surgery.procedure_name }}", "sample": "Total Hip Arthroplasty"},
+                {"label": "Lead Surgeon", "token": "{{ surgery.surgeon_name }}", "sample": "Dr. Gregory House"},
+                {"label": "Anesthesia Type", "token": "{{ record.anesthesia_type }}", "sample": "SPINAL"},
+                {"label": "ASA Physical Status Grade", "token": "{{ record.asa_physical_status }}", "sample": "2"},
+                {"label": "Estimated Blood Loss (mL)", "token": "{{ record.estimated_blood_loss_ml }}", "sample": "250"},
+                {"label": "Operative Findings", "token": "{{ record.operative_findings }}", "sample": "Prosthesis seated with good stability."},
+                {"label": "Post-Op Instructions", "token": "{{ record.post_op_instructions }}", "sample": "Limb abduction pillow, DVT prophylaxis."},
+            ],
+        },
+        {
+            "group_name": "Surgical Implants & Prosthetics Table",
+            "is_table": True,
+            "iterator": "implants",
+            "columns": [
+                {"label": "Implant Name", "token": "{{ imp.implant_name }}"},
+                {"label": "Manufacturer", "token": "{{ imp.manufacturer }}"},
+                {"label": "Serial / Lot Number", "token": "{{ imp.serial_or_batch_number }}"},
+                {"label": "Quantity", "token": "{{ imp.quantity }}"},
+            ],
+        },
+    ],
+    ReportTypeEnum.BIRTH_CERTIFICATE: COMMON_GROUPS + [
+        {
+            "group_name": "Maternity & Newborn Details",
+            "variables": [
+                {"label": "Birth Certificate No", "token": "{{ birth.certificate_number }}", "sample": "BIRTH-20261003-01"},
+                {"label": "Newborn MRN", "token": "{{ birth.newborn_mrn }}", "sample": "MRN-NB-001"},
+                {"label": "Birth Weight (kg)", "token": "{{ birth.birth_weight_kg }}", "sample": "3.2"},
+                {"label": "APGAR Score (1m/5m)", "token": "{{ birth.apgar_1min }}/{{ birth.apgar_5min }}", "sample": "8/9"},
+            ],
+        }
+    ],
+    ReportTypeEnum.DEATH_CERTIFICATE_MCCD: COMMON_GROUPS + [
+        {
+            "group_name": "MCCD Cause of Death Details",
+            "variables": [
+                {"label": "MCCD Certificate No", "token": "{{ death.certificate_number }}", "sample": "MCCD-20261003-01"},
+                {"label": "Immediate Cause ICD-10", "token": "{{ death.icd10_code }}", "sample": "I21.9"},
+                {"label": "Manner of Death", "token": "{{ death.manner_of_death }}", "sample": "NATURAL"},
+            ],
+        }
     ],
 }
 
@@ -314,7 +417,14 @@ STANDARD_TEMPLATES: List[Dict[str, Any]] = [
                 {% endfor %}
               </tbody>
             </table>
-            <p><strong>Total Amount:</strong> {{ invoice.total_inr }}</p>
+            <p><strong>Gross Amount:</strong> {{ invoice.total_inr }}</p>
+            {% if invoice.discount_paise and invoice.discount_paise > 0 %}
+            <p><strong>Discount / Concession ({{ invoice.discount_reason }}):</strong> -{{ invoice.discount_inr }}</p>
+            {% endif %}
+            <p><strong>Net Payable Amount:</strong> {{ invoice.net_inr }}</p>
+            {% if insurance_claim and insurance_claim.claim_number != 'N/A' %}
+            <p><strong>Insurance Claim ({{ insurance_claim.claim_number }} - {{ insurance_claim.status }}):</strong> Insurer Share: {{ insurance_claim.insurer_payable_inr }} | Patient Co-Pay: {{ insurance_claim.patient_copay_inr }}</p>
+            {% endif %}
             <p><strong>Amount Paid:</strong> {{ invoice.paid_inr }}</p>
             <p><strong>Balance Due:</strong> {{ invoice.balance_inr }}</p>
             <h3>Payment Receipts</h3>
@@ -535,5 +645,50 @@ STANDARD_TEMPLATES: List[Dict[str, Any]] = [
             </ul>
         """,
         "footer_html": "<p style='margin-top:30px;'><strong>Lead Surgeon Signature: {{ surgery.surgeon_name }}</strong></p>",
+    },
+    # 9. Official Maternity Birth Certificate
+    {
+        "report_type": ReportTypeEnum.BIRTH_CERTIFICATE,
+        "code": "SYS_BIRTH_CERTIFICATE_A4",
+        "name": "Standard A4 Official Hospital Birth Certificate",
+        "description": "Municipal & NABH birth certificate with newborn MRN, APGAR scores, birth weight, and mother details.",
+        "page_size": PageSizeEnum.A4_PORTRAIT,
+        "is_default": True,
+        "layout_schema": json.dumps({
+            "canvas": {"width_mm": 210, "height_mm": 297, "grid_columns": 12},
+            "widgets": [{"id": "bc_hdr", "type": "header", "x": 0, "y": 0, "w": 12, "h": 2}],
+        }),
+        "css_styles": "",
+        "header_html": "<h1>{{ tenant.hospital_name }} ({{ tenant.branch_code }})</h1><h2>OFFICIAL HOSPITAL BIRTH RECORD — {{ birth.certificate_number }}</h2>",
+        "html_template": """
+            <p><strong>Mother Name:</strong> {{ mother.full_name }} (MRN: {{ mother.mrn }})</p>
+            <p><strong>Newborn Name:</strong> {{ birth.baby_full_name }} | <strong>Newborn MRN:</strong> {{ birth.newborn_mrn }}</p>
+            <p><strong>Gender:</strong> {{ birth.baby_gender }} | <strong>Time of Birth:</strong> {{ birth.time_of_birth }}</p>
+            <p><strong>Delivery Mode:</strong> {{ birth.delivery_mode }} | <strong>Birth Weight:</strong> {{ birth.birth_weight_kg }} kg | <strong>APGAR (1m/5m):</strong> {{ birth.apgar_1min }}/10 &amp; {{ birth.apgar_5min }}/10</p>
+        """,
+        "footer_html": "<p style='margin-top:30px;'><strong>Attending Obstetrician: {{ birth.doctor_name }}</strong></p>",
+    },
+    # 10. Form 4 Medical Certificate of Cause of Death (MCCD)
+    {
+        "report_type": ReportTypeEnum.DEATH_CERTIFICATE_MCCD,
+        "code": "SYS_MCCD_DEATH_CERTIFICATE_A4",
+        "name": "Standard A4 Form 4 Medical Certificate of Cause of Death (MCCD)",
+        "description": "Statutory WHO/Municipal Form 4 Medical Certificate of Cause of Death with ICD-10 coding.",
+        "page_size": PageSizeEnum.A4_PORTRAIT,
+        "is_default": True,
+        "layout_schema": json.dumps({
+            "canvas": {"width_mm": 210, "height_mm": 297, "grid_columns": 12},
+            "widgets": [{"id": "dc_hdr", "type": "header", "x": 0, "y": 0, "w": 12, "h": 2}],
+        }),
+        "css_styles": "",
+        "header_html": "<h1>{{ tenant.hospital_name }} ({{ tenant.branch_code }})</h1><h2>FORM 4: MEDICAL CERTIFICATE OF CAUSE OF DEATH (MCCD) — {{ death.certificate_number }}</h2>",
+        "html_template": """
+            <p><strong>Deceased Patient:</strong> {{ patient.full_name }} (MRN: {{ patient.mrn }}, Gender: {{ patient.gender }})</p>
+            <p><strong>Time of Death:</strong> {{ death.time_of_death }} | <strong>Manner of Death:</strong> {{ death.manner_of_death }}</p>
+            <p><strong>Immediate Cause of Death (ICD-10):</strong> {{ death.icd10_code }} — {{ death.diagnosis_description }}</p>
+            <p><strong>Antecedent / Underlying Causes:</strong> {{ death.antecedent_cause_notes }}</p>
+            <p><strong>Autopsy Advised:</strong> {{ death.is_autopsy_advised }} | <strong>Body Handed Over To:</strong> {{ death.body_handed_over_to }}</p>
+        """,
+        "footer_html": "<p style='margin-top:30px;'><strong>Certifying Medical Practitioner: {{ death.doctor_name }}</strong></p>",
     },
 ]

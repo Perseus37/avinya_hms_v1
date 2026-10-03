@@ -21,6 +21,9 @@ from models import (
     PrescriptionItem,
     PrescriptionStatusEnum,
     User,
+    PaymentMethodEnum,
+    PharmacyReturnLog,
+    RefundVoucher,
 )
 from schemas.v1.schemas import (
     DispenseRequest,
@@ -35,6 +38,9 @@ from schemas.v1.schemas import (
     PrescriptionCreate,
     PrescriptionResponse,
     PrescriptionUpdate,
+    PharmacyReturnLogResponse,
+    PharmacyReturnRequest,
+
 )
 from services.cpoe import check_allergy_hard_stop
 
@@ -495,3 +501,136 @@ def dispense_medication(
             status_code=409,
             detail="Dispensing failed because the prescription or inventory batch is locked by a concurrent transaction.",
         )
+
+@router.post(
+    "/prescriptions/{prescription_id}/return",
+    response_model=list[PharmacyReturnLogResponse],
+    status_code=status.HTTP_201_CREATED,
+)
+def return_dispensed_medication(
+    prescription_id: int,
+    payload: PharmacyReturnRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("pharmacy:write", "pharmacy:dispense")),
+):
+    """
+    Processes ward/patient medication stock returns:
+    1. Restores returned quantity to InventoryBatch.stock_quantity.
+    2. Decrements PrescriptionItem.dispensed_quantity and updates Prescription.status.
+    3. Automatically credits/reduces the 'PHARMACY:' line item on a DRAFT invoice,
+       or issues an immutable RefundVoucher if the encounter's invoice is already PAID.
+    """
+    stmt_rx = (
+        select(Prescription)
+        .options(joinedload(Prescription.encounter))
+        .where(Prescription.id == prescription_id)
+        .with_for_update()
+    )
+    rx = db.execute(stmt_rx).scalar_one_or_none()
+    if not rx:
+        raise HTTPException(status_code=404, detail="Prescription not found.")
+
+    return_logs: list[PharmacyReturnLog] = []
+    total_credit_paise = 0
+
+    inv_stmt = (
+        select(Invoice)
+        .options(joinedload(Invoice.line_items))
+        .where(Invoice.encounter_id == rx.encounter_id, Invoice.status != InvoiceStatusEnum.VOID)
+        .order_by(Invoice.id.desc())
+        .with_for_update()
+    )
+    invoice = db.execute(inv_stmt).unique().scalars().first()
+
+    for ret in payload.items:
+        rx_item = db.execute(
+            select(PrescriptionItem)
+            .where(
+                PrescriptionItem.id == ret.prescription_item_id,
+                PrescriptionItem.prescription_id == rx.id,
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
+        if not rx_item:
+            raise HTTPException(status_code=404, detail=f"Prescription item {ret.prescription_item_id} not found.")
+        if ret.quantity_to_return > rx_item.dispensed_quantity:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot return {ret.quantity_to_return} units; only {rx_item.dispensed_quantity} units are currently dispensed.",
+            )
+
+        batch = db.execute(
+            select(InventoryBatch).where(InventoryBatch.id == ret.batch_id).with_for_update()
+        ).scalar_one_or_none()
+        if not batch or batch.medication_id != rx_item.medication_id:
+            raise HTTPException(status_code=400, detail="Batch does not match prescription item medication.")
+
+        med = db.get(MedicationMaster, rx_item.medication_id)
+        credit_paise = ret.quantity_to_return * batch.unit_price_paise
+        total_credit_paise += credit_paise
+
+        # 1. Restore physical stock & decrement dispensed count
+        batch.stock_quantity += ret.quantity_to_return
+        rx_item.dispensed_quantity -= ret.quantity_to_return
+
+        # 2. Adjust DRAFT invoice line item if invoice is still open
+        if invoice and invoice.status == InvoiceStatusEnum.DRAFT and med:
+            batch_tag = f"Batch: {batch.batch_number}"
+            matching_line = next(
+                (
+                    li
+                    for li in invoice.line_items
+                    if li.description.startswith("PHARMACY:") and batch_tag in li.description
+                ),
+                None,
+            )
+            if matching_line:
+                if matching_line.quantity <= ret.quantity_to_return:
+                    invoice.total_amount_paise = max(0, invoice.total_amount_paise - matching_line.total_price_paise)
+                    db.delete(matching_line)
+                else:
+                    matching_line.quantity -= ret.quantity_to_return
+                    matching_line.total_price_paise = matching_line.quantity * matching_line.unit_price_paise
+                    invoice.total_amount_paise = max(0, invoice.total_amount_paise - credit_paise)
+
+        log = PharmacyReturnLog(
+            prescription_id=rx.id,
+            prescription_item_id=rx_item.id,
+            batch_id=batch.id,
+            returned_by_id=current_user.id,
+            returned_quantity=ret.quantity_to_return,
+            credit_amount_paise=credit_paise,
+            return_reason=ret.return_reason,
+        )
+        db.add(log)
+        return_logs.append(log)
+
+    # If the invoice was already PAID, automatically issue an auditable RefundVoucher
+    if invoice and invoice.status == InvoiceStatusEnum.PAID and total_credit_paise > 0:
+        date_prefix = datetime.now(timezone.utc).strftime("%Y%m%d")
+        voucher = RefundVoucher(
+            voucher_number=f"RFND-PHM-{date_prefix}-{uuid.uuid4().hex[:8].upper()}",
+            patient_id=invoice.patient_id,
+            deposit_id=None,
+            invoice_id=invoice.id,
+            refund_amount_paise=total_credit_paise,
+            refund_method=PaymentMethodEnum.CASH,
+            transaction_reference=f"RX-RET-{rx.id}",
+            reason="Pharmacy dispensed stock return credit on paid invoice",
+            approved_by_id=current_user.id,
+        )
+        db.add(voucher)
+
+    db.flush()
+    all_items = db.query(PrescriptionItem).filter(PrescriptionItem.prescription_id == rx.id).all()
+    if all(i.dispensed_quantity == 0 for i in all_items):
+        rx.status = PrescriptionStatusEnum.ACTIVE
+    elif all(i.dispensed_quantity == i.requested_quantity for i in all_items):
+        rx.status = PrescriptionStatusEnum.DISPENSED
+    else:
+        rx.status = PrescriptionStatusEnum.PARTIAL
+
+    db.commit()
+    for l in return_logs:
+        db.refresh(l)
+    return return_logs

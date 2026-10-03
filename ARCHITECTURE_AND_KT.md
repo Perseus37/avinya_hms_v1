@@ -121,3 +121,49 @@ docker compose exec api python restore_tenant.py `
   --file backups/hms_apollo_YYYYMMDD_HHMMSS.dump.enc `
   --db-name hms_apollo_restored `
   --key "<TENANT_BACKUP_ENCRYPTION_KEY>"
+
+---
+
+## 11. Addendum (v3.0.0): Phases 9, 11, 12 & 13 Enterprise Clinical & Financial Modules
+
+### 11.1 Phase 9A–9D: Insurance, TPA, Plan Tariffs, Auto-Billing, Discounts & Advance Deposits
+* **Insurer Plans & Negotiated Tariff Rate Cards (`InsuranceProvider`, `InsurancePlan`, `InsurancePlanTariff`):**
+  * Supports `TPA`, `INSURER`, `GOVERNMENT_SCHEME`, and `CORPORATE` payers.
+  * When a patient holds an active `PatientInsurancePolicy` linked to an `InsurancePlan` (`apply_tariff_automatically=True`), `resolve_patient_service_price_paise()` automatically bills the negotiated `tariff_price_paise` instead of the hospital rack rate (`ServiceCatalog.base_price_paise`).
+  * `POST /v1/api/insurance/plans/compare-estimate` compares multiple plans side-by-side (Rack Total, MoU Savings, Excluded Items, Room-Rent Excess, Insurer Payable, and Patient Out-of-Pocket).
+* **Cashless Pre-Authorization (`InsurancePreAuth`):**
+  * Requires an `ACTIVE` encounter[cite: 1], a non-expired policy, `requested_amount_paise <= sum_insured_paise`, and a billable ICD-10 diagnosis (`DiagnosisMaster.is_billable == True`, otherwise `400 Bad Request`)[cite: 1].
+* **Smart Line-by-Line Claim Adjudication (`InsuranceClaim`):**
+  * Evaluates every `InvoiceLineItem`[cite: 1]: pushes non-covered items (`is_covered == False`) and daily room-rent excess above `plan.max_room_rent_daily_paise` 100% to `patient_copay_paise`, applies `copay_percentage` to the eligible pool, and posts an atomic `PaymentReceipt` (`PaymentMethodEnum.INSURANCE`)[cite: 1] upon `PATCH /v1/api/insurance/claims/{id}/settle`.
+* **5 Automated Clinical Billing Hooks (`services/auto_billing.py`):**
+  1. **OPD Consultation:** Transitioning an appointment to `IN_CONSULTATION`[cite: 5] auto-bills `DoctorProfile.consultation_fee_paise`[cite: 1].
+  2. **IPD Multi-Bed Stay:** Discharging an admission[cite: 3] inspects all `BedTransferLog` segments[cite: 1, 3] and auto-bills each bed's `base_daily_rate_paise * days`[cite: 1].
+  3. **Diagnostics CPOE:** Ordering tests/packages[cite: 6] auto-bills top-level `ordered_service_ids`[cite: 2, 6] (charging parent package price once) and automatically credits/removes them if the order is cancelled while the invoice is in `DRAFT`.
+  4. **Surgery & OT Completion:** Completing a surgery auto-bills the procedure fee, `OperationTheatre.hourly_rate_paise`, and all `SurgicalImplantLog` serial-tracked prosthetics.
+  5. **Blood Bank Transfusion Issue:** Issuing a cross-matched blood bag auto-bills `BloodBagInventory.processing_fee_paise`.
+  * *Tamper Guard:* All auto-billed line items (`PHARMACY:`, `OPD CONSULTATION:`, `IPD BED CHARGE:`, `DIAGNOSTICS [`, `SURGERY [`, `SURGICAL IMPLANT [`, `BLOOD BANK [`) are locked against manual deletion (`403 Forbidden`) in `billing_router.py`[cite: 4].
+* **Manager-Authorized Discounts & Advance Deposits (`billing_router.py`):**
+  * `PATCH /v1/api/billing/invoices/{id}/discount` requires `billing:reverse` / `billing:void` and computes `net_amount_paise = total_amount_paise - discount_amount_paise`.
+  * `POST /v1/api/billing/deposits` collects upfront IPD/OPD deposits; `POST .../invoices/{id}/apply-deposit` draws down deposits via `PaymentMethodEnum.ADVANCE_ADJUSTMENT`; `POST .../deposits/{id}/refund` issues an immutable `RefundVoucher`.
+
+### 11.2 Phase 11: Inpatient Nursing eMAR, Fluid I/O & Emergency Room (ER) Triage / MLC
+* **Bedside eMAR (`MedicationAdministrationLog`):** Re-runs `check_allergy_hard_stop()` at the moment of bedside `ADMINISTERED` charting (`409 Conflict` if a new severe allergy was charted after the eRx was written) and requires mandatory clinical notes for `HELD`, `REFUSED`, or `MISSED` doses (`400`).
+* **Fluid Balance (`FluidBalanceLog`):** Tracks `INTAKE` vs `OUTPUT` in mL and computes `net_balance_ml`.
+* **ER Triage & MLC (`ERTriageAssessment` & `MedicoLegalCase`):** Enforces `EncounterTypeEnum.ER`[cite: 1], sorts active ER queues by `RED_RESUSCITATION` priority, registers doctor-authored `MLC-YYYYMMDD-...` cases, locks police intimation (`409`), and prints the official SHO Police Intimation Certificate (`SYS_MLC_POLICE_INTIMATION_A4`).
+
+### 11.3 Phase 12: Operation Theatre (OT), WHO Safety Checklist & Implant Traceability
+* **Conflict Guard (`SurgicalSchedule`):** Blocks overlapping time windows in the same `OperationTheatre` or for the same `lead_surgeon_id` (`409 Conflict`).
+* **WHO Surgical Safety Hard-Stops (`WHOSurgicalSafetyChecklist`):** Blocks `IN_PROGRESS` until Sign-In/Time-Out checks are confirmed (`400`), and blocks `COMPLETED` until `sponge_instrument_count_verified` (Sign-Out) and `OperativeAnesthesiaRecord` are recorded (`400`). Prints `SYS_OT_OPERATIVE_NOTE_A4`.
+
+### 11.4 Phase 13: Blood Bank Transfusion Safety & Radiology PACS/DICOM
+* **ABO/Rh Compatibility Hard-Stop (`BloodCrossMatchOrder`):** Evaluates `PRBC_COMPATIBILITY_MATRIX` and `FFP` rules against `patient.blood_group`[cite: 1]; incompatible blood groups are blocked with `409 Conflict`. Adverse reactions quarantine the bag as `REACTION_HALTED`.
+* **Radiology PACS (`RadiologyStudyMetadata`):** Attaches `study_instance_uid`, `accession_number`, `modality`, `pacs_viewer_url`, and `radiation_dose_mgy` strictly to `ServiceTypeEnum.RADIOLOGY` tasks[cite: 1] (`400` if `LAB`[cite: 1]).
+
+### 11.5 Updated Automated Test Matrix (119 Scenarios Total)
+| Test File | Count | Module |
+| :--- | :---: | :--- |
+| `test_01` – `test_08` | **94** | Core Tenancy, IAM/RBAC, MPI/MDM/CPOE, Wards/OPD/ADT, LIS, Pharmacy/Billing, Federation/Backups, EMR & Switchable Templates |
+| `test_09_insurance_and_auto_billing.py` | **14** | TPA/Insurer Policies, Pre-Auth Guards, Co-Pay Claims, Auto-Billing (OPD, IPD Beds, Diagnostics), Plan Tariffs, Room Caps, Plan Estimator, Discounts & Advance Deposit Refunds |
+| `test_10_nursing_emar_and_er_mlc.py` | **5** | Inpatient eMAR, Bedside Allergy Hard-Stop, Fluid I/O Balance, ER Acuity Triage Queue & MLC Police Intimation Print |
+| `test_11_operation_theatre_and_surgery.py` | **3** | OT Theatre/Surgeon Overlap Guard, WHO Safety Checklist Hard-Stops, Surgery/Implant Auto-Billing & Operative Print |
+| `test_12_blood_bank_and_radiology_pacs.py` | **3** | ABO/Rh Compatibility Hard-Stop (`409`), Universal Donor Issue + Auto-Billing + Reaction Quarantine, and PACS DICOM Study Attachment |

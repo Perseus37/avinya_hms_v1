@@ -45,7 +45,8 @@ from models import (
     BloodComponentTypeEnum,
     DicomModalityEnum,
     TransfusionReactionTypeEnum,
-
+    DeliveryModeEnum,
+    MannerOfDeathEnum,
 )
 
 T = TypeVar("T")
@@ -600,6 +601,9 @@ class DiagnosticTaskResponse(BaseModel):
     service_id: int
     status: TaskStatusEnum
     result_value: Optional[str] = None
+    result_notes: Optional[str] = None
+    is_critical_panic: bool = False
+    rejection_reason: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -619,9 +623,11 @@ class DiagnosticOrderUpdate(BaseModel):
 
 
 class TaskResultEntry(BaseModel):
-    result_value: str
+    result_value: Optional[str] = None
     result_notes: Optional[str] = None
     status: TaskStatusEnum = TaskStatusEnum.RESULT_ENTERED
+    is_critical_panic: bool = False
+    rejection_reason: Optional[str] = None
 
 
 # --- DEPARTMENT SCHEMAS ---
@@ -704,6 +710,7 @@ class BedTransferResponse(BaseModel):
 class ClinicalDischargeRequest(BaseModel):
     discharge_disposition: DischargeDispositionEnum
     discharge_summary: str
+    force_financial_override: bool = False
 
 
 class PatientEncounterUpdate(BaseModel):
@@ -806,6 +813,7 @@ class AppointmentResponse(BaseModel):
     department_id: int
     appointment_time: datetime
     status: AppointmentStatusEnum
+    token_number: Optional[int] = None
     reason_for_visit: Optional[str]
     encounter_id: Optional[int]
     model_config = ConfigDict(from_attributes=True)
@@ -1539,4 +1547,144 @@ class RadiologyStudyResponse(BaseModel):
     pacs_viewer_url: str
     radiation_dose_mgy: Optional[float] = None
     radiologist_impression: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+# =====================================================================
+# PHASE 15A: PHARMACY RETURNS, OPD LEAVES, COMORBIDITIES & PHYSICAL EXAMS
+# =====================================================================
+
+class PharmacyReturnItem(BaseModel):
+    prescription_item_id: int
+    batch_id: int
+    quantity_to_return: int = Field(gt=0)
+    return_reason: str = Field(min_length=3, max_length=255)
+
+
+class PharmacyReturnRequest(BaseModel):
+    items: List[PharmacyReturnItem] = Field(min_length=1)
+
+
+class PharmacyReturnLogResponse(BaseModel):
+    id: int
+    prescription_id: int
+    prescription_item_id: int
+    batch_id: int
+    returned_by_id: int
+    returned_quantity: int
+    credit_amount_paise: int
+    return_reason: str
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DoctorLeaveCreate(BaseModel):
+    doctor_id: int
+    start_time: datetime
+    end_time: datetime
+    reason: str = Field(min_length=3, max_length=255)
+
+
+class DoctorLeaveResponse(BaseModel):
+    id: int
+    doctor_id: int
+    start_time: datetime
+    end_time: datetime
+    reason: str
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PatientComorbidityCreate(BaseModel):
+    comorbidity_id: int
+    clinical_remarks: Optional[str] = Field(default=None, max_length=500)
+
+
+class PatientComorbidityResponse(BaseModel):
+    id: int
+    patient_id: int
+    comorbidity_id: int
+    recorded_by_id: int
+    clinical_remarks: Optional[str] = None
+    is_active: bool
+    comorbidity: ComorbidityResponse
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EncounterPhysicalExamCreate(BaseModel):
+    exam_master_id: int
+    is_normal: bool = True
+    findings_notes: Optional[str] = None
+
+
+class EncounterPhysicalExamResponse(BaseModel):
+    id: int
+    encounter_id: int
+    exam_master_id: int
+    recorded_by_id: int
+    is_normal: bool
+    findings_notes: Optional[str] = None
+    exam_master: PhysicalExamResponse
+    model_config = ConfigDict(from_attributes=True)
+
+# =====================================================================
+# PHASE 15B: MATERNITY BIRTH & STATUTORY MORTALITY (MCCD) SCHEMAS
+# =====================================================================
+
+class BirthRecordCreate(BaseModel):
+    mother_encounter_id: int
+    baby_full_name: Optional[str] = None
+    baby_gender: GenderEnum
+    baby_blood_group: Optional[BloodGroupEnum] = None
+    time_of_birth: datetime
+    delivery_mode: DeliveryModeEnum
+    birth_weight_kg: float = Field(gt=0.0, le=10.0)
+    apgar_1min: int = Field(ge=0, le=10)
+    apgar_5min: int = Field(ge=0, le=10)
+    is_stillborn: bool = False
+    clinical_notes: Optional[str] = None
+
+
+class BirthRecordResponse(BaseModel):
+    id: int
+    certificate_number: str
+    mother_encounter_id: int
+    mother_patient_id: int
+    newborn_patient_id: Optional[int] = None
+    newborn_mrn: Optional[str] = None
+    attending_doctor_id: int
+    baby_full_name: str
+    baby_gender: GenderEnum
+    baby_blood_group: Optional[BloodGroupEnum] = None
+    time_of_birth: datetime
+    delivery_mode: DeliveryModeEnum
+    birth_weight_kg: float
+    apgar_1min: int
+    apgar_5min: int
+    is_stillborn: bool
+    clinical_notes: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DeathRecordCreate(BaseModel):
+    encounter_id: int
+    immediate_cause_diagnosis_id: int
+    time_of_death: datetime
+    manner_of_death: MannerOfDeathEnum = MannerOfDeathEnum.NATURAL
+    antecedent_cause_notes: Optional[str] = None
+    is_autopsy_advised: bool = False
+    body_handed_over_to: Optional[str] = None
+
+
+class DeathRecordResponse(BaseModel):
+    id: int
+    certificate_number: str
+    encounter_id: int
+    patient_id: int
+    certified_by_doctor_id: int
+    immediate_cause_diagnosis_id: int
+    time_of_death: datetime
+    manner_of_death: MannerOfDeathEnum
+    antecedent_cause_notes: Optional[str] = None
+    is_autopsy_advised: bool
+    body_handed_over_to: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)

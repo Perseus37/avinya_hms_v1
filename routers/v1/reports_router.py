@@ -26,6 +26,8 @@ from models import (
     ReportTypeEnum,
     TaskStatusEnum,
     User,
+    InsuranceClaim,
+    RadiologyStudyMetadata,
 )
 from services.standard_templates import (
     STANDARD_TEMPLATES,
@@ -285,21 +287,45 @@ def _build_sample_context(
             "invoice_number": "INV-SAMPLE-001",
             "status": "PAID",
             "created_at": "2026-10-02 14:30 IST",
-            "total_inr": "₹500.00",
-            "paid_inr": "₹500.00",
+            "total_inr": "₹1,000.00",
+            "discount_paise": 10000,
+            "discount_inr": "₹100.00",
+            "discount_reason": "Senior Citizen Concession",
+            "net_inr": "₹900.00",
+            "paid_inr": "₹900.00",
             "balance_inr": "₹0.00",
         },
+        "insurance_claim": {
+            "claim_number": "CLM-SAMPLE-01",
+            "status": "SETTLED",
+            "insurer_payable_inr": "₹720.00",
+            "patient_copay_inr": "₹180.00",
+            "settlement_utr_reference": "NEFT-SAMPLE-UTR",
+        },
         "line_items": [
-            {"description": "OPD Consultation", "quantity": 1, "unit_price_inr": "₹500.00", "total_price_inr": "₹500.00"}
+            {"description": "OPD Consultation", "quantity": 1, "unit_price_inr": "₹1,000.00", "total_price_inr": "₹1,000.00"}
         ],
-        "payments": [{"receipt_number": "RCP-SAMPLE-01", "amount_inr": "₹500.00", "payment_method": "UPI"}],
+        "payments": [
+            {"receipt_number": "RCP-SAMPLE-01", "amount_inr": "₹900.00", "payment_method": "UPI", "transaction_reference": "UPI-123"}
+        ],
         "prescription": {"id": 1, "clinical_notes": "Drink plenty of warm fluids."},
         "medications": [
             {"brand_name": "Dolo-650", "generic_name": "Paracetamol", "strength": "650mg", "dosage_instruction": "1-1-1", "requested_quantity": 10}
         ],
         "order": {"id": 1, "ordering_doctor_name": "Dr. Gregory House", "clinical_notes": "Rule out viral fever"},
         "tasks": [
-            {"service_code": "LAB_HB", "service_name": "Hemoglobin", "result_value": "14.2 g/dL", "result_notes": "Normal", "performed_by_name": "Tech A", "verified_by_name": "Dr. Pathologist"}
+            {
+                "service_code": "LAB_HB",
+                "service_name": "Hemoglobin",
+                "result_value": "14.2 g/dL",
+                "result_notes": "Normal",
+                "performed_by_name": "Tech A",
+                "verified_by_name": "Dr. Pathologist",
+                "dicom_modality": "N/A",
+                "dicom_accession_number": "N/A",
+                "pacs_viewer_url": "",
+                "radiologist_impression": "",
+            }
         ],
         "admission": {
             "admitting_doctor_name": "Dr. Gregory House",
@@ -309,6 +335,59 @@ def _build_sample_context(
         },
         "diagnoses": [{"diagnosis_type": "PRIMARY", "icd10_code": "J18.9", "short_description": "Pneumonia, unspecified"}],
         "signed_notes": [{"assessment_notes": "Community acquired pneumonia", "plan_notes": "IV antibiotics completed"}],
+        "mlc": {
+            "mlc_number": "MLC-SAMPLE-01",
+            "cause_of_injury": "ROAD_TRAFFIC_ACCIDENT",
+            "alleged_history": "Two-wheeler skid",
+            "identification_marks": "Mole on right cheek",
+            "brought_by_name": "Ramesh Kumar",
+            "brought_by_relation": "Brother",
+            "police_station_name": "Madhapur PS",
+            "police_constable_buckle_no": "PC-4421",
+            "fir_number": "FIR-2026-01",
+            "police_intimated_at": "2026-10-02 20:00 IST",
+            "doctor_name": "Dr. Gregory House",
+        },
+        "surgery": {
+            "case_number": "OT-SAMPLE-01",
+            "theatre_name": "Modular Theatre 1",
+            "procedure_name": "Total Hip Arthroplasty",
+            "surgeon_name": "Dr. Gregory House",
+        },
+        "record": {
+            "anesthesia_type": "SPINAL",
+            "asa_physical_status": 2,
+            "estimated_blood_loss_ml": 250,
+            "operative_findings": "Prosthesis seated cleanly.",
+            "post_op_instructions": "Monitor vitals q1h.",
+        },
+        "implants": [
+            {"implant_name": "Titanium Stem", "manufacturer": "Zimmer", "serial_or_batch_number": "ZIM-99", "quantity": 1}
+        ],
+        "mother": {"full_name": "Ananya Rao", "mrn": "MRN-MOM01"},
+        "birth": {
+            "certificate_number": "BIRTH-SAMPLE-01",
+            "baby_full_name": "Baby of Ananya Rao",
+            "newborn_mrn": "MRN-NB-SAMPLE",
+            "baby_gender": "FEMALE",
+            "time_of_birth": "2026-10-03 08:30 IST",
+            "delivery_mode": "NORMAL_VAGINAL",
+            "birth_weight_kg": 3.2,
+            "apgar_1min": 8,
+            "apgar_5min": 9,
+            "doctor_name": "Dr. Gregory House",
+        },
+        "death": {
+            "certificate_number": "MCCD-SAMPLE-01",
+            "time_of_death": "2026-10-03 04:15 IST",
+            "manner_of_death": "NATURAL",
+            "icd10_code": "I21.9",
+            "diagnosis_description": "Acute myocardial infarction",
+            "antecedent_cause_notes": "Coronary artery disease",
+            "is_autopsy_advised": "No",
+            "body_handed_over_to": "Next of Kin",
+            "doctor_name": "Dr. Gregory House",
+        },
     }
 
 @router.post(
@@ -631,7 +710,9 @@ def print_invoice_and_receipt(
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found.")
 
-    balance_paise = invoice.total_amount_paise - invoice.amount_paid_paise
+    balance_paise = invoice.net_amount_paise - invoice.amount_paid_paise
+    claim = db.execute(select(InsuranceClaim).where(InsuranceClaim.invoice_id == invoice.id)).scalar_one_or_none()
+
     context = {
         "tenant": {
             "hospital_name": tenant.hospital_name,
@@ -649,8 +730,19 @@ def print_invoice_and_receipt(
             "status": invoice.status.value,
             "created_at": _fmt_ist(invoice.created_at),
             "total_inr": _fmt_inr(invoice.total_amount_paise),
+            "discount_paise": invoice.discount_amount_paise or 0,
+            "discount_inr": _fmt_inr(invoice.discount_amount_paise or 0),
+            "discount_reason": invoice.discount_reason or "None",
+            "net_inr": _fmt_inr(invoice.net_amount_paise),
             "paid_inr": _fmt_inr(invoice.amount_paid_paise),
             "balance_inr": _fmt_inr(balance_paise),
+        },
+        "insurance_claim": {
+            "claim_number": claim.claim_number if claim else "N/A",
+            "status": claim.status.value if claim else "N/A",
+            "insurer_payable_inr": _fmt_inr(claim.insurer_payable_paise) if claim else "₹0.00",
+            "patient_copay_inr": _fmt_inr(claim.patient_copay_paise) if claim else "₹0.00",
+            "settlement_utr_reference": (claim.settlement_utr_reference or "Pending") if claim else "N/A",
         },
         "line_items": [
             {
@@ -666,6 +758,7 @@ def print_invoice_and_receipt(
                 "receipt_number": p.receipt_number,
                 "amount_inr": _fmt_inr(p.amount_paid_paise),
                 "payment_method": p.payment_method.value,
+                "transaction_reference": p.transaction_reference or "N/A",
             }
             for p in invoice.payments
         ],
@@ -795,6 +888,14 @@ def print_diagnostic_lab_report(
             detail="Cannot print official lab report: one or more diagnostic tasks are not yet VERIFIED.",
         )
 
+    task_ids = [t.id for t in order.tasks]
+    studies_map = {}
+    if task_ids:
+        studies = db.execute(
+            select(RadiologyStudyMetadata).where(RadiologyStudyMetadata.diagnostic_task_id.in_(task_ids))
+        ).scalars().all()
+        studies_map = {s.diagnostic_task_id: s for s in studies}
+        
     context = {
         "tenant": {
             "hospital_name": tenant.hospital_name,
@@ -820,6 +921,10 @@ def print_diagnostic_lab_report(
                 "result_notes": t.result_notes or "",
                 "performed_by_name": t.performed_by.full_name if t.performed_by else "N/A",
                 "verified_by_name": t.verified_by.full_name if t.verified_by else "N/A",
+                "dicom_modality": studies_map[t.id].modality.value if t.id in studies_map else "N/A",
+                "dicom_accession_number": studies_map[t.id].accession_number if t.id in studies_map else "N/A",
+                "pacs_viewer_url": studies_map[t.id].pacs_viewer_url if t.id in studies_map else "",
+                "radiologist_impression": (studies_map[t.id].radiologist_impression or "") if t.id in studies_map else "",
             }
             for t in order.tasks
         ],
