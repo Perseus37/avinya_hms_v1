@@ -38,6 +38,7 @@ from schemas.v1.schemas import (
 )
 from services.cpoe import check_allergy_hard_stop
 from services.standard_templates import render_sandboxed_template
+from services.event_bus import publish_tenant_event
 
 router = APIRouter(prefix="/api", tags=["Inpatient Nursing (eMAR & Fluid I/O) & Emergency (ER Triage & MLC)"])
 
@@ -208,6 +209,7 @@ def get_encounter_fluid_balance_summary(
 def record_er_triage_assessment(
     encounter_id: int,
     payload: ERTriageCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(RequirePermission("adt:write", "opd:write")),
 ):
@@ -235,6 +237,22 @@ def record_er_triage_assessment(
         triaged_by_id=current_user.id,
         **payload.model_dump(),
     )
+    if payload.acuity_level.value == "RED_RESUSCITATION":
+        tenant = resolve_tenant_context(request)
+        publish_tenant_event(
+            tenant_slug=tenant.subdomain_slug,
+            stream="er_trauma",
+            event_type="ER_RESUSCITATION_ALERT",
+            payload={
+                "encounter_id": encounter_id,
+                "acuity_level": payload.acuity_level.value,
+                "chief_complaint": payload.chief_complaint,
+                "gcs_score": payload.gcs_score,
+                "is_mlc_suspected": payload.is_mlc_suspected,
+                "triaged_by_id": current_user.id,
+            },
+        )
+
     db.add(triage)
     db.commit()
     db.refresh(triage)

@@ -1,10 +1,10 @@
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from database import get_db
+from database import get_db, resolve_tenant_context
 from dependencies import RequirePermission, validate_pagination
 from models import (
     Appointment,
@@ -25,6 +25,7 @@ from schemas.v1.schemas import (
     PaginatedResponse,
 )
 from services.auto_billing import auto_bill_opd_consultation
+from services.event_bus import publish_tenant_event
 
 router = APIRouter(prefix="/api/opd", tags=["Outpatient Scheduling (OPD), Tokens & Doctor Leaves"])
 
@@ -247,6 +248,7 @@ def reschedule_appointment(
 def update_appointment_status(
     appointment_id: int,
     payload: AppointmentStatusUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     _: User = Depends(RequirePermission("opd:write")),
 ):
@@ -267,6 +269,20 @@ def update_appointment_status(
         raise HTTPException(status_code=400, detail=f"Invalid transition from {appointment.status} to {payload.status}.")
 
     if payload.status == AppointmentStatusEnum.IN_CONSULTATION:
+        tenant = resolve_tenant_context(request)
+        doctor = appointment.doctor
+        publish_tenant_event(
+            tenant_slug=tenant.subdomain_slug,
+            stream="waiting_room",
+            event_type="TOKEN_CALLED_IN_CONSULTATION",
+            payload={
+                "appointment_id": appointment.id,
+                "token_number": appointment.token_number,
+                "doctor_id": appointment.doctor_id,
+                "doctor_name": doctor.full_name if doctor else "Consulting Doctor",
+                "department_id": appointment.department_id,
+            },
+        )
         if not payload.encounter_id:
             raise HTTPException(status_code=400, detail="Must attach an active Encounter ID.")
 

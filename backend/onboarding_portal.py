@@ -43,6 +43,7 @@ from models import (
 )
 from seed import pwd_context, seed_universal_hospital_data
 from seed import seed_universal_hospital_data
+from security.envelope import encrypt_tenant_secret
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("avinya.onboarding_portal")
@@ -271,7 +272,8 @@ def provision_hospital(
     if req.deployment_mode == DeploymentModeEnum.CLOUD:
         target_db_url = ensure_postgres_db_exists(target_db_name)
         os.environ["DATABASE_URL"] = target_db_url
-        alembic_cfg = Config("alembic.ini")
+        alembic_ini_path = "backend/alembic.ini" if os.path.exists("backend/alembic.ini") else "alembic.ini"
+        alembic_cfg = Config(alembic_ini_path)
         alembic_cfg.set_main_option("sqlalchemy.url", target_db_url)
         command.upgrade(alembic_cfg, "head")
 
@@ -307,8 +309,8 @@ def provision_hospital(
         subdomain_slug=slug,
         db_name=target_db_name,
         admin_email=req.admin_email,
-        jwt_secret_key=jwt_secret,
-        backup_encryption_key=backup_key,
+        jwt_secret_key=encrypt_tenant_secret(jwt_secret),
+        backup_encryption_key=encrypt_tenant_secret(backup_key),
         deployment_mode=req.deployment_mode,
         api_base_url=subdomain_url,
         is_active=True,
@@ -493,12 +495,14 @@ def rotate_tenant_cryptographic_keys(
 
     rotated = {"subdomain_slug": tenant.subdomain_slug}
     if payload.rotate_jwt_secret:
-        tenant.jwt_secret_key = secrets.token_hex(32)
-        rotated["new_jwt_secret_key"] = tenant.jwt_secret_key
+        raw_jwt = secrets.token_hex(32)
+        tenant.jwt_secret_key = encrypt_tenant_secret(raw_jwt)
+        rotated["new_jwt_secret_key"] = raw_jwt
 
     if payload.rotate_backup_key:
-        tenant.backup_encryption_key = secrets.token_urlsafe(32)
-        rotated["new_backup_encryption_key"] = tenant.backup_encryption_key
+        raw_backup = secrets.token_urlsafe(32)
+        tenant.backup_encryption_key = encrypt_tenant_secret(raw_backup)
+        rotated["new_backup_encryption_key"] = raw_backup
 
     if payload.rotate_federation_key:
         raw_fed_key = f"fed_live_{secrets.token_urlsafe(32)}"

@@ -21,7 +21,8 @@ MIGRATION_LOCK_ID = 849204719
 def migrate_single_tenant_db(db_name: str) -> None:
     target_url = ensure_postgres_db_exists(db_name)
     os.environ["DATABASE_URL"] = target_url
-    alembic_cfg = Config("alembic.ini")
+    alembic_ini_path = "backend/alembic.ini" if os.path.exists("backend/alembic.ini") else "alembic.ini"
+    alembic_cfg = Config(alembic_ini_path)
     alembic_cfg.set_main_option("sqlalchemy.url", target_url)
     command.upgrade(alembic_cfg, "head")
 

@@ -33,6 +33,8 @@ from schemas.v1.schemas import (
     UserUpdate,
 )
 
+from security.envelope import decrypt_tenant_secret
+
 router = APIRouter(prefix="/api/auth", tags=["IAM & Auth"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -49,8 +51,13 @@ class CustomPermissionCreate(BaseModel):
 # -----------------------------------------------------------------------------
 # Authentication and session domain
 # -----------------------------------------------------------------------------
-@router.post("/login", response_model=TokenResponse)
-def login(payload: UserLogin, request: Request, db: Session = Depends(get_db), _: None = Depends(RateLimiter(scope="auth_login", max_requests=10, window_seconds=60)),):
+@router.post("/login")
+def login(
+    payload: UserLogin,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = Depends(RateLimiter(scope="auth_login", max_requests=10, window_seconds=60)),
+):
     """Authenticates a user against the active hospital database and signs a tenant-isolated JWT."""
     tenant = resolve_tenant_context(request)
     user = db.query(User).filter(User.email == payload.email).first()
@@ -77,7 +84,8 @@ def login(payload: UserLogin, request: Request, db: Session = Depends(get_db), _
         "branch_code": tenant.branch_code,
         "exp": expire,
     }
-    token = jwt.encode(to_encode, tenant.jwt_secret_key, algorithm=settings.ALGORITHM)
+    signing_key = decrypt_tenant_secret(tenant.jwt_secret_key)
+    token = jwt.encode(to_encode, signing_key, algorithm=settings.ALGORITHM)
     return {"access_token": token, "token_type": "bearer"}
 
 

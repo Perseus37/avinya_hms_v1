@@ -1,3 +1,22 @@
+import os
+import secrets
+
+# 1. Auto-generate ephemeral test secrets if no .env file exists (e.g. in CI/CD runners)
+os.environ.setdefault("ENVIRONMENT", "testing")
+os.environ.setdefault("PLATFORM_NAME", "Avinya HMS")
+os.environ.setdefault("BASE_DOMAIN", "localhost")
+os.environ.setdefault("DEFAULT_TENANT_SLUG", "default")
+os.environ.setdefault("DEFAULT_HOSPITAL_NAME", "Avinya Default Hospital")
+os.environ.setdefault("DEFAULT_BRANCH_CODE", "HQ-HYD-01")
+os.environ.setdefault("POSTGRES_USER", "postgres")
+os.environ.setdefault("POSTGRES_PASSWORD", secrets.token_urlsafe(16))
+os.environ.setdefault("POSTGRES_DB", "hms_default")
+os.environ.setdefault("SECRET_KEY", secrets.token_hex(32))
+os.environ.setdefault("MASTER_ONBOARDING_KEY", secrets.token_urlsafe(24))
+os.environ.setdefault("BACKUP_ENCRYPTION_SALT", secrets.token_hex(16))
+os.environ.setdefault("SEED_ADMIN_EMAIL", "admin@default.com")
+os.environ.setdefault("SEED_ADMIN_PASSWORD", "AdminPassword123!")
+
 from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 from jose import jwt
@@ -21,6 +40,7 @@ from models import (
     UserRole,
     UserStatusEnum,
 )
+from security.envelope import encrypt_tenant_secret
 import seed
 from seed import seed_universal_hospital_data
 
@@ -55,6 +75,26 @@ class FakeRedis:
 
     def delete(self, key: str):
         self.store.pop(key, None)
+
+    def publish(self, channel: str, message: str) -> int:
+        self.store[f"pubsub:{channel}"] = message
+        return 1
+
+    def pubsub(self):
+        class _DummyPubSub:
+            def subscribe(self, *args, **kwargs):
+                pass
+
+            def psubscribe(self, *args, **kwargs):
+                pass
+
+            def get_message(self, *args, **kwargs):
+                return None
+
+            def close(self):
+                pass
+
+        return _DummyPubSub()
 
     def ping(self) -> bool:
         return True
@@ -103,8 +143,17 @@ def multi_tenant_env(monkeypatch, fake_redis):
             db.close()
 
     for target_app in (app, v1_app):
-            target_app.dependency_overrides[get_control_db] = override_get_control_db
-            target_app.dependency_overrides[get_redis] = lambda: fake_redis
+        target_app.dependency_overrides[get_control_db] = override_get_control_db
+        target_app.dependency_overrides[get_redis] = lambda: fake_redis
+
+    # Dynamically generate cryptographically strong keys per test run
+    tenant_keys = {
+        slug: {
+            "jwt": secrets.token_hex(32),
+            "backup": secrets.token_urlsafe(32),
+        }
+        for slug in ("default", "apollo", "sunrise", "suspended", "onprem")
+    }
 
     with TestControlSession() as cdb:
         cdb.add_all([
@@ -114,8 +163,8 @@ def multi_tenant_env(monkeypatch, fake_redis):
                 subdomain_slug="default",
                 db_name="hms_default",
                 admin_email="admin@default.com",
-                jwt_secret_key="default_jwt_secret_key_32_chars_minimum_len",
-                backup_encryption_key="default_backup_key_32_chars_minimum_len",
+                jwt_secret_key=encrypt_tenant_secret(tenant_keys["default"]["jwt"]),
+                backup_encryption_key=encrypt_tenant_secret(tenant_keys["default"]["backup"]),
                 deployment_mode=DeploymentModeEnum.CLOUD,
                 is_active=True,
             ),
@@ -125,8 +174,8 @@ def multi_tenant_env(monkeypatch, fake_redis):
                 subdomain_slug="apollo",
                 db_name="hms_apollo",
                 admin_email="admin@apollo.com",
-                jwt_secret_key="apollo_jwt_secret_key_32_chars_minimum_len!",
-                backup_encryption_key="apollo_backup_key_32_chars_minimum_len!",
+                jwt_secret_key=encrypt_tenant_secret(tenant_keys["apollo"]["jwt"]),
+                backup_encryption_key=encrypt_tenant_secret(tenant_keys["apollo"]["backup"]),
                 deployment_mode=DeploymentModeEnum.CLOUD,
                 is_active=True,
             ),
@@ -136,8 +185,8 @@ def multi_tenant_env(monkeypatch, fake_redis):
                 subdomain_slug="sunrise",
                 db_name="hms_sunrise",
                 admin_email="admin@sunrise.com",
-                jwt_secret_key="sunrise_jwt_secret_key_32_chars_minimum_len",
-                backup_encryption_key="sunrise_backup_key_32_chars_minimum_len",
+                jwt_secret_key=encrypt_tenant_secret(tenant_keys["sunrise"]["jwt"]),
+                backup_encryption_key=encrypt_tenant_secret(tenant_keys["sunrise"]["backup"]),
                 deployment_mode=DeploymentModeEnum.CLOUD,
                 is_active=True,
             ),
@@ -147,8 +196,8 @@ def multi_tenant_env(monkeypatch, fake_redis):
                 subdomain_slug="suspended",
                 db_name="hms_suspended",
                 admin_email="admin@suspended.com",
-                jwt_secret_key="suspended_jwt_secret_32_chars_minimum_len",
-                backup_encryption_key="suspended_backup_key_32_chars_minimum",
+                jwt_secret_key=encrypt_tenant_secret(tenant_keys["suspended"]["jwt"]),
+                backup_encryption_key=encrypt_tenant_secret(tenant_keys["suspended"]["backup"]),
                 deployment_mode=DeploymentModeEnum.CLOUD,
                 is_active=False,
             ),
@@ -158,8 +207,8 @@ def multi_tenant_env(monkeypatch, fake_redis):
                 subdomain_slug="onprem",
                 db_name="hms_onprem",
                 admin_email="admin@onprem.com",
-                jwt_secret_key="onprem_jwt_secret_key_32_chars_minimum_len",
-                backup_encryption_key="onprem_backup_key_32_chars_minimum_len",
+                jwt_secret_key=encrypt_tenant_secret(tenant_keys["onprem"]["jwt"]),
+                backup_encryption_key=encrypt_tenant_secret(tenant_keys["onprem"]["backup"]),
                 deployment_mode=DeploymentModeEnum.ON_PREM,
                 is_active=True,
             ),
@@ -228,12 +277,13 @@ def multi_tenant_env(monkeypatch, fake_redis):
     yield {
         "control_session_factory": TestControlSession,
         "tenant_engines": tenant_engines,
+        "tenant_keys": tenant_keys,
         "redis": fake_redis,
     }
 
     app.dependency_overrides.clear()
     v1_app.dependency_overrides.clear()
-    
+
     for eng in tenant_engines.values():
         Base.metadata.drop_all(bind=eng)
         eng.dispose()
@@ -281,7 +331,7 @@ def superuser_headers(multi_tenant_env):
         multi_tenant_env,
         "default",
         "admin@default.com",
-        "default_jwt_secret_key_32_chars_minimum_len",
+        multi_tenant_env["tenant_keys"]["default"]["jwt"],
         "HQ-HYD-01",
     )
 
@@ -292,7 +342,7 @@ def doctor_headers(multi_tenant_env):
         multi_tenant_env,
         "default",
         "doctor@default.com",
-        "default_jwt_secret_key_32_chars_minimum_len",
+        multi_tenant_env["tenant_keys"]["default"]["jwt"],
         "HQ-HYD-01",
     )
 
@@ -303,7 +353,7 @@ def nurse_headers(multi_tenant_env):
         multi_tenant_env,
         "default",
         "nurse@default.com",
-        "default_jwt_secret_key_32_chars_minimum_len",
+        multi_tenant_env["tenant_keys"]["default"]["jwt"],
         "HQ-HYD-01",
     )
 
@@ -314,7 +364,7 @@ def pharmacist_headers(multi_tenant_env):
         multi_tenant_env,
         "default",
         "pharmacist@default.com",
-        "default_jwt_secret_key_32_chars_minimum_len",
+        multi_tenant_env["tenant_keys"]["default"]["jwt"],
         "HQ-HYD-01",
     )
 
@@ -325,7 +375,7 @@ def billing_headers(multi_tenant_env):
         multi_tenant_env,
         "default",
         "billing@default.com",
-        "default_jwt_secret_key_32_chars_minimum_len",
+        multi_tenant_env["tenant_keys"]["default"]["jwt"],
         "HQ-HYD-01",
     )
 
@@ -336,7 +386,7 @@ def auditor_headers(multi_tenant_env):
         multi_tenant_env,
         "default",
         "auditor@default.com",
-        "default_jwt_secret_key_32_chars_minimum_len",
+        multi_tenant_env["tenant_keys"]["default"]["jwt"],
         "HQ-HYD-01",
     )
 
@@ -347,7 +397,7 @@ def apollo_admin_headers(multi_tenant_env):
         multi_tenant_env,
         "apollo",
         "admin@apollo.com",
-        "apollo_jwt_secret_key_32_chars_minimum_len!",
+        multi_tenant_env["tenant_keys"]["apollo"]["jwt"],
         "APOLLO-HYD-01",
     )
 
@@ -358,6 +408,6 @@ def sunrise_admin_headers(multi_tenant_env):
         multi_tenant_env,
         "sunrise",
         "admin@sunrise.com",
-        "sunrise_jwt_secret_key_32_chars_minimum_len",
+        multi_tenant_env["tenant_keys"]["sunrise"]["jwt"],
         "SUN-BLR-01",
     )

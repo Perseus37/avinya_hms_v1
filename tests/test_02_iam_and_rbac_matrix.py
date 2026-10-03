@@ -2,7 +2,7 @@ from jose import jwt
 from config import settings
 
 
-def test_01_login_mints_tenant_scoped_jwt(client):
+def test_01_login_mints_tenant_scoped_jwt(client, multi_tenant_env):
     """Scenario 1: Valid login returns a JWT containing sub, tenant_slug, and branch_code."""
     res = client.post(
         "/v1/api/auth/login",
@@ -13,7 +13,7 @@ def test_01_login_mints_tenant_scoped_jwt(client):
     token = res.json()["access_token"]
     claims = jwt.decode(
         token,
-        "apollo_jwt_secret_key_32_chars_minimum_len!",
+        multi_tenant_env["tenant_keys"]["apollo"]["jwt"],
         algorithms=[settings.ALGORITHM],
     )
     assert claims["tenant_slug"] == "apollo"

@@ -4,7 +4,6 @@ from typing import Optional
 from sqlalchemy import Boolean, DateTime, Enum, Index, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-
 class ControlBase(DeclarativeBase):
     """Declarative base strictly for the central hms_control_plane database."""
     pass
@@ -25,8 +24,8 @@ class TenantRegistry(ControlBase):
     subdomain_slug: Mapped[str] = mapped_column(String(63), unique=True, nullable=False, index=True)
     db_name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     admin_email: Mapped[str] = mapped_column(String(255), nullable=False)
-    jwt_secret_key: Mapped[str] = mapped_column(String(128), nullable=False)
-    backup_encryption_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    jwt_secret_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    backup_encryption_key: Mapped[str] = mapped_column(String(255), nullable=False)
     deployment_mode: Mapped[DeploymentModeEnum] = mapped_column(
         Enum(DeploymentModeEnum), default=DeploymentModeEnum.CLOUD, nullable=False
     )

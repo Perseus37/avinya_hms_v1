@@ -32,6 +32,7 @@ from routers.v1 import (
     blood_pacs_router,
     analytics_router,
     vital_registries_router,
+    websocket_router,
 )
 
 # -----------------------------------------------------------------------------
@@ -252,6 +253,7 @@ for target in (v1_app, app):
     target.include_router(patient_router.router)
     target.include_router(diagnostic_router.router)
     target.include_router(federation_router.router)
+    target.include_router(websocket_router.ws_router)
     target.include_router(vital_registries_router.router)
     target.include_router(adt_router.router)
     target.include_router(pharmacy_router.router)

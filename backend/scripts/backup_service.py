@@ -14,6 +14,8 @@ from config import settings
 from control_models import DeploymentModeEnum, TenantRegistry
 from database import ControlSessionLocal
 
+from security.envelope import decrypt_tenant_secret
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("avinya.backup")
 
@@ -77,7 +79,7 @@ def backup_all_tenants() -> None:
             ]
             subprocess.run(cmd, env=env, check=True)
 
-            cipher = Fernet(derive_fernet_key(tenant.backup_encryption_key))
+            cipher = Fernet(derive_fernet_key(decrypt_tenant_secret(tenant.backup_encryption_key)))
             encrypted_bytes = cipher.encrypt(raw_dump.read_bytes())
             encrypted_file.write_bytes(encrypted_bytes)
             raw_dump.unlink(missing_ok=True)

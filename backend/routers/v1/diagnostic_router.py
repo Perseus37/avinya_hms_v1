@@ -1,9 +1,9 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from database import get_db
+from database import get_db, resolve_tenant_context
 from dependencies import RequirePermission, user_has_permission, validate_pagination
 from models import (
     DiagnosticOrder,
@@ -37,6 +37,7 @@ from services.auto_billing import (
     auto_bill_diagnostic_order,
     reverse_cancelled_diagnostic_order_billing,
 )   
+from services.event_bus import publish_tenant_event
 
 router = APIRouter(prefix="/api/diagnostics", tags=["Diagnostic Services & LIS"])
 
@@ -428,13 +429,18 @@ def get_department_task_queue(
 def submit_task_result(
     task_id: int,
     payload: TaskResultEntry,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(RequirePermission("diagnostics:write", "diagnostics:verify")),
 ):
     """H8 FIX: Enforces task lifecycle, checks action-specific permission, and prevents self-verification."""
+    
     task = (
         db.query(DiagnosticTask)
-        .options(joinedload(DiagnosticTask.order).joinedload(DiagnosticOrder.tasks))
+        .options(
+            joinedload(DiagnosticTask.service),
+            joinedload(DiagnosticTask.order).joinedload(DiagnosticOrder.tasks),
+        )
         .filter(DiagnosticTask.id == task_id)
         .first()
     )
@@ -505,6 +511,22 @@ def submit_task_result(
         elif payload.status == TaskStatusEnum.RESULT_ENTERED:
             if not payload.result_value:
                 raise HTTPException(status_code=400, detail="result_value is required when status is RESULT_ENTERED.")
+            if payload.is_critical_panic:
+                tenant = resolve_tenant_context(request)
+                publish_tenant_event(
+                    tenant_slug=tenant.subdomain_slug,
+                    stream="panic_labs",
+                    event_type="CRITICAL_PANIC_VALUE_ALERT",
+                    payload={
+                        "task_id": task.id,
+                        "order_id": task.order_id,
+                        "service_code": task.service.code,
+                        "service_name": task.service.name,
+                        "result_value": payload.result_value,
+                        "result_notes": payload.result_notes,
+                        "performed_by_id": current_user.id,
+                    },
+                )
             task.result_value = payload.result_value
             task.result_notes = payload.result_notes
             task.is_critical_panic = payload.is_critical_panic

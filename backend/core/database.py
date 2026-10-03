@@ -10,6 +10,8 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from config import settings
 from control_models import DeploymentModeEnum, TenantRegistry
 
+from security.envelope import decrypt_tenant_secret
+
 MAX_CACHED_TENANT_ENGINES = 64
 
 
@@ -132,13 +134,13 @@ def resolve_tenant_context(request: Request) -> TenantContext:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="This hospital runs On-Premise. Route requests to its local server endpoint.",
             )
-
+        
         ctx = TenantContext(
             subdomain_slug=tenant.subdomain_slug,
             branch_code=tenant.branch_code,
             hospital_name=tenant.hospital_name,
             db_name=tenant.db_name,
-            jwt_secret_key=tenant.jwt_secret_key,
+            jwt_secret_key=decrypt_tenant_secret(tenant.jwt_secret_key),
         )
         request.state.tenant_context = ctx
         return ctx

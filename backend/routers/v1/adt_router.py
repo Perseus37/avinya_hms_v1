@@ -1,11 +1,11 @@
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, joinedload
 
-from database import get_db
+from database import get_db, resolve_tenant_context
 from dependencies import RequirePermission, validate_pagination
 from models import (
     Bed,
@@ -32,9 +32,10 @@ from schemas.v1.schemas import (
     PaginatedResponse,
     PatientEncounterCreate,
     PatientEncounterResponse,
-    PatientEncounterUpdate,
+    PatientEncounterUpdate,   
 )
 from services.auto_billing import auto_bill_ipd_bed_stay
+from services.event_bus import publish_tenant_event
 
 router = APIRouter(prefix="/api/adt", tags=["Admissions, Discharges & Transfers (ADT)"])
 
@@ -345,8 +346,9 @@ def list_admission_transfers(
 def discharge_patient(
     admission_id: int,
     payload: ClinicalDischargeRequest,
+    request: Request,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:discharge")),
+    _: User = Depends(RequirePermission("adt:discharge", "adt:write")),
 ):
     try:
         stmt = (
@@ -410,6 +412,18 @@ def discharge_patient(
             if bed:
                 bed.status = BedStatusEnum.HOUSEKEEPING
                 bed.current_admission_id = None
+                tenant = resolve_tenant_context(request)
+                publish_tenant_event(
+                    tenant_slug=tenant.subdomain_slug,
+                    stream="housekeeping",
+                    event_type="BED_HOUSEKEEPING_REQUIRED",
+                    payload={
+                        "admission_id": admission_id,
+                        "bed_id": bed.id,
+                        "bed_number": bed.bed_number,
+                        "status": "HOUSEKEEPING",
+                    },
+                )
             admission.current_bed_id = None
         except OperationalError:
             db.rollback()

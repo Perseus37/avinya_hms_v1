@@ -1,0 +1,182 @@
+version: "3.8"
+
+services:
+  # -------------------------------------------------------------
+  # Traefik Reverse Proxy (SSL Termination & Subdomain Routing)
+  # -------------------------------------------------------------
+  reverse-proxy:
+    image: traefik:v2.11
+    restart: unless-stopped
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      # Wildcard SSL via Cloudflare DNS-01 challenge
+      - "--certificatesresolvers.le-ssl.acme.email=${ACME_EMAIL:-admin@avinyahms.com}"
+      - "--certificatesresolvers.le-ssl.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.le-ssl.acme.dnschallenge=true"
+      - "--certificatesresolvers.le-ssl.acme.dnschallenge.provider=cloudflare"
+      - "--certificatesresolvers.le-ssl.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53"
+    environment:
+      - CF_DNS_API_TOKEN=${CF_DNS_API_TOKEN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_certificates:/letsencrypt
+    networks:
+      - public-net
+
+  # -------------------------------------------------------------
+  # In-House KMS Microservice (Strictly Internal, No External Ports)
+  # -------------------------------------------------------------
+  kms:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: kms
+    image: avinya-hms-kms:latest
+    restart: unless-stopped
+    environment:
+      KMS_INTERNAL_ROOT_KEY: ${KMS_INTERNAL_ROOT_KEY}
+      KMS_INTERNAL_AUTH_TOKEN: ${KMS_INTERNAL_AUTH_TOKEN}
+    networks:
+      - internal-net
+
+  # -------------------------------------------------------------
+  # PostgreSQL 15 Enterprise Database
+  # -------------------------------------------------------------
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      TZ: "Asia/Kolkata"
+      PGTZ: "Asia/Kolkata"
+    command: ["postgres", "-c", "timezone=Asia/Kolkata"]
+    volumes:
+      - hms_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d$$POSTGRES_DB"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+    networks:
+      - internal-net
+
+  # -------------------------------------------------------------
+  # Redis 7 Cache & Real-Time Event Bus
+  # -------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "volatile-lru"]
+    volumes:
+      - hms_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+    networks:
+      - internal-net
+
+  # -------------------------------------------------------------
+  # Core HMS API & WebSocket Server
+  # -------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: avinya-hms-api:latest
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      TZ: "Asia/Kolkata"
+      PGTZ: "Asia/Kolkata"
+      INTERNAL_KMS_URL: "http://kms:8002"
+      KMS_INTERNAL_AUTH_TOKEN: ${KMS_INTERNAL_AUTH_TOKEN}
+    volumes:
+      - hms_backups:/app/backups
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.hms-api.rule=Host(`${BASE_DOMAIN}`) || HostRegexp(`{subdomain:[a-z0-9-]+}.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.hms-api.entrypoints=websecure"
+      - "traefik.http.routers.hms-api.tls=true"
+      - "traefik.http.routers.hms-api.tls.certresolver=le-ssl"
+      - "traefik.http.routers.hms-api.tls.domains[0].main=${BASE_DOMAIN}"
+      - "traefik.http.routers.hms-api.tls.domains[0].sans=*.${BASE_DOMAIN}"
+      - "traefik.http.services.hms-api.loadbalancer.server.port=8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kms:
+        condition: service_started
+    networks:
+      - internal-net
+      - public-net
+
+  # -------------------------------------------------------------
+  # Control Plane & Onboarding Portal
+  # -------------------------------------------------------------
+  onboarding-portal:
+    image: avinya-hms-api:latest
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      INTERNAL_KMS_URL: "http://kms:8002"
+      KMS_INTERNAL_AUTH_TOKEN: ${KMS_INTERNAL_AUTH_TOKEN}
+    command: ["uvicorn", "onboarding_portal:onboarding_app", "--host", "0.0.0.0", "--port", "8080"]
+    volumes:
+      - ./deployments:/app/deployments
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.onboard.rule=Host(`onboard.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.onboard.entrypoints=websecure"
+      - "traefik.http.routers.onboard.tls=true"
+      - "traefik.http.routers.onboard.tls.certresolver=le-ssl"
+      - "traefik.http.services.onboard.loadbalancer.server.port=8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      kms:
+        condition: service_started
+    networks:
+      - internal-net
+      - public-net
+
+  # -------------------------------------------------------------
+  # Backup & Disaster Recovery Sidecar
+  # -------------------------------------------------------------
+  backup-sidecar:
+    image: avinya-hms-api:latest
+    restart: unless-stopped
+    env_file: .env.production
+    command: ["sh", "-c", "while true; do python backend/scripts/backup_service.py; sleep 21600; done"]
+    volumes:
+      - hms_backups:/app/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal-net
+
+networks:
+  public-net:
+    driver: bridge
+  internal-net:
+    driver: bridge
+    internal: true
+
+volumes:
+  hms_pgdata:
+  hms_redisdata:
+  hms_backups:
+  traefik_certificates:
