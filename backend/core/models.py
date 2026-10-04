@@ -26,6 +26,7 @@ from sqlalchemy.orm import Mapped, Session as SQLAlchemySession, mapped_column, 
 from database import Base
 
 
+
 # -----------------------------------------------------------------------------
 # Shared enums
 # -----------------------------------------------------------------------------
@@ -364,6 +365,13 @@ class MannerOfDeathEnum(str, PyEnum):
     HOMICIDAL = "HOMICIDAL"
     PENDING_INVESTIGATION = "PENDING_INVESTIGATION"
 
+class FederationPolicyEnum(str, PyEnum):
+    FULL_MESH = "FULL_MESH"
+    CORPORATE_GROUP_ONLY = "CORPORATE_GROUP_ONLY"
+    EMERGENCY_ALLERGIES_ONLY = "EMERGENCY_ALLERGIES_ONLY"
+    ISOLATED_SILO = "ISOLATED_SILO"
+
+
 # -----------------------------------------------------------------------------
 # Auditing mixin for timestamp fields
 # -----------------------------------------------------------------------------
@@ -658,6 +666,7 @@ class Patient(AuditMixin, Base):
     emergency_contact_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     emergency_contact_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     is_active: Mapped[bool] = mapped_column(default=True)
+    allow_network_sharing: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
 class PatientAllergy(AuditMixin, Base):
@@ -1716,3 +1725,29 @@ class DeathRecord(AuditMixin, Base):
     patient: Mapped["Patient"] = relationship()
     certified_by_doctor: Mapped["User"] = relationship(foreign_keys=[certified_by_doctor_id])
     immediate_cause_diagnosis: Mapped["DiagnosisMaster"] = relationship()
+
+# ==========================================
+# PHASE 17: TENANT ADMIN POLICIES & FEDERATION SOVEREIGNTY
+# ==========================================
+
+class HospitalPolicySetting(AuditMixin, Base):
+    """Stores tenant-configurable clinical rules, lockout thresholds, and federation data-sharing sovereignty."""
+    __tablename__ = "hospital_policy_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    max_failed_login_attempts: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    session_timeout_minutes: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
+    default_consultation_duration_minutes: Mapped[int] = mapped_column(Integer, default=15, nullable=False)
+    allow_overbooking: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    enforce_financial_discharge_gate: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    allow_unfinalized_interim_payments: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    fefo_expiry_warning_days: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
+    low_stock_threshold_units: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
+    o_negative_critical_threshold_units: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+
+    # Federation & Privacy Sovereignty
+    federation_sharing_mode: Mapped[FederationPolicyEnum] = mapped_column(
+        Enum(FederationPolicyEnum), default=FederationPolicyEnum.FULL_MESH, nullable=False
+    )
+    federation_share_demographics: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    federation_share_allergies: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

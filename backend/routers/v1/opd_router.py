@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import select,func
 from sqlalchemy.orm import Session
 
+from routers.v1.tenant_admin_router import get_or_create_policy
 from database import get_db, resolve_tenant_context
 from dependencies import RequirePermission, validate_pagination
 from models import (
@@ -79,15 +80,15 @@ def _compute_next_daily_token(db: Session, doctor_id: int, appointment_time: dat
     appt_utc = _to_utc(appointment_time)
     day_start = appt_utc.replace(hour=0, minute=0, second=0, microsecond=0)
     day_end = day_start + timedelta(days=1)
-    existing_appts = list(
-        db.execute(
-            select(Appointment).where(Appointment.doctor_id == doctor_id)
+    same_day_count = (
+        db.scalar(
+            select(func.count(Appointment.id)).where(
+                Appointment.doctor_id == doctor_id,
+                Appointment.appointment_time >= day_start,
+                Appointment.appointment_time < day_end,
+            )
         )
-        .scalars()
-        .all()
-    )
-    same_day_count = sum(
-        1 for a in existing_appts if day_start <= _to_utc(a.appointment_time) < day_end
+        or 0
     )
     return same_day_count + 1
 
@@ -224,7 +225,8 @@ def reschedule_appointment(
             )
 
         doctor = db.query(DoctorProfile).filter(DoctorProfile.user_id == appointment.doctor_id).first()
-        duration = max(doctor.consultation_duration_minutes, 5) if doctor else 15
+        default_dur = get_or_create_policy(db).default_consultation_duration_minutes
+        duration = max(doctor.consultation_duration_minutes or default_dur, 5) if doctor else default_dur
 
         if check_schedule_overlap(
             db,
@@ -243,7 +245,6 @@ def reschedule_appointment(
     db.refresh(appointment)
     return appointment
 
-
 @router.patch("/appointments/{appointment_id}/status", response_model=AppointmentResponse)
 def update_appointment_status(
     appointment_id: int,
@@ -257,8 +258,15 @@ def update_appointment_status(
         raise HTTPException(status_code=404, detail="Appointment not found.")
 
     valid_transitions = {
-        AppointmentStatusEnum.SCHEDULED: [AppointmentStatusEnum.ARRIVED, AppointmentStatusEnum.CANCELLED, AppointmentStatusEnum.NO_SHOW],
-        AppointmentStatusEnum.ARRIVED: [AppointmentStatusEnum.IN_CONSULTATION, AppointmentStatusEnum.CANCELLED],
+        AppointmentStatusEnum.SCHEDULED: [
+            AppointmentStatusEnum.ARRIVED,
+            AppointmentStatusEnum.CANCELLED,
+            AppointmentStatusEnum.NO_SHOW,
+        ],
+        AppointmentStatusEnum.ARRIVED: [
+            AppointmentStatusEnum.IN_CONSULTATION,
+            AppointmentStatusEnum.CANCELLED,
+        ],
         AppointmentStatusEnum.IN_CONSULTATION: [AppointmentStatusEnum.COMPLETED],
         AppointmentStatusEnum.COMPLETED: [],
         AppointmentStatusEnum.CANCELLED: [],
@@ -266,7 +274,23 @@ def update_appointment_status(
     }
 
     if payload.status not in valid_transitions[appointment.status]:
-        raise HTTPException(status_code=400, detail=f"Invalid transition from {appointment.status} to {payload.status}.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid transition from {appointment.status} to {payload.status}.",
+        )
+
+    if payload.status == AppointmentStatusEnum.IN_CONSULTATION:
+        if not payload.encounter_id:
+            raise HTTPException(status_code=400, detail="Must attach an active Encounter ID.")
+        encounter = db.get(PatientEncounter, payload.encounter_id)
+        if not encounter or encounter.patient_id != appointment.patient_id:
+            raise HTTPException(status_code=400, detail="Encounter does not match the appointment patient.")
+        appointment.encounter_id = payload.encounter_id
+        auto_bill_opd_consultation(db, appointment.patient_id, encounter.id, appointment.doctor_id)
+
+    appointment.status = payload.status
+    db.commit()
+    db.refresh(appointment)
 
     if payload.status == AppointmentStatusEnum.IN_CONSULTATION:
         tenant = resolve_tenant_context(request)
@@ -283,20 +307,8 @@ def update_appointment_status(
                 "department_id": appointment.department_id,
             },
         )
-        if not payload.encounter_id:
-            raise HTTPException(status_code=400, detail="Must attach an active Encounter ID.")
 
-        encounter = db.get(PatientEncounter, payload.encounter_id)
-        if not encounter or encounter.patient_id != appointment.patient_id:
-            raise HTTPException(status_code=400, detail="Encounter does not match the appointment patient.")
-        appointment.encounter_id = payload.encounter_id
-        auto_bill_opd_consultation(db, appointment.patient_id, encounter.id, appointment.doctor_id)
-
-    appointment.status = payload.status
-    db.commit()
-    db.refresh(appointment)
     return appointment
-
 
 @router.delete("/appointments/{appointment_id}", status_code=200)
 def cancel_appointment(

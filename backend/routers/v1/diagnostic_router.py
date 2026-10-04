@@ -511,26 +511,11 @@ def submit_task_result(
         elif payload.status == TaskStatusEnum.RESULT_ENTERED:
             if not payload.result_value:
                 raise HTTPException(status_code=400, detail="result_value is required when status is RESULT_ENTERED.")
-            if payload.is_critical_panic:
-                tenant = resolve_tenant_context(request)
-                publish_tenant_event(
-                    tenant_slug=tenant.subdomain_slug,
-                    stream="panic_labs",
-                    event_type="CRITICAL_PANIC_VALUE_ALERT",
-                    payload={
-                        "task_id": task.id,
-                        "order_id": task.order_id,
-                        "service_code": task.service.code,
-                        "service_name": task.service.name,
-                        "result_value": payload.result_value,
-                        "result_notes": payload.result_notes,
-                        "performed_by_id": current_user.id,
-                    },
-                )
             task.result_value = payload.result_value
             task.result_notes = payload.result_notes
             task.is_critical_panic = payload.is_critical_panic
             task.performed_by_id = current_user.id
+
         task.status = payload.status
 
     all_tasks = task.order.tasks
@@ -540,6 +525,24 @@ def submit_task_result(
         task.order.status = OrderStatusEnum.PARTIAL
 
     db.commit()
+
+    if payload.status == TaskStatusEnum.RESULT_ENTERED and payload.is_critical_panic:
+        tenant = resolve_tenant_context(request)
+        publish_tenant_event(
+            tenant_slug=tenant.subdomain_slug,
+            stream="panic_labs",
+            event_type="CRITICAL_PANIC_VALUE_ALERT",
+            payload={
+                "task_id": task.id,
+                "order_id": task.order_id,
+                "service_code": task.service.code,
+                "service_name": task.service.name,
+                "result_value": payload.result_value,
+                "result_notes": payload.result_notes,
+                "performed_by_id": current_user.id,
+            },
+        )
+
     return {"status": "success", "message": f"Task {task_id} status advanced to {task.status.value}."}
 
 @router.get("/tasks/panic-alerts", response_model=list[DiagnosticTaskResponse])

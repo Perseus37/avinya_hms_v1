@@ -15,7 +15,9 @@ from models import (
     AllergyMaster,
     AllergySeverityEnum,
     FederatedClient,
+    FederationPolicyEnum,
     FederationTransferLog,
+    HospitalPolicySetting,
     Patient,
     PatientAllergy,
     User,
@@ -41,14 +43,27 @@ def normalize_phone_hash(phone_number: Optional[str]) -> str:
     return hashlib.sha256(digits.encode("utf-8")).hexdigest()
 
 
+def _get_branch_policy(branch_db: Session) -> HospitalPolicySetting:
+    policy = branch_db.execute(select(HospitalPolicySetting)).scalars().first()
+    if not policy:
+        policy = HospitalPolicySetting()
+        branch_db.add(policy)
+        branch_db.flush()
+    return policy
+
+
 def sync_patient_pointer(
     control_db: Session,
     branch_code: str,
     subdomain_slug: str,
     patient: Patient,
     has_critical_allergies: bool = False,
+    tenant_db: Optional[Session] = None,
 ) -> None:
-    """Updates the Central Discovery Index whenever a hospital registers or updates a patient."""
+    """
+    Updates the Central Discovery Index whenever a hospital registers or updates a patient,
+    while respecting both Patient-level Privacy Opt-Out and Hospital-level Federation Sovereignty.
+    """
     try:
         p_hash = normalize_phone_hash(patient.phone_number)
         stmt = select(GlobalPatientPointer).where(
@@ -56,6 +71,29 @@ def sync_patient_pointer(
             GlobalPatientPointer.branch_code == branch_code,
         )
         pointer = control_db.execute(stmt).scalar_one_or_none()
+
+        # 1. Patient-Level Opt-Out: Purge existing pointer and do not index
+        if getattr(patient, "allow_network_sharing", True) is False:
+            if pointer:
+                control_db.delete(pointer)
+                control_db.commit()
+            return
+
+        # 2. Hospital-Level Opt-Out (ISOLATED_SILO): Purge existing pointer and do not index
+        if tenant_db is not None:
+            policy = _get_branch_policy(tenant_db)
+            if policy.federation_sharing_mode == FederationPolicyEnum.ISOLATED_SILO:
+                if pointer:
+                    control_db.delete(pointer)
+                    control_db.commit()
+                return
+            if (
+                policy.federation_sharing_mode == FederationPolicyEnum.EMERGENCY_ALLERGIES_ONLY
+                and not has_critical_allergies
+                and not (pointer and pointer.has_critical_allergies)
+            ):
+                return
+
         if pointer:
             pointer.abha_number = patient.abha_number or pointer.abha_number
             pointer.source_mrn = patient.mrn
@@ -199,8 +237,9 @@ def publish_local_patient_to_discovery_index(
         subdomain_slug=tenant.subdomain_slug,
         patient=patient,
         has_critical_allergies=crit_allergy,
+        tenant_db=db,
     )
-    return {"status": "success", "message": f"Patient pointer synced for branch {tenant.branch_code}."}
+    return {"status": "success", "message": f"Patient pointer evaluated and synced for branch {tenant.branch_code}."}
 
 
 @router.get("/patients/discover", response_model=FederatedPatientSummaryResponse)
@@ -213,10 +252,11 @@ def discover_and_aggregate_patient_across_branches(
     _: None = Depends(RateLimiter(scope="fed_discover", max_requests=60, window_seconds=60)),
 ):
     """
-    SOLVES HOSPITAL A -> B -> C ROUTING:
+    SOLVES HOSPITAL A -> B -> C ROUTING WITH 3-LAYER PRIVACY SOVEREIGNTY:
     1. Queries the Central Discovery Index for all hospitals visited by this patient, ordered newest first.
-    2. Pulls the latest demographics from the most recent hospital (Hospital B).
-    3. Aggregates the union of all active allergies across ALL visited hospitals (Hospital B + Hospital A).
+    2. Checks each source hospital's FederationPolicyEnum (FULL_MESH, CORPORATE_GROUP_ONLY,
+       EMERGENCY_ALLERGIES_ONLY, ISOLATED_SILO) and the patient's allow_network_sharing consent.
+    3. Pulls latest demographics and aggregates the union of active allergies across permitted branches.
     """
     if not phone_number and not abha_number:
         raise HTTPException(status_code=400, detail="Provide either phone_number or abha_number.")
@@ -238,6 +278,7 @@ def discover_and_aggregate_patient_across_branches(
         raise HTTPException(status_code=404, detail="No records found for this patient in the Central Discovery Index.")
 
     latest_demographics: Optional[Patient] = None
+    redact_address: bool = False
     merged_allergies: dict[str, FederatedAllergySummary] = {}
 
     for ptr in pointers:
@@ -252,36 +293,62 @@ def discover_and_aggregate_patient_across_branches(
         branch_engine = tenant_engine_pool.get_engine(tenant_reg.db_name)
         BranchSession = sessionmaker(bind=branch_engine, autocommit=False, autoflush=False)
         with BranchSession() as branch_db:
+            policy = _get_branch_policy(branch_db)
+
+            # Layer 1A: Hospital is an ISOLATED_SILO -> never share outbound
+            if policy.federation_sharing_mode == FederationPolicyEnum.ISOLATED_SILO:
+                continue
+
+            # Layer 1B: CORPORATE_GROUP_ONLY -> only share if corporate prefix matches (e.g. APOLLO-*)
+            if policy.federation_sharing_mode == FederationPolicyEnum.CORPORATE_GROUP_ONLY:
+                src_prefix = ptr.branch_code.split("-")[0].strip().upper()
+                req_prefix = calling_node.branch_code.split("-")[0].strip().upper()
+                if src_prefix != req_prefix:
+                    continue
+
+            # Layer 1C: EMERGENCY_ALLERGIES_ONLY -> only share when purpose is EMERGENCY
+            if (
+                policy.federation_sharing_mode == FederationPolicyEnum.EMERGENCY_ALLERGIES_ONLY
+                and "EMERGENCY" not in purpose.upper()
+            ):
+                continue
+
             patient = (
                 branch_db.query(Patient)
                 .filter(Patient.mrn == ptr.source_mrn, Patient.is_active == True)
                 .first()
             )
-            if not patient:
+            # Layer 2: Individual Patient Privacy Opt-Out
+            if not patient or getattr(patient, "allow_network_sharing", True) is False:
                 continue
 
-            if latest_demographics is None:
+            # Layer 3A: Granular Demographics Check
+            if latest_demographics is None and policy.federation_share_demographics:
                 branch_db.expunge(patient)
                 latest_demographics = patient
+                if policy.federation_sharing_mode == FederationPolicyEnum.EMERGENCY_ALLERGIES_ONLY:
+                    redact_address = True
 
-            alg_stmt = (
-                select(PatientAllergy, AllergyMaster)
-                .join(AllergyMaster, PatientAllergy.allergy_id == AllergyMaster.id)
-                .where(PatientAllergy.patient_id == patient.id, PatientAllergy.is_active == True)
-            )
-            for pa, master in branch_db.execute(alg_stmt).all():
-                key = master.name.strip().lower()
-                if key not in merged_allergies:
-                    rx_note = pa.reaction_description or "Adverse reaction"
-                    tagged_reaction = (
-                        rx_note if "[Source:" in rx_note else f"{rx_note} [Source: {ptr.branch_code}]"
-                    )
-                    merged_allergies[key] = FederatedAllergySummary(
-                        allergy_code=master.code,
-                        allergy_name=master.name,
-                        severity=pa.severity,
-                        reaction=tagged_reaction,
-                    )
+            # Layer 3B: Granular Allergies Check
+            if policy.federation_share_allergies:
+                alg_stmt = (
+                    select(PatientAllergy, AllergyMaster)
+                    .join(AllergyMaster, PatientAllergy.allergy_id == AllergyMaster.id)
+                    .where(PatientAllergy.patient_id == patient.id, PatientAllergy.is_active == True)
+                )
+                for pa, master in branch_db.execute(alg_stmt).all():
+                    key = master.name.strip().lower()
+                    if key not in merged_allergies:
+                        rx_note = pa.reaction_description or "Adverse reaction"
+                        tagged_reaction = (
+                            rx_note if "[Source:" in rx_note else f"{rx_note} [Source: {ptr.branch_code}]"
+                        )
+                        merged_allergies[key] = FederatedAllergySummary(
+                            allergy_code=master.code,
+                            allergy_name=master.name,
+                            severity=pa.severity,
+                            reaction=tagged_reaction,
+                        )
 
             branch_db.add(
                 FederationTransferLog(
@@ -295,7 +362,10 @@ def discover_and_aggregate_patient_across_branches(
             branch_db.commit()
 
     if not latest_demographics:
-        raise HTTPException(status_code=404, detail="Patient records were inactive at all indexed branches.")
+        raise HTTPException(
+            status_code=404,
+            detail="No shareable patient records found across permitted hospital branches.",
+        )
 
     return FederatedPatientSummaryResponse(
         source_mrn=latest_demographics.mrn,
@@ -306,7 +376,7 @@ def discover_and_aggregate_patient_across_branches(
         blood_group=latest_demographics.blood_group,
         phone_number=latest_demographics.phone_number,
         email=latest_demographics.email,
-        address=latest_demographics.address,
+        address=None if redact_address else latest_demographics.address,
         emergency_contact_name=latest_demographics.emergency_contact_name,
         emergency_contact_phone=latest_demographics.emergency_contact_phone,
         active_allergies=list(merged_allergies.values()),
@@ -321,7 +391,7 @@ def import_federated_patient_locally(
     control_db: Session = Depends(get_control_db),
     current_user: User = Depends(RequirePermission("patients:write")),
 ):
-    """Imports a multi-hop aggregated patient profile into the receiving hospital (Hospital C) and updates the Central Index."""
+    """Imports a multi-hop aggregated patient profile into the receiving hospital and updates the Central Index."""
     tenant = resolve_tenant_context(request)
 
     if payload.abha_number:
@@ -343,6 +413,7 @@ def import_federated_patient_locally(
         emergency_contact_name=payload.emergency_contact_name,
         emergency_contact_phone=payload.emergency_contact_phone,
         is_active=True,
+        allow_network_sharing=True,
         created_by_id=current_user.id,
         updated_by_id=current_user.id,
     )
@@ -384,5 +455,6 @@ def import_federated_patient_locally(
         subdomain_slug=tenant.subdomain_slug,
         patient=new_patient,
         has_critical_allergies=has_crit,
+        tenant_db=db,
     )
     return new_patient

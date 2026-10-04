@@ -9,10 +9,10 @@ from sqlalchemy.orm import sessionmaker
 
 from config import settings
 from control_models import ControlBase, DeploymentModeEnum, TenantRegistry
-from database import ControlSessionLocal, build_db_url, control_engine, ensure_postgres_db_exists
-from seed import ensure_permissions_exist, seed_universal_hospital_data
-
+from database import Base, ControlSessionLocal, build_db_url, control_engine, ensure_postgres_db_exists
+from migrate import detect_schema_diff
 from security.envelope import encrypt_tenant_secret
+from seed import ensure_permissions_exist, seed_universal_hospital_data
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("avinya.prestart")
@@ -26,7 +26,19 @@ def migrate_single_tenant_db(db_name: str) -> None:
     alembic_ini_path = "backend/alembic.ini" if os.path.exists("backend/alembic.ini") else "alembic.ini"
     alembic_cfg = Config(alembic_ini_path)
     alembic_cfg.set_main_option("sqlalchemy.url", target_url)
+
+    # Apply all existing Alembic revisions up to head
     command.upgrade(alembic_cfg, "head")
+
+    # Check if the developer added new columns/tables in models.py without creating a revision yet
+    pending_diffs = detect_schema_diff(target_url, Base.metadata)
+    if pending_diffs:
+        logger.warning(
+            "Unversioned model changes detected on '%s' (%d diff(s)). "
+            "Run: docker compose exec api python backend/scripts/migrate.py",
+            db_name,
+            len(pending_diffs),
+        )
 
     t_engine = create_engine(target_url)
     TSession = sessionmaker(bind=t_engine, autocommit=False, autoflush=False)

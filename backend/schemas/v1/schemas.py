@@ -220,6 +220,8 @@ class WardCreate(BaseModel):
 
 
 class WardUpdate(BaseModel):
+    floor_id: Optional[int] = None
+    department_id: Optional[int] = None
     name: Optional[str] = None
     ward_type: Optional[WardTypeEnum] = None
     is_active: Optional[bool] = None
@@ -264,6 +266,7 @@ class RoomCreate(BaseModel):
 
 
 class RoomUpdate(BaseModel):
+    ward_id: Optional[int] = None
     room_number: Optional[str] = None
     room_type: Optional[RoomTypeEnum] = None
     bed_capacity: Optional[int] = None
@@ -290,6 +293,13 @@ class BedCreate(BaseModel):
 class BedStatusUpdate(BaseModel):
     status: BedStatusEnum
 
+
+class BedReconfigure(BaseModel):
+    room_id: Optional[int] = None
+    bed_number: Optional[str] = None
+    bed_type: Optional[BedTypeEnum] = None
+    base_daily_rate_paise: Optional[int] = Field(default=None, ge=0)
+    status: Optional[BedStatusEnum] = None
 
 class ShiftAssignmentCreate(BaseModel):
     ward_id: int
@@ -329,6 +339,7 @@ class PatientCreate(BaseModel):
     address: Optional[str] = None
     emergency_contact_name: Optional[str] = None
     emergency_contact_phone: Optional[str] = None
+    allow_network_sharing: bool = True
 
 
 class PatientUpdate(BaseModel):
@@ -343,6 +354,7 @@ class PatientUpdate(BaseModel):
     emergency_contact_name: Optional[str] = None
     emergency_contact_phone: Optional[str] = None
     is_active: Optional[bool] = None
+    allow_network_sharing: Optional[bool] = None
 
 
 class PatientResponse(BaseModel):
@@ -359,6 +371,7 @@ class PatientResponse(BaseModel):
     emergency_contact_name: Optional[str] = None
     emergency_contact_phone: Optional[str] = None
     is_active: bool
+    allow_network_sharing: bool = True
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -1688,3 +1701,36 @@ class DeathRecordResponse(BaseModel):
     is_autopsy_advised: bool
     body_handed_over_to: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
+
+class BedSpec(BaseModel):
+    prefix: str = "BED"
+    start_number: int = 1
+    count: int
+    bed_type: BedTypeEnum = BedTypeEnum.STANDARD
+    base_daily_rate_paise: int = 150000
+
+
+class RoomSpec(BaseModel):
+    room_number_pattern: str = "10{n}"  # e.g., 101, 102...
+    room_type: RoomTypeEnum = RoomTypeEnum.DOUBLE
+    rooms_count: int
+    beds_per_room: BedSpec
+
+
+class WardSpec(BaseModel):
+    code: str
+    name: str
+    ward_type: WardTypeEnum
+    department_code: str
+    rooms: list[RoomSpec]
+
+
+class FloorSpec(BaseModel):
+    floor_number: int
+    name: str
+    wards: list[WardSpec]
+
+
+class SpatialMatrixRequest(BaseModel):
+    floors: list[FloorSpec]
+    operation_theatres: list[OperationTheatreCreate] = []

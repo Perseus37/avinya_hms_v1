@@ -26,7 +26,7 @@ services:
       - public-net
 
   db:
-    image: postgres:15-alpine
+    image: postgres:17-alpine
     restart: unless-stopped
     env_file: .env.production
     environment:
@@ -36,7 +36,7 @@ services:
     volumes:
       - hms_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d$$POSTGRES_DB"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 3s
       timeout: 3s
       retries: 5
@@ -94,7 +94,7 @@ services:
     env_file: .env.production
     command: ["uvicorn", "onboarding_portal:onboarding_app", "--host", "0.0.0.0", "--port", "8080"]
     volumes:
-      - ./deployments:/app/deployments
+      - hms_backups:/app/backups
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.onboard.rule=Host(`onboard.${BASE_DOMAIN}`)"

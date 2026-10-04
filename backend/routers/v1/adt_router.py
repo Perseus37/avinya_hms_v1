@@ -36,6 +36,7 @@ from schemas.v1.schemas import (
 )
 from services.auto_billing import auto_bill_ipd_bed_stay
 from services.event_bus import publish_tenant_event
+from routers.v1.tenant_admin_router import get_or_create_policy
 
 router = APIRouter(prefix="/api/adt", tags=["Admissions, Discharges & Transfers (ADT)"])
 
@@ -280,6 +281,7 @@ def cancel_admission(
 @router.post("/transfers", response_model=BedTransferResponse, status_code=status.HTTP_201_CREATED)
 def transfer_patient_bed(
     payload: BedTransferRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(RequirePermission("adt:write")),
 ):
@@ -318,11 +320,25 @@ def transfer_patient_bed(
         db.add(transfer_log)
         db.commit()
         db.refresh(transfer_log)
+
+        if old_bed:
+            tenant = resolve_tenant_context(request)
+            publish_tenant_event(
+                tenant_slug=tenant.subdomain_slug,
+                stream="housekeeping",
+                event_type="BED_HOUSEKEEPING_REQUIRED",
+                payload={
+                    "admission_id": admission.id,
+                    "bed_id": old_bed.id,
+                    "bed_number": old_bed.bed_number,
+                    "status": "HOUSEKEEPING",
+                },
+            )
+
         return transfer_log
     except OperationalError:
         db.rollback()
         raise HTTPException(status_code=409, detail="Transfer failed due to concurrent bed locks.")
-
 
 @router.get("/admissions/{admission_id}/transfers", response_model=PaginatedResponse[BedTransferResponse])
 def list_admission_transfers(
@@ -364,11 +380,18 @@ def discharge_patient(
     if not admission or admission.discharge_time is not None:
         raise HTTPException(status_code=400, detail="Admission record is invalid or already discharged.")
 
+    policy = get_or_create_policy(db)
+
     # Phase 15B: Financial Clearance Gate ("No-Dues Gate") before routine discharge
-    if not payload.force_financial_override and payload.discharge_disposition not in [
-        DischargeDispositionEnum.DECEASED,
-        DischargeDispositionEnum.AGAINST_MEDICAL_ADVICE,
-    ]:
+    if (
+        policy.enforce_financial_discharge_gate
+        and not payload.force_financial_override
+        and payload.discharge_disposition
+        not in [
+            DischargeDispositionEnum.DECEASED,
+            DischargeDispositionEnum.AGAINST_MEDICAL_ADVICE,
+        ]
+    ):
         unpaid_invoices = list(
             db.execute(
                 select(Invoice).where(

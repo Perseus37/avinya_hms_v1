@@ -12,7 +12,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
   db:
-    image: postgres:15-alpine
+    image: postgres:17-alpine
     restart: unless-stopped
     env_file: .env
     environment:
@@ -24,7 +24,7 @@ services:
     volumes:
       - hms_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d$$POSTGRES_DB"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 3s
       timeout: 3s
       retries: 5
@@ -76,7 +76,7 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
-      - ./deployments:/app/deployments
+      - hms_backups:/app/backups
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.onboard.rule=Host(`onboard.${BASE_DOMAIN}`)"
@@ -106,6 +106,7 @@ services:
     profiles: ["test"]
     environment:
       ENVIRONMENT: "testing"
+      PYTHONPATH: "/app/backend:/app/backend/core:/app/backend/scripts"
     volumes:
       - .:/app
 

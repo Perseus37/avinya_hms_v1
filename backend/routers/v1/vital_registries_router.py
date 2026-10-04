@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from database import get_db, resolve_tenant_context
+from database import get_db, resolve_tenant_context, get_control_db
 from dependencies import RequirePermission
 from models import (
     Bed,
@@ -23,6 +23,7 @@ from models import (
     ReportTypeEnum,
     User,
 )
+from routers.v1.federation_router import sync_patient_pointer
 from routers.v1.reports_router import _fmt_ist, _resolve_template_for_print
 from schemas.v1.schemas import (
     BirthRecordCreate,
@@ -50,7 +51,9 @@ def _gen_cert_no(prefix: str) -> str:
 @router.post("/births", response_model=BirthRecordResponse, status_code=status.HTTP_201_CREATED)
 def register_maternity_birth(
     payload: BirthRecordCreate,
+    request: Request,
     db: Session = Depends(get_db),
+    control_db: Session = Depends(get_control_db),
     current_user: User = Depends(RequirePermission("adt:write", "opd:write")),
 ):
     """
@@ -72,6 +75,7 @@ def register_maternity_birth(
     baby_name = payload.baby_full_name or f"Baby of {mother.full_name}"
     newborn_id = None
     newborn_mrn = None
+    newborn = None
 
     if not payload.is_stillborn:
         newborn_mrn = f"MRN-NB-{uuid.uuid4().hex[:8].upper()}"
@@ -111,6 +115,17 @@ def register_maternity_birth(
     db.add(rec)
     db.commit()
     db.refresh(rec)
+
+    if newborn is not None:
+        tenant = resolve_tenant_context(request)
+        sync_patient_pointer(
+            control_db=control_db,
+            branch_code=tenant.branch_code,
+            subdomain_slug=tenant.subdomain_slug,
+            patient=newborn,
+            has_critical_allergies=False,
+            tenant_db=db,
+        )
 
     resp = BirthRecordResponse.model_validate(rec)
     resp.newborn_mrn = newborn_mrn

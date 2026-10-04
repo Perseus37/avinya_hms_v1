@@ -6,14 +6,18 @@ __pycache__/
 *$py.class
 .pytest_cache/
 .git/
+.github/
 .gitignore
 .vscode/
 .idea/
-.env
+.env*
 *.sqlite3
 *.db
 *.log
 tests/
+pytest.ini
+docs/
+frontend/
 backups/
 deployments/
 *.dump
@@ -21,4 +25,3 @@ deployments/
 *.md
 docker-compose*.yml
 Dockerfile
-README.md

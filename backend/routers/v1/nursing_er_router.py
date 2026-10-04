@@ -223,20 +223,22 @@ def record_er_triage_assessment(
     existing = db.execute(
         select(ERTriageAssessment).where(ERTriageAssessment.encounter_id == encounter_id)
     ).scalar_one_or_none()
-
     if existing:
         for field, value in payload.model_dump().items():
             setattr(existing, field, value)
         existing.triaged_by_id = current_user.id
-        db.commit()
-        db.refresh(existing)
-        return existing
+        triage = existing
+    else:
+        triage = ERTriageAssessment(
+            encounter_id=encounter_id,
+            triaged_by_id=current_user.id,
+            **payload.model_dump(),
+        )
+        db.add(triage)
 
-    triage = ERTriageAssessment(
-        encounter_id=encounter_id,
-        triaged_by_id=current_user.id,
-        **payload.model_dump(),
-    )
+    db.commit()
+    db.refresh(triage)
+
     if payload.acuity_level.value == "RED_RESUSCITATION":
         tenant = resolve_tenant_context(request)
         publish_tenant_event(
@@ -253,9 +255,6 @@ def record_er_triage_assessment(
             },
         )
 
-    db.add(triage)
-    db.commit()
-    db.refresh(triage)
     return triage
 
 

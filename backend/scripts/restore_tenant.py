@@ -6,6 +6,7 @@ import subprocess
 from cryptography.fernet import Fernet
 from sqlalchemy.engine import make_url
 
+from security.envelope import decrypt_tenant_secret
 from backup_service import derive_fernet_key
 from config import settings
 from control_models import DeploymentModeEnum, TenantRegistry
@@ -25,7 +26,8 @@ def restore_encrypted_backup(
     if not enc_path.exists():
         raise FileNotFoundError(f"Encrypted backup file not found: {encrypted_file_path}")
 
-    cipher = Fernet(derive_fernet_key(backup_encryption_key))
+    raw_key = decrypt_tenant_secret(backup_encryption_key)
+    cipher = Fernet(derive_fernet_key(raw_key))
     decrypted_bytes = cipher.decrypt(enc_path.read_bytes())
 
     temp_dump = enc_path.with_suffix(".restoring.dump")

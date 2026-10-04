@@ -134,7 +134,12 @@ def resolve_tenant_context(request: Request) -> TenantContext:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="This hospital runs On-Premise. Route requests to its local server endpoint.",
             )
-        
+        if getattr(tenant, "maintenance_mode", False) and request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=tenant.maintenance_notice
+                or "Hospital is in a scheduled read-only maintenance window. Viewing patient charts is enabled; writes are temporarily paused.",
+            )
         ctx = TenantContext(
             subdomain_slug=tenant.subdomain_slug,
             branch_code=tenant.branch_code,

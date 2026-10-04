@@ -23,28 +23,18 @@ RUN pip install --root-user-action=ignore -r requirements.txt
 
 
 # =====================================================================
-# STAGE 2: INTERNAL KMS MICROSERVICE TARGET (Zero Public Exposure)
-# =====================================================================
-FROM base AS kms
-COPY --chown=avinya:avinya backend/services/kms/main.py /app/kms_main.py
-USER avinya
-EXPOSE 8002
-CMD ["uvicorn", "kms_main:app", "--host", "0.0.0.0", "--port", "8002", "--workers", "2"]
-
-
-# =====================================================================
-# STAGE 3: DEVELOPMENT TARGET (Hot-Reload Uvicorn)
+# STAGE 2: DEVELOPMENT TARGET (Hot-Reload Uvicorn)
 # =====================================================================
 FROM base AS development
 COPY --chown=avinya:avinya . .
-RUN mkdir -p /app/backups /app/deployments && chown -R avinya:avinya /app
+RUN mkdir -p /app/backups && chown -R avinya:avinya /app
 USER avinya
 EXPOSE 8000
-CMD ["sh", "-c", "python backend/scripts/prestart.py && exec uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload"]
+CMD ["sh", "-c", "python backend/scripts/prestart.py && exec uvicorn main:app --host 0.0.0.0 --port 8000 --reload"]
 
 
 # =====================================================================
-# STAGE 4: AUTOMATED TEST RUNNER TARGET (Pytest in Isolated Linux RAM)
+# STAGE 3: AUTOMATED TEST RUNNER TARGET (Strictly for 'dev' Branch)
 # =====================================================================
 FROM base AS testing
 RUN pip install --root-user-action=ignore pytest pytest-cov
@@ -54,7 +44,7 @@ CMD ["pytest", "-v", "--durations=10"]
 
 
 # =====================================================================
-# STAGE 5: PRODUCTION TARGET (Locked Non-Root 4-Worker Gunicorn)
+# STAGE 4: PRODUCTION TARGET (Locked Non-Root 4-Worker Gunicorn)
 # =====================================================================
 FROM base AS production
 COPY --chown=avinya:avinya . .
@@ -65,4 +55,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["sh", "-c", "python backend/scripts/prestart.py && exec gunicorn backend.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --access-logfile - --error-logfile -"]
+CMD ["sh", "-c", "python backend/scripts/prestart.py && exec gunicorn main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --access-logfile - --error-logfile -"]

@@ -1,100 +1,132 @@
+import argparse
 import base64
-from datetime import datetime, timedelta, timezone
-import hashlib
+from datetime import datetime, timezone
 import logging
 import os
 from pathlib import Path
+import signal
 import subprocess
+import sys
+import threading
+import time
 
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from sqlalchemy import select
-from sqlalchemy.engine import make_url
+
+# Ensure core modules are importable when executed as a standalone script
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+for _p in (_BACKEND_DIR, _BACKEND_DIR / "core", _BACKEND_DIR / "scripts"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 from config import settings
-from control_models import TenantRegistry
+from control_models import DeploymentModeEnum, TenantRegistry
 from database import ControlSessionLocal
 from security.envelope import decrypt_tenant_secret
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("avinya.backup")
 
-RETENTION_DAYS = int(os.getenv("BACKUP_RETENTION_DAYS", "7"))
+_running = True
 
 
-def derive_fernet_key(secret: str) -> bytes:
-    digest = hashlib.pbkdf2_hmac(
-        "sha256",
-        secret.encode("utf-8"),
-        settings.BACKUP_ENCRYPTION_SALT.encode("utf-8"),
-        100_000,
+def _handle_signal(signum, frame):
+    global _running
+    logger.info("Received signal %s. Shutting down backup daemon gracefully...", signum)
+    _running = False
+
+
+if threading.current_thread() is threading.main_thread():
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
+
+def derive_fernet_key(secret_key: str) -> bytes:
+    """Derives a URL-safe 32-byte AES-256/Fernet key using PBKDF2-HMAC-SHA256."""
+    salt = settings.BACKUP_ENCRYPTION_SALT.encode("utf-8")
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=390000,
     )
-    return base64.urlsafe_b64encode(digest)
+    return base64.urlsafe_b64encode(kdf.derive(secret_key.encode("utf-8")))
 
 
-def _dump_and_encrypt(db_name: str, encryption_secret: str, backup_dir: Path) -> None:
-    url_obj = make_url(settings.DATABASE_URL)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    raw_dump = backup_dir / f"{db_name}_{timestamp}.dump"
-    encrypted_file = backup_dir / f"{db_name}_{timestamp}.dump.enc"
+def _dump_and_encrypt(db_name: str, encryption_key: str, output_dir: Path) -> Path:
+    """Runs pg_dump in custom format and encrypts the binary artifact with the tenant's Fernet key."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    out_file = output_dir / f"{db_name}_{ts}.dump.enc"
 
-    env = {**os.environ, "PGPASSWORD": url_obj.password or ""}
+    env = os.environ.copy()
+    env["PGPASSWORD"] = settings.POSTGRES_PASSWORD
+
     cmd = [
         "pg_dump",
-        "-h", url_obj.host or "db",
-        "-p", str(url_obj.port or 5432),
-        "-U", url_obj.username or "user",
-        "-Fc",
-        "-f", str(raw_dump),
+        "-h",
+        settings.POSTGRES_HOST,
+        "-p",
+        str(settings.POSTGRES_PORT),
+        "-U",
+        settings.POSTGRES_USER,
+        "-F",
+        "c",
         db_name,
     ]
-    subprocess.run(cmd, env=env, check=True)
-
-    cipher = Fernet(derive_fernet_key(encryption_secret))
-    encrypted_file.write_bytes(cipher.encrypt(raw_dump.read_bytes()))
-    raw_dump.unlink(missing_ok=True)
-    logger.info("Encrypted backup created: %s", encrypted_file.name)
-
-
-def prune_old_backups(backup_dir: Path, retention_days: int = RETENTION_DAYS) -> int:
-    cutoff_ts = (datetime.now(timezone.utc) - timedelta(days=retention_days)).timestamp()
-    removed = 0
-    for enc_file in backup_dir.glob("*.dump.enc"):
-        if enc_file.stat().st_mtime < cutoff_ts:
-            enc_file.unlink(missing_ok=True)
-            removed += 1
-    return removed
+    proc = subprocess.run(cmd, env=env, capture_output=True, check=True)
+    cipher = Fernet(derive_fernet_key(encryption_key))
+    encrypted_bytes = cipher.encrypt(proc.stdout)
+    out_file.write_bytes(encrypted_bytes)
+    logger.info("Created encrypted backup snapshot: %s (%d bytes)", out_file.name, len(encrypted_bytes))
+    return out_file
 
 
-def backup_all_tenants() -> None:
-    """
-    1. Backs up hms_control_plane (which stores all tenant keys, registry, and MPI pointers).
-    2. Backs up every active hospital tenant database.
-    """
-    backup_dir = Path("backups")
-    backup_dir.mkdir(parents=True, exist_ok=True)
-
-    # 1. Back up the Central Control Plane DB (encrypted with master SECRET_KEY)
-    _dump_and_encrypt(settings.CONTROL_PLANE_DB_NAME, settings.SECRET_KEY, backup_dir)
-
-    # 2. Back up each Hospital Tenant DB
+def run_backup_cycle(output_dir: Path) -> int:
+    count = 0
     with ControlSessionLocal() as control_db:
         tenants = (
-            control_db.execute(select(TenantRegistry).where(TenantRegistry.is_active == True))
+            control_db.execute(
+                select(TenantRegistry).where(
+                    TenantRegistry.is_active == True,
+                    TenantRegistry.deployment_mode == DeploymentModeEnum.CLOUD,
+                )
+            )
             .scalars()
             .all()
         )
-        for tenant in tenants:
-            raw_key = decrypt_tenant_secret(tenant.backup_encryption_key)
-            _dump_and_encrypt(tenant.db_name, raw_key, backup_dir)
+        for t in tenants:
+            try:
+                raw_key = decrypt_tenant_secret(t.backup_encryption_key)
+                _dump_and_encrypt(t.db_name, raw_key, output_dir)
+                count += 1
+            except Exception as exc:
+                logger.error("Backup failed for tenant %s (%s): %s", t.subdomain_slug, t.db_name, str(exc))
+    return count
 
-    prune_old_backups(backup_dir)
+
+def main():
+    parser = argparse.ArgumentParser(description="Avinya HMS Encrypted Backup Service")
+    parser.add_argument("--daemon", action="store_true", help="Run continuously as a background sidecar")
+    parser.add_argument("--interval", type=int, default=86400, help="Backup interval in seconds (default: 24h)")
+    parser.add_argument("--output-dir", type=str, default="backups", help="Directory for .dump.enc files")
+    args = parser.parse_args()
+
+    out_dir = Path(args.output_dir)
+    if not args.daemon:
+        run_backup_cycle(out_dir)
+        return
+
+    logger.info("Starting encrypted backup daemon (interval=%ds)...", args.interval)
+    while _running:
+        run_backup_cycle(out_dir)
+        for _ in range(args.interval):
+            if not _running:
+                break
+            time.sleep(1)
+
 
 if __name__ == "__main__":
-    import sys
-    import time
-    if "--daemon" in sys.argv:
-        while True:
-            backup_all_tenants()
-            time.sleep(int(os.getenv("BACKUP_INTERVAL_SECONDS", "21600")))
-    else:
-        backup_all_tenants()
+    main()

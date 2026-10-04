@@ -1,4 +1,5 @@
 import hashlib
+import json
 from datetime import datetime, timezone
 from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
@@ -7,8 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from config import settings
-from control_models import FederatedNode
-from database import TenantContext, get_control_db, get_db, resolve_tenant_context, get_redis
+from control_models import FederatedNode, TenantRegistry
+from database import ControlSessionLocal, TenantContext, get_control_db, get_db, get_redis, resolve_tenant_context
 from models import Permission, Role, User, UserStatusEnum
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/api/auth/login")
@@ -92,6 +93,47 @@ def RequirePermission(*permission_codes: str):
     return dependency
 
 
+class RequireLicensedModule:
+    """
+    Enforces modular/bundle licensing per hospital tenant.
+    Blocks requests with HTTP 403 if the hospital has not licensed the requested module.
+    """
+
+    def __init__(self, module_key: str):
+        self.module_key = module_key
+
+    def __call__(
+        self,
+        request: Request,
+        control_db: Session = Depends(get_control_db),
+    ) -> None:
+        tenant_ctx = resolve_tenant_context(request)
+        enabled_modules = getattr(request.state, "enabled_modules", None)
+
+        if enabled_modules is None:
+            t = control_db.execute(
+                select(TenantRegistry).where(TenantRegistry.subdomain_slug == tenant_ctx.subdomain_slug)
+            ).scalar_one_or_none()
+            try:
+                enabled_modules = (
+                    json.loads(t.enabled_modules_json)
+                    if t and getattr(t, "enabled_modules_json", None)
+                    else {"all": True}
+                )
+            except Exception:
+                enabled_modules = {"all": True}
+            request.state.enabled_modules = enabled_modules
+
+        if enabled_modules.get("all") is True:
+            return
+
+        if not enabled_modules.get(self.module_key, True):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Module '{self.module_key}' is not enabled under your hospital's current license package.",
+            )
+
+
 def get_federated_node(
     x_federation_api_key: str = Header(..., alias="X-Federation-API-Key"),
     control_db: Session = Depends(get_control_db),
@@ -112,6 +154,7 @@ def get_federated_node(
     node.last_used_at = datetime.now(timezone.utc)
     control_db.commit()
     return node
+
 
 class RateLimiter:
     """

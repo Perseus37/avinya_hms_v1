@@ -62,6 +62,7 @@ def register_patient(
         branch_code=tenant.branch_code,
         subdomain_slug=tenant.subdomain_slug,
         patient=patient,
+        tenant_db=db,
         has_critical_allergies=False,
     )
     return patient
@@ -128,6 +129,7 @@ def update_patient(
         branch_code=tenant.branch_code,
         subdomain_slug=tenant.subdomain_slug,
         patient=patient,
+        tenant_db=db,
     )
     return patient
 
@@ -202,6 +204,7 @@ def chart_patient_allergy(
         branch_code=tenant.branch_code,
         subdomain_slug=tenant.subdomain_slug,
         patient=patient,
+        tenant_db=db,
         has_critical_allergies=is_crit,
     )
     return record

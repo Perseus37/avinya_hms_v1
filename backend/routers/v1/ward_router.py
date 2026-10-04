@@ -1,8 +1,8 @@
 """Ward and facility management APIs.
 
 This router belongs to the operations and facility domain. It covers ward
-inventory, room and bed configuration, and nursing shift logistics that keep
-the hospital running at an operational level.
+inventory, room and bed configuration, dynamic spatial reconfiguration,
+and nursing shift logistics.
 """
 
 from datetime import datetime, timezone
@@ -16,6 +16,7 @@ from dependencies import RequirePermission, validate_pagination
 from models import Bed, BedStatusEnum, Department, Floor, NursingShiftAssignment, PhysicalRoom, User, Ward
 from schemas.v1.schemas import (
     BedCreate,
+    BedReconfigure,
     BedStatusUpdate,
     FloorCreate,
     FloorResponse,
@@ -59,11 +60,9 @@ def create_ward(
     floor = db.get(Floor, payload.floor_id)
     if not floor or not floor.is_active:
         raise HTTPException(status_code=404, detail="Active floor not found.")
-
     dept = db.get(Department, payload.department_id)
     if not dept or not dept.is_active:
         raise HTTPException(status_code=404, detail="Active department not found.")
-
     existing = db.query(Ward).filter(Ward.code == payload.code).first()
     if existing:
         raise HTTPException(status_code=409, detail="Ward code already exists.")
@@ -146,7 +145,6 @@ def create_room(
     ward = db.get(Ward, payload.ward_id)
     if not ward or not ward.is_active:
         raise HTTPException(status_code=404, detail="Active ward not found.")
-
     room = PhysicalRoom(
         ward_id=payload.ward_id,
         room_number=payload.room_number,
@@ -168,7 +166,6 @@ def create_bed(
     room = db.get(PhysicalRoom, payload.room_id)
     if not room or not room.is_active:
         raise HTTPException(status_code=404, detail="Active room not found.")
-
     bed = Bed(
         room_id=payload.room_id,
         bed_number=payload.bed_number,
@@ -191,6 +188,14 @@ def update_ward(
     ward = db.get(Ward, ward_id)
     if not ward:
         raise HTTPException(status_code=404, detail="Ward not found")
+    if payload.floor_id is not None:
+        if not db.get(Floor, payload.floor_id):
+            raise HTTPException(status_code=404, detail="Target floor not found")
+        ward.floor_id = payload.floor_id
+    if payload.department_id is not None:
+        if not db.get(Department, payload.department_id):
+            raise HTTPException(status_code=404, detail="Target department not found")
+        ward.department_id = payload.department_id
     if payload.name is not None:
         ward.name = payload.name
     if payload.ward_type is not None:
@@ -226,9 +231,14 @@ def update_room(
     db: Session = Depends(get_db),
     _: User = Depends(RequirePermission("wards:write")),
 ):
+    """Updates a room or shifts it to a different ward (payload.ward_id)."""
     room = db.get(PhysicalRoom, room_id)
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
+    if payload.ward_id is not None:
+        if not db.get(Ward, payload.ward_id):
+            raise HTTPException(status_code=404, detail="Target ward not found")
+        room.ward_id = payload.ward_id
     if payload.room_number is not None:
         room.room_number = payload.room_number
     if payload.room_type is not None:
@@ -238,7 +248,60 @@ def update_room(
     if payload.is_active is not None:
         room.is_active = payload.is_active
     db.commit()
-    return {"status": "success", "message": f"Room ID {room_id} updated."}
+    db.refresh(room)
+    return {
+        "status": "success",
+        "message": f"Room ID {room_id} updated.",
+        "id": room.id,
+        "ward_id": room.ward_id,
+        "room_number": room.room_number,
+        "room_type": room.room_type.value,
+        "bed_capacity": room.bed_capacity,
+    }
+
+
+@router.patch("/beds/{bed_id}", status_code=200)
+def reconfigure_bed(
+    bed_id: int,
+    payload: BedReconfigure,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("wards:write")),
+):
+    """Shifts an unoccupied bed to another room, changes its bed_type, or updates its daily rate."""
+    bed = db.get(Bed, bed_id)
+    if not bed:
+        raise HTTPException(status_code=404, detail="Bed not found.")
+    if payload.room_id is not None and payload.room_id != bed.room_id:
+        if bed.status == BedStatusEnum.OCCUPIED or bed.current_admission_id is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot move an OCCUPIED bed to another room while a patient is admitted.",
+            )
+        if not db.get(PhysicalRoom, payload.room_id):
+            raise HTTPException(status_code=404, detail="Target room not found.")
+        bed.room_id = payload.room_id
+    if payload.bed_number is not None:
+        bed.bed_number = payload.bed_number
+    if payload.bed_type is not None:
+        bed.bed_type = payload.bed_type
+    if payload.base_daily_rate_paise is not None:
+        bed.base_daily_rate_paise = payload.base_daily_rate_paise
+    if payload.status is not None:
+        if bed.status == BedStatusEnum.OCCUPIED or bed.current_admission_id is not None:
+            raise HTTPException(status_code=409, detail="Cannot override status of an OCCUPIED bed.")
+        if payload.status == BedStatusEnum.OCCUPIED:
+            raise HTTPException(status_code=400, detail="Cannot manually mark a bed as OCCUPIED.")
+        bed.status = payload.status
+    db.commit()
+    db.refresh(bed)
+    return {
+        "id": bed.id,
+        "room_id": bed.room_id,
+        "bed_number": bed.bed_number,
+        "bed_type": bed.bed_type.value,
+        "status": bed.status.value,
+        "base_daily_rate_paise": bed.base_daily_rate_paise,
+    }
 
 
 @router.delete("/floors/{floor_id}", status_code=200)
@@ -264,6 +327,10 @@ def deactivate_ward(
     ward = db.get(Ward, ward_id)
     if not ward:
         raise HTTPException(status_code=404, detail="Ward not found")
+    for room in ward.rooms:
+        for b in room.beds:
+            if b.status == BedStatusEnum.OCCUPIED or b.current_admission_id is not None:
+                raise HTTPException(status_code=409, detail="Cannot deactivate a ward with occupied beds.")
     ward.is_active = False
     db.commit()
     return {"status": "success", "message": f"Ward ID {ward_id} deactivated."}
@@ -278,6 +345,8 @@ def deactivate_room(
     room = db.get(PhysicalRoom, room_id)
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
+    if any(b.status == BedStatusEnum.OCCUPIED or b.current_admission_id is not None for b in room.beds):
+        raise HTTPException(status_code=409, detail="Cannot deactivate a room with occupied beds.")
     room.is_active = False
     db.commit()
     return {"status": "success", "message": f"Room ID {room_id} deactivated."}
@@ -314,7 +383,6 @@ def update_bed_status(
         bed = db.execute(stmt).scalar_one_or_none()
         if not bed:
             raise HTTPException(status_code=404, detail="Bed identifier not found")
-
         if bed.status == BedStatusEnum.OCCUPIED or bed.current_admission_id is not None:
             raise HTTPException(
                 status_code=409,
@@ -325,7 +393,6 @@ def update_bed_status(
                 status_code=400,
                 detail="Cannot manually mark a bed as OCCUPIED without an IPD admission.",
             )
-
         bed.status = payload.status
         db.commit()
         return {"status": "success", "new_state": bed.status.value}
@@ -365,7 +432,6 @@ def assign_nursing_shift(
     ward = db.get(Ward, payload.ward_id)
     if not ward or not ward.is_active:
         raise HTTPException(status_code=404, detail="Active ward not found.")
-
     assignment = NursingShiftAssignment(
         ward_id=payload.ward_id,
         nurse_user_id=payload.nurse_user_id,
@@ -391,7 +457,6 @@ def complete_shift_handoff(
         raise HTTPException(status_code=404, detail="Nursing shift assignment not found.")
     if shift.handed_off_at is not None:
         raise HTTPException(status_code=409, detail="Shift handoff has already been finalized.")
-
     shift.handoff_notes = payload.handoff_notes
     shift.handed_off_at = datetime.now(timezone.utc)
     db.commit()

@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
@@ -881,13 +881,19 @@ def get_doctor_and_department_productivity(
 
 @router.get("/inventory-and-blood-radar")
 def get_inventory_and_blood_radar(
-    low_stock_threshold: int = Query(default=20, ge=1, le=1000),
-    expiry_warning_days: int = Query(default=30, ge=1, le=365),
+    low_stock_threshold: Optional[int] = Query(default=None, ge=1, le=1000),
+    expiry_warning_days: Optional[int] = Query(default=None, ge=1, le=365),
     db: Session = Depends(get_db),
     _: User = Depends(RequirePermission("pharmacy:read", "diagnostics:read", "iam:read")),
 ) -> Dict[str, Any]:
+    from routers.v1.tenant_admin_router import get_or_create_policy
+
+    policy = get_or_create_policy(db)
+    effective_low_stock = low_stock_threshold if low_stock_threshold is not None else policy.low_stock_threshold_units
+    effective_expiry_days = expiry_warning_days if expiry_warning_days is not None else policy.fefo_expiry_warning_days
+
     now_utc = datetime.now(timezone.utc)
-    warning_cutoff = now_utc + timedelta(days=expiry_warning_days)
+    warning_cutoff = now_utc + timedelta(days=effective_expiry_days)
 
     batches = list(
         db.execute(select(InventoryBatch).options(joinedload(InventoryBatch.medication))).scalars().all()
@@ -900,7 +906,7 @@ def get_inventory_and_blood_radar(
     for b in batches:
         med_name = b.medication.brand_name if b.medication else f"Med #{b.medication_id}"
         exp_utc = _to_utc(b.expiry_date)
-        if b.stock_quantity <= low_stock_threshold:
+        if b.stock_quantity <= effective_low_stock:
             low_stock_batches.append(
                 {
                     "batch_id": b.id,
@@ -924,7 +930,6 @@ def get_inventory_and_blood_radar(
     blood_bags = list(db.execute(select(BloodBagInventory)).scalars().all())
     available_by_blood_group = {bg.value: 0 for bg in BloodGroupEnum}
     bag_status_counts = {s.value: 0 for s in BloodBagStatusEnum}
-
     for bag in blood_bags:
         bag_status_counts[bag.status.value] += 1
         if bag.status == BloodBagStatusEnum.AVAILABLE and _to_utc(bag.expiry_date) > now_utc:
@@ -972,7 +977,7 @@ def get_inventory_and_blood_radar(
             "total_bags_recorded": len(blood_bags),
             "bag_status_breakdown": bag_status_counts,
             "available_units_by_blood_group": available_by_blood_group,
-            "critical_o_negative_shortage": available_by_blood_group["O-"] < 2,
+            "critical_o_negative_shortage": available_by_blood_group["O-"] < policy.o_negative_critical_threshold_units,
             "total_cross_matches": len(cross_matches),
             "total_transfusions_issued": len(issued_transfusions),
             "adverse_transfusion_reactions_count": len(adverse_reactions),

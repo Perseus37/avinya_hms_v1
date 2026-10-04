@@ -34,12 +34,13 @@ from schemas.v1.schemas import (
 )
 
 from security.envelope import decrypt_tenant_secret
+from routers.v1.tenant_admin_router import get_or_create_policy
 
 router = APIRouter(prefix="/api/auth", tags=["IAM & Auth"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+# MAX_FAILED_LOGIN_ATTEMPTS = get_or_create_policy(get_db).max_failed_login_attempts
 MAX_FAILED_LOGIN_ATTEMPTS = 5
-
 
 class CustomPermissionCreate(BaseModel):
     module: str = Field(min_length=2, max_length=50, description="Module name, e.g., Billing or Radiology")

@@ -33,7 +33,9 @@ from routers.v1 import (
     analytics_router,
     vital_registries_router,
     websocket_router,
+    tenant_admin_router,
 )
+from core.dependencies import RequireLicensedModule
 
 # -----------------------------------------------------------------------------
 # M1 FIX: Context-Safe Request ID Logging Across All Libraries
@@ -245,29 +247,32 @@ async def request_correlation_middleware(request: Request, call_next):
         request_id_ctx_var.reset(token)
 
 
-# Bind all V1 routers on both v1_app (/v1/api/...) and root app (/api/...) for backwards-compatible testing
+# Bind all V1 routers on both v1_app (/v1/api/...) and root app (/api/...) with modular license guards
 for target in (v1_app, app):
+    # Core identity, MPI, print engine, websockets, and admin policies are always enabled for every tenant
     target.include_router(auth_router.router)
-    target.include_router(ward_router.router)
-    target.include_router(clinical_router.router)
     target.include_router(patient_router.router)
-    target.include_router(diagnostic_router.router)
+    target.include_router(clinical_router.router)
     target.include_router(federation_router.router)
-    target.include_router(websocket_router.ws_router)
-    target.include_router(vital_registries_router.router)
-    target.include_router(adt_router.router)
-    target.include_router(pharmacy_router.router)
-    target.include_router(billing_router.router)
-    target.include_router(opd_router.router)
-    target.include_router(ot_router.router)
     target.include_router(reports_router.router)
-    target.include_router(insurance_router.router)
-    target.include_router(nursing_er_router.router)
-    target.include_router(blood_pacs_router.router)
-    target.include_router(analytics_router.router)
+    target.include_router(websocket_router.ws_router)
+    target.include_router(tenant_admin_router.router)
+
+    # Modularly licensed clinical, surgical, diagnostic & financial domains
+    target.include_router(opd_router.router, dependencies=[Depends(RequireLicensedModule("opd"))])
+    target.include_router(ward_router.router, dependencies=[Depends(RequireLicensedModule("ipd_adt"))])
+    target.include_router(adt_router.router, dependencies=[Depends(RequireLicensedModule("ipd_adt"))])
+    target.include_router(vital_registries_router.router, dependencies=[Depends(RequireLicensedModule("ipd_adt"))])
+    target.include_router(pharmacy_router.router, dependencies=[Depends(RequireLicensedModule("pharmacy"))])
+    target.include_router(diagnostic_router.router, dependencies=[Depends(RequireLicensedModule("diagnostics"))])
+    target.include_router(billing_router.router, dependencies=[Depends(RequireLicensedModule("billing"))])
+    target.include_router(insurance_router.router, dependencies=[Depends(RequireLicensedModule("insurance_tpa"))])
+    target.include_router(ot_router.router, dependencies=[Depends(RequireLicensedModule("ot_surgery"))])
+    target.include_router(blood_pacs_router.router, dependencies=[Depends(RequireLicensedModule("blood_bank"))])
+    target.include_router(nursing_er_router.router, dependencies=[Depends(RequireLicensedModule("er_mlc"))])
+    target.include_router(analytics_router.router, dependencies=[Depends(RequireLicensedModule("executive_bi"))])
 
 app.mount("/v1", v1_app)
-
 
 # -----------------------------------------------------------------------------
 # M11 FIX: Liveness & Deep Readiness Health Probes
