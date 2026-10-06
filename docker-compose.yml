@@ -1,16 +1,4 @@
 services:
-  reverse-proxy:
-    image: traefik:v2.11
-    restart: unless-stopped
-    command:
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-    ports:
-      - "80:80"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-
   db:
     image: postgres:17-alpine
     restart: unless-stopped
@@ -58,10 +46,6 @@ services:
       - "8000:8000"
     volumes:
       - hms_backups:/app/backups
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.hms-api.rule=HostRegexp(`{subdomain:[a-z0-9-]+}.${BASE_DOMAIN}`)"
-      - "traefik.http.services.hms-api.loadbalancer.server.port=8000"
     depends_on:
       db:
         condition: service_healthy
@@ -77,10 +61,6 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - hms_backups:/app/backups
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.onboard.rule=Host(`onboard.${BASE_DOMAIN}`)"
-      - "traefik.http.services.onboard.loadbalancer.server.port=8080"
     depends_on:
       db:
         condition: service_healthy
@@ -96,7 +76,28 @@ services:
       db:
         condition: service_healthy
 
-  # Only runs on 'dev' when you explicitly run: docker compose --profile test run --rm test-runner
+  backup-vault:
+    image: alpine:3.19
+    restart: unless-stopped
+    command: >
+      sh -c "mkdir -p /vault/immutable &&
+      while true; do
+        for f in /source/*.dump.enc; do
+          [ -e \"$$f\" ] || continue;
+          base=$$(basename \"$$f\");
+          if [ ! -f \"/vault/immutable/$$base\" ]; then
+            cp \"$$f\" \"/vault/immutable/$$base\" &&
+            sha256sum \"/vault/immutable/$$base\" > \"/vault/immutable/$$base.sha256\" &&
+            chmod 400 \"/vault/immutable/$$base\" \"/vault/immutable/$$base.sha256\" &&
+            echo \"[VAULT] Sealed immutable snapshot: $$base\";
+          fi;
+        done;
+        sleep 30;
+      done"
+    volumes:
+      - hms_backups:/source:ro
+      - hms_vault_storage:/vault
+
   test-runner:
     build:
       context: .
@@ -114,3 +115,4 @@ volumes:
   hms_pgdata:
   hms_redisdata:
   hms_backups:
+  hms_vault_storage:

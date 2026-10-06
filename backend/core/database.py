@@ -1,6 +1,7 @@
 from collections import OrderedDict
 from dataclasses import dataclass
 import threading
+from typing import Optional
 from fastapi import HTTPException, Request, status
 import redis
 from sqlalchemy import create_engine, select, text
@@ -9,7 +10,6 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from config import settings
 from control_models import DeploymentModeEnum, TenantRegistry
-
 from security.envelope import decrypt_tenant_secret
 
 MAX_CACHED_TENANT_ENGINES = 64
@@ -27,6 +27,8 @@ class TenantContext:
     hospital_name: str
     db_name: str
     jwt_secret_key: str
+    enabled_modules_json: Optional[str] = '{"all": true}'
+    quota_limits_json: Optional[str] = None
 
 
 def build_db_url(db_name: str) -> str:
@@ -35,6 +37,7 @@ def build_db_url(db_name: str) -> str:
     if base_url.drivername in ("postgresql", "postgres"):
         base_url = base_url.set(drivername="postgresql+psycopg2")
     return base_url.set(database=db_name).render_as_string(hide_password=False)
+
 
 def ensure_postgres_db_exists(db_name: str) -> str:
     """Idempotently creates a PostgreSQL database if it does not already exist."""
@@ -146,6 +149,8 @@ def resolve_tenant_context(request: Request) -> TenantContext:
             hospital_name=tenant.hospital_name,
             db_name=tenant.db_name,
             jwt_secret_key=decrypt_tenant_secret(tenant.jwt_secret_key),
+            enabled_modules_json=getattr(tenant, "enabled_modules_json", '{"all": true}'),
+            quota_limits_json=getattr(tenant, "quota_limits_json", None),
         )
         request.state.tenant_context = ctx
         return ctx

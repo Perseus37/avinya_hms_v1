@@ -2,13 +2,13 @@ import csv
 import io
 import json
 from typing import Any, Dict, List, Literal, Optional
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from database import get_db
-from dependencies import RequirePermission
+from dependencies import RequirePermission, enforce_tenant_resource_quota
 from models import (
     Bed,
     BedStatusEnum,
@@ -89,9 +89,18 @@ class BulkSpatialMatrixRequest(BaseModel):
 @router.post("/spatial-matrix", status_code=status.HTTP_201_CREATED)
 def generate_hospital_spatial_matrix(
     payload: BulkSpatialMatrixRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(RequirePermission("wards:write", "iam:write")),
 ):
+    planned_beds = sum(
+        r_spec.rooms_count * r_spec.beds.count
+        for f_spec in payload.floors
+        for w_spec in f_spec.wards
+        for r_spec in w_spec.rooms
+    )
+    if planned_beds > 0:
+        enforce_tenant_resource_quota(request, db, resource="beds", additional_count=planned_beds)
     """Hospital Admin Tool: Atomic bulk generation of floors, wards, rooms, beds, and theatres."""
     created = {"floors": 0, "wards": 0, "rooms": 0, "beds": 0, "theatres": 0}
     depts = {d.code: d for d in db.query(Department).all()}

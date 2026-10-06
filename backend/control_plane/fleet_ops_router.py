@@ -970,3 +970,86 @@ def list_control_plane_audit_logs(
             for log in logs
         ],
     }
+@router.get("/fleet/analytics")
+def get_fleet_commercial_and_operational_analytics(
+    x_master_setup_key: Optional[str] = Header(default=None, alias="X-Master-Setup-Key"),
+    control_db: Session = Depends(get_control_db),
+    _: None = Depends(verify_control_plane_secret),
+) -> Dict[str, Any]:
+    """
+    Returns deep fleet-wide commercial intelligence (ARR by bundle, billing cycle mix,
+    module adoption rates across hospitals) and per-hospital operational leaderboards.
+    """
+    _verify_vendor_key(x_master_setup_key or "")
+    tenants = list(control_db.execute(select(TenantRegistry).order_by(TenantRegistry.id.asc())).scalars().all())
+
+    arr_by_pricing_model: Dict[str, int] = {}
+    count_by_billing_cycle: Dict[str, int] = {}
+    module_adoption_counts: Dict[str, int] = {k: 0 for k in MODULE_CATALOG.keys()}
+    hospital_leaderboard = []
+
+    for t in tenants:
+        model_key = t.pricing_model.value if t.pricing_model else "BUNDLE_TOTAL_HOSPITAL"
+        cycle_key = t.billing_cycle.value if t.billing_cycle else "ANNUAL_LICENSE"
+        count_by_billing_cycle[cycle_key] = count_by_billing_cycle.get(cycle_key, 0) + 1
+
+        fee = getattr(t, "base_license_fee_paise", 0) or 0
+        if cycle_key in ("MONTHLY_SUBSCRIPTION", "PER_ACTIVE_BED_MONTHLY"):
+            norm_arr = fee * 12
+        elif cycle_key == "ONE_TIME_PERPETUAL":
+            norm_arr = int(fee * 0.20)
+        else:
+            norm_arr = fee
+
+        if t.is_active:
+            arr_by_pricing_model[model_key] = arr_by_pricing_model.get(model_key, 0) + norm_arr
+
+        # Module adoption count
+        try:
+            mods = json.loads(t.enabled_modules_json) if t.enabled_modules_json else {"all": True}
+            for m_key in MODULE_CATALOG.keys():
+                if mods.get("all") is True or mods.get(m_key, False) is True:
+                    module_adoption_counts[m_key] += 1
+        except Exception:
+            for m_key in MODULE_CATALOG.keys():
+                module_adoption_counts[m_key] += 1
+
+        # Gather per-hospital operational snapshot
+        pts_cnt = 0
+        beds_tot = 0
+        beds_occ = 0
+        gmv_paise = 0
+        if t.is_active:
+            try:
+                eng = tenant_engine_pool.get_engine(t.db_name)
+                TSession = sessionmaker(bind=eng)
+                with TSession() as tdb:
+                    pts_cnt = tdb.scalar(select(func.count(Patient.id))) or 0
+                    beds_tot = tdb.scalar(select(func.count(Bed.id))) or 0
+                    beds_occ = tdb.scalar(select(func.count(Bed.id)).where(Bed.status == BedStatusEnum.OCCUPIED)) or 0
+                    gmv_paise = tdb.scalar(select(func.coalesce(func.sum(Invoice.amount_paid_paise), 0))) or 0
+            except Exception:
+                pass
+
+        hospital_leaderboard.append({
+            "subdomain_slug": t.subdomain_slug,
+            "hospital_name": t.hospital_name,
+            "branch_code": t.branch_code,
+            "is_active": t.is_active,
+            "pricing_model": model_key,
+            "billing_cycle": cycle_key,
+            "normalized_arr_paise": norm_arr,
+            "patients_count": pts_cnt,
+            "total_beds": beds_tot,
+            "occupied_beds": beds_occ,
+            "occupancy_pct": round((beds_occ / beds_tot) * 100.0, 1) if beds_tot > 0 else 0.0,
+            "collected_gmv_paise": gmv_paise,
+        })
+
+    return {
+        "arr_by_pricing_model_paise": arr_by_pricing_model,
+        "tenants_by_billing_cycle": count_by_billing_cycle,
+        "module_adoption_counts": module_adoption_counts,
+        "total_tenants": len(tenants),
+        "hospital_leaderboard": sorted(hospital_leaderboard, key=lambda x: x["collected_gmv_paise"], reverse=True),
+    }

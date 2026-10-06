@@ -1,4 +1,14 @@
 # =====================================================================
+# STAGE 0: REACT CONTROL PLANE UI BUILDER (Compiles onboarding-ui/dist)
+# =====================================================================
+FROM node:20-alpine AS ui-builder
+WORKDIR /ui
+COPY onboarding-ui/package.json ./
+RUN npm install --no-audit --no-fund
+COPY onboarding-ui/ ./
+RUN npm run build
+
+# =====================================================================
 # STAGE 1: BASE RUNTIME (Shared OS, PostgreSQL Client & Python Deps)
 # =====================================================================
 FROM python:3.11-slim AS base
@@ -21,17 +31,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --root-user-action=ignore -r requirements.txt
 
-
 # =====================================================================
 # STAGE 2: DEVELOPMENT TARGET (Hot-Reload Uvicorn)
 # =====================================================================
 FROM base AS development
 COPY --chown=avinya:avinya . .
+COPY --from=ui-builder --chown=avinya:avinya /ui/dist /app/onboarding-ui/dist
 RUN mkdir -p /app/backups && chown -R avinya:avinya /app
 USER avinya
 EXPOSE 8000
 CMD ["sh", "-c", "python backend/scripts/prestart.py && exec uvicorn main:app --host 0.0.0.0 --port 8000 --reload"]
-
 
 # =====================================================================
 # STAGE 3: AUTOMATED TEST RUNNER TARGET (Strictly for 'dev' Branch)
@@ -39,16 +48,17 @@ CMD ["sh", "-c", "python backend/scripts/prestart.py && exec uvicorn main:app --
 FROM base AS testing
 RUN pip install --root-user-action=ignore pytest pytest-cov
 COPY --chown=avinya:avinya . .
+COPY --from=ui-builder --chown=avinya:avinya /ui/dist /app/onboarding-ui/dist
 USER avinya
 CMD ["pytest", "-v", "--durations=10"]
-
 
 # =====================================================================
 # STAGE 4: PRODUCTION TARGET (Locked Non-Root 4-Worker Gunicorn)
 # =====================================================================
 FROM base AS production
 COPY --chown=avinya:avinya . .
-RUN mkdir -p /app/backups /app/deployments && chown -R avinya:avinya /app
+COPY --from=ui-builder --chown=avinya:avinya /ui/dist /app/onboarding-ui/dist
+RUN mkdir -p /app/backups && chown -R avinya:avinya /app
 USER avinya
 EXPOSE 8000
 

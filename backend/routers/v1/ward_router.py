@@ -6,13 +6,13 @@ and nursing shift logistics.
 """
 
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, joinedload
 
 from database import get_db
-from dependencies import RequirePermission, validate_pagination
+from dependencies import RequirePermission, validate_pagination, enforce_tenant_resource_quota
 from models import Bed, BedStatusEnum, Department, Floor, NursingShiftAssignment, PhysicalRoom, User, Ward
 from schemas.v1.schemas import (
     BedCreate,
@@ -160,9 +160,11 @@ def create_room(
 @router.post("/beds", status_code=status.HTTP_201_CREATED)
 def create_bed(
     payload: BedCreate,
+    request: Request,
     db: Session = Depends(get_db),
     _: User = Depends(RequirePermission("wards:write")),
 ):
+    enforce_tenant_resource_quota(request, db, resource="beds", additional_count=1)
     room = db.get(PhysicalRoom, payload.room_id)
     if not room or not room.is_active:
         raise HTTPException(status_code=404, detail="Active room not found.")

@@ -1,0 +1,84 @@
+name: Avinya HMS Backend CI/CD Engine
+
+on:
+  push:
+    branches: [ dev, main ]
+  pull_request:
+    branches: [ dev, main ]
+
+jobs:
+  test-and-verify:
+    name: Automated Regression, Tenancy & Drift Verification
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test_password_secure_2026
+          POSTGRES_DB: hms_default
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11 Runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Run Full Test Suite (ACID Tenancy, ADT, Clinical Hard-Stops)
+        env:
+          ENVIRONMENT: testing
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test_password_secure_2026
+          POSTGRES_DB: hms_default
+          SECRET_KEY: test_secret_key_minimum_32_characters_long!
+          MASTER_ONBOARDING_KEY: test_master_vendor_key_2026
+          BACKUP_ENCRYPTION_SALT: test_backup_salt_16
+          PYTHONPATH: backend:backend/core:backend/scripts
+        run: |
+          pytest -v --durations=10
+
+      - name: Verify Alembic Baseline Migration Completeness
+        env:
+          DATABASE_URL: postgresql://postgres:test_password_secure_2026@localhost:5432/hms_default
+          PYTHONPATH: backend:backend/core:backend/scripts
+        run: |
+          alembic -c backend/alembic.ini upgrade head
+
+      - name: Verify Production Docker Build
+        run: |
+          docker build --target production -t avinya-hms-api:ci .

@@ -18,8 +18,9 @@ tests/
 pytest.ini
 docs/
 frontend/
+onboarding-ui/node_modules/
+onboarding-ui/dist/
 backups/
-deployments/
 *.dump
 *.dump.enc
 *.md

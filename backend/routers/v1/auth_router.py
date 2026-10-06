@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from database import get_db, resolve_tenant_context
-from dependencies import RateLimiter, RequirePermission, get_current_user, validate_pagination
+from dependencies import RateLimiter, RequirePermission, get_current_user, validate_pagination, enforce_tenant_resource_quota
 from models import Department, DoctorProfile, Permission, Role, User, UserRole, UserStatusEnum
 from schemas.v1.schemas import (
     DepartmentCreate,
@@ -116,9 +116,11 @@ def list_users(
 @router.post("/users/doctor", status_code=status.HTTP_201_CREATED)
 def create_doctor(
     payload: UserCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(RequirePermission("iam:write")),
 ):
+    enforce_tenant_resource_quota(request, db, resource="users", additional_count=1)
     roles = db.query(Role).filter(Role.id.in_(payload.role_ids)).all()
     if len(roles) != len(set(payload.role_ids)):
         raise HTTPException(status_code=400, detail="One or more role IDs are invalid.")

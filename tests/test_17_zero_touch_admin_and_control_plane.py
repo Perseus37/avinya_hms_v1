@@ -432,3 +432,93 @@ def test_08_tenant_admin_dynamic_spatial_reconfiguration_and_occupancy_guards(
     # 6. Deactivating unoccupied Bed 2 and empty Room 2 succeeds cleanly (200 OK)
     assert client.delete(f"/v1/api/ip/beds/{bed_free_id}", headers=superuser_headers).status_code == 200
     assert client.delete(f"/v1/api/ip/rooms/{r2_id}", headers=superuser_headers).status_code == 200
+
+def test_09_control_plane_bed_and_user_quota_enforcement(client, apollo_admin_headers):
+    """
+    Scenario 9:
+    1. Set 'apollo' hospital quota to max_beds=2 via Control Plane /api/tenants/apollo/entitlements.
+    2. Create Floor -> Ward -> Room and 2 Beds in 'apollo' -> Succeeds (201 Created).
+    3. Attempt to create a 3rd Bed in 'apollo' -> Blocked with 403 Commercial Quota Exceeded!
+    4. Upgrade 'apollo' quota to max_beds=5 in Control Plane -> Creating 3rd Bed now succeeds (201 Created)!
+    """
+    cp = _get_cp_client(client)
+
+    # 1. Cap 'apollo' at max_beds = 2
+    ent_res = cp.patch(
+        "/api/tenants/apollo/entitlements",
+        json={
+            "master_setup_key": settings.MASTER_ONBOARDING_KEY,
+            "pricing_model": "BUNDLE_TOTAL_HOSPITAL",
+            "billing_cycle": "ANNUAL_LICENSE",
+            "enabled_modules": {"ipd_adt": True, "opd": True},
+            "quota_limits": {"max_beds": 2, "max_users": 10},
+            "maintenance_mode": False,
+        },
+    )
+    assert ent_res.status_code == 200
+
+    # 2. Provision Floor, Ward, Room, and 2 Beds in Apollo (up to the 2-bed cap)
+    f_id = client.post(
+        "/v1/api/ip/floors",
+        headers=apollo_admin_headers,
+        json={"floor_number": 1, "name": "Quota Test Floor"},
+    ).json()["floor_id"]
+
+    w_id = client.post(
+        "/v1/api/ip/wards",
+        headers=apollo_admin_headers,
+        json={"floor_id": f_id, "department_id": 1, "code": "W_QUOTA", "name": "Quota Ward", "ward_type": "GENERAL"},
+    ).json()["id"]
+
+    r_id = client.post(
+        "/v1/api/ip/rooms",
+        headers=apollo_admin_headers,
+        json={"ward_id": w_id, "room_number": "Q-101", "room_type": "DORMITORY", "bed_capacity": 5},
+    ).json()["room_id"]
+
+    assert (
+        client.post(
+            "/v1/api/ip/beds",
+            headers=apollo_admin_headers,
+            json={"room_id": r_id, "bed_number": "Q-B1", "bed_type": "STANDARD", "base_daily_rate_paise": 100000},
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/v1/api/ip/beds",
+            headers=apollo_admin_headers,
+            json={"room_id": r_id, "bed_number": "Q-B2", "bed_type": "STANDARD", "base_daily_rate_paise": 100000},
+        ).status_code
+        == 201
+    )
+
+    # 3. 3rd bed exceeds max_beds=2 -> Blocked with 403 Forbidden!
+    exceed_res = client.post(
+        "/v1/api/ip/beds",
+        headers=apollo_admin_headers,
+        json={"room_id": r_id, "bed_number": "Q-B3", "bed_type": "STANDARD", "base_daily_rate_paise": 100000},
+    )
+    assert exceed_res.status_code == 403
+    assert "quota exceeded" in exceed_res.json()["message"].lower()
+
+    # 4. Upgrade 'apollo' quota to max_beds=5 in Control Plane -> 3rd bed now succeeds!
+    cp.patch(
+        "/api/tenants/apollo/entitlements",
+        json={
+            "master_setup_key": settings.MASTER_ONBOARDING_KEY,
+            "pricing_model": "BUNDLE_TOTAL_HOSPITAL",
+            "billing_cycle": "ANNUAL_LICENSE",
+            "enabled_modules": {"ipd_adt": True, "opd": True},
+            "quota_limits": {"max_beds": 5, "max_users": 10},
+            "maintenance_mode": False,
+        },
+    )
+    assert (
+        client.post(
+            "/v1/api/ip/beds",
+            headers=apollo_admin_headers,
+            json={"room_id": r_id, "bed_number": "Q-B3", "bed_type": "STANDARD", "base_daily_rate_paise": 100000},
+        ).status_code
+        == 201
+    )

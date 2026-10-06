@@ -4,13 +4,13 @@ from datetime import datetime, timezone
 from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from config import settings
-from control_models import FederatedNode, TenantRegistry
-from database import ControlSessionLocal, TenantContext, get_control_db, get_db, get_redis, resolve_tenant_context
-from models import Permission, Role, User, UserStatusEnum
+from control_models import FederatedNode
+from database import TenantContext, get_control_db, get_db, get_redis, resolve_tenant_context
+from models import Bed, Permission, Role, User, UserStatusEnum
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/api/auth/login")
 
@@ -102,27 +102,16 @@ class RequireLicensedModule:
     def __init__(self, module_key: str):
         self.module_key = module_key
 
-    def __call__(
-        self,
-        request: Request,
-        control_db: Session = Depends(get_control_db),
-    ) -> None:
+    def __call__(self, request: Request) -> None:
         tenant_ctx = resolve_tenant_context(request)
-        enabled_modules = getattr(request.state, "enabled_modules", None)
-
-        if enabled_modules is None:
-            t = control_db.execute(
-                select(TenantRegistry).where(TenantRegistry.subdomain_slug == tenant_ctx.subdomain_slug)
-            ).scalar_one_or_none()
-            try:
-                enabled_modules = (
-                    json.loads(t.enabled_modules_json)
-                    if t and getattr(t, "enabled_modules_json", None)
-                    else {"all": True}
-                )
-            except Exception:
-                enabled_modules = {"all": True}
-            request.state.enabled_modules = enabled_modules
+        try:
+            enabled_modules = (
+                json.loads(tenant_ctx.enabled_modules_json)
+                if tenant_ctx.enabled_modules_json
+                else {"all": True}
+            )
+        except Exception:
+            enabled_modules = {"all": True}
 
         if enabled_modules.get("all") is True:
             return
@@ -196,3 +185,50 @@ class RateLimiter:
         except Exception:
             # Fail-open if Redis connection drops
             return
+
+
+def enforce_tenant_resource_quota(
+    request: Request,
+    db: Session,
+    resource: str,
+    additional_count: int = 1,
+) -> None:
+    """
+    Enforces commercial quota limits (max_beds, max_users) configured in TenantRegistry.quota_limits_json.
+    Raises HTTP 403 Forbidden if provisioning additional_count resources would exceed the hospital's contract quota.
+    """
+    tenant = resolve_tenant_context(request)
+    raw_quotas = tenant.quota_limits_json
+    if not raw_quotas:
+        return
+
+    try:
+        quotas = json.loads(raw_quotas) if isinstance(raw_quotas, str) else raw_quotas
+    except Exception:
+        return
+
+    if resource == "beds":
+        max_beds = quotas.get("max_beds")
+        if max_beds is not None:
+            current_beds = db.scalar(select(func.count(Bed.id))) or 0
+            if current_beds + additional_count > int(max_beds):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=(
+                        f"Commercial Quota Exceeded: Hospital is licensed for a maximum of {max_beds} bed(s) "
+                        f"(currently {current_beds} provisioned). Upgrade your bed quota in the Control Plane."
+                    ),
+                )
+
+    elif resource == "users":
+        max_users = quotas.get("max_users")
+        if max_users is not None:
+            current_users = db.scalar(select(func.count(User.id))) or 0
+            if current_users + additional_count > int(max_users):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=(
+                        f"Commercial Quota Exceeded: Hospital is licensed for a maximum of {max_users} staff user(s) "
+                        f"(currently {current_users} provisioned). Upgrade your user quota in the Control Plane."
+                    ),
+                )
