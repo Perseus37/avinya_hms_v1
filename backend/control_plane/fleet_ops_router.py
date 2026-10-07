@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from models import InvoiceStatusEnum
 from config import settings
 from control_models import (
     BillingCycleEnum,
@@ -92,6 +93,26 @@ class SandboxCloneRequest(BaseModel):
     master_setup_key: str = Field(min_length=8)
     sandbox_subdomain_slug: str = Field(min_length=2, max_length=50, pattern=r"^[a-z0-9\-]+$")
 
+# 1. Update EntitlementsUpdateRequest in backend/control_plane/fleet_ops_router.py (around line 66) to include federation_sharing_mode:
+class EntitlementsUpdateRequest(BaseModel):
+    master_setup_key: str = Field(min_length=8)
+    pricing_model: Optional[PricingModelEnum] = None
+    subscription_tier: Optional[PricingModelEnum] = None
+    billing_cycle: BillingCycleEnum = BillingCycleEnum.ANNUAL_LICENSE
+    base_license_fee_paise: Optional[int] = None
+    enabled_modules: Dict[str, bool]
+    quota_limits: Dict[str, int]
+    federation_sharing_mode: Optional[str] = None
+    maintenance_mode: bool = False
+    maintenance_notice: Optional[str] = None
+
+
+class SaasLicenseChargeRequest(BaseModel):
+    master_setup_key: str = Field(min_length=8)
+    amount_paid_paise: int = Field(gt=0)
+    payment_method: str = "BANK_NEFT_RTGS"
+    transaction_reference: str = Field(min_length=3, max_length=100)
+    notes: Optional[str] = None
 
 @router.get("/fleet/overview")
 def get_fleet_global_overview(
@@ -456,9 +477,25 @@ def get_tenant_operational_telemetry(
         )
         total_beds = t_db.scalar(select(func.count(Bed.id))) or 0
         occupied_beds = t_db.scalar(select(func.count(Bed.id)).where(Bed.status == BedStatusEnum.OCCUPIED)) or 0
-        invoices_count = t_db.scalar(select(func.count(Invoice.id))) or 0
-        gross_revenue_paise = t_db.scalar(select(func.coalesce(func.sum(Invoice.total_amount_paise), 0))) or 0
-        collected_revenue_paise = t_db.scalar(select(func.coalesce(func.sum(Invoice.amount_paid_paise), 0))) or 0
+        invoices_count = (
+            t_db.scalar(select(func.count(Invoice.id)).where(Invoice.status != InvoiceStatusEnum.VOID)) or 0
+        )
+        gross_revenue_paise = (
+            t_db.scalar(
+                select(func.coalesce(func.sum(Invoice.total_amount_paise), 0)).where(
+                    Invoice.status != InvoiceStatusEnum.VOID
+                )
+            )
+            or 0
+        )
+        collected_revenue_paise = (
+            t_db.scalar(
+                select(func.coalesce(func.sum(Invoice.amount_paid_paise), 0)).where(
+                    Invoice.status != InvoiceStatusEnum.VOID
+                )
+            )
+            or 0
+        )
 
     backups_dir = Path("backups")
     backups = sorted(backups_dir.glob(f"{tenant.db_name}_*.dump.enc")) if backups_dir.exists() else []
@@ -1052,4 +1089,172 @@ def get_fleet_commercial_and_operational_analytics(
         "module_adoption_counts": module_adoption_counts,
         "total_tenants": len(tenants),
         "hospital_leaderboard": sorted(hospital_leaderboard, key=lambda x: x["collected_gmv_paise"], reverse=True),
+    }
+
+# Append these two endpoints to the bottom of backend/control_plane/fleet_ops_router.py:
+
+@router.post("/tenants/{slug}/saas-billing/charge")
+def record_tenant_saas_license_payment(
+    slug: str,
+    payload: SaasLicenseChargeRequest,
+    control_db: Session = Depends(get_control_db),
+    _: None = Depends(verify_control_plane_secret),
+):
+    """
+    Records a vendor SaaS subscription/license payment from the hospital into commercial_contract_json,
+    tracking total license fees collected and payment history.
+    """
+    from datetime import datetime, timezone
+    _verify_vendor_key(payload.master_setup_key)
+    tenant = control_db.execute(
+        select(TenantRegistry).where(TenantRegistry.subdomain_slug == slug.lower())
+    ).scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail=f"Tenant '{slug}' not found.")
+
+    try:
+        contract = json.loads(tenant.commercial_contract_json) if tenant.commercial_contract_json else {}
+    except Exception:
+        contract = {}
+
+    payments = contract.get("saas_payments", [])
+    entry = {
+        "id": f"SAAS-RCPT-{len(payments) + 1:03d}",
+        "amount_paid_paise": payload.amount_paid_paise,
+        "payment_method": payload.payment_method,
+        "transaction_reference": payload.transaction_reference,
+        "notes": payload.notes or "License Subscription Payment",
+        "paid_at": datetime.now(timezone.utc).isoformat(),
+    }
+    payments.insert(0, entry)
+    contract["saas_payments"] = payments
+    contract["total_saas_collected_paise"] = sum(p["amount_paid_paise"] for p in payments)
+    contract["saas_payment_status"] = (
+        "PAID" if contract["total_saas_collected_paise"] >= (tenant.base_license_fee_paise or 0) else "PARTIAL"
+    )
+    tenant.commercial_contract_json = json.dumps(contract)
+
+    control_db.add(
+        ControlPlaneAuditLog(
+            action="RECORD_SAAS_PAYMENT",
+            target_slug=tenant.subdomain_slug,
+            details=f"Collected INR {payload.amount_paid_paise // 100} via {payload.payment_method} (Ref: {payload.transaction_reference})",
+        )
+    )
+    control_db.commit()
+    return {
+        "status": "success",
+        "subdomain_slug": tenant.subdomain_slug,
+        "receipt": entry,
+        "total_saas_collected_paise": contract["total_saas_collected_paise"],
+        "saas_payment_status": contract["saas_payment_status"],
+    }
+
+
+@router.post("/tenants/{slug}/seed-demo-activity")
+def seed_tenant_demo_clinical_and_billing_activity(
+    slug: str,
+    payload: TenantAdminPasswordResetRequest,
+    control_db: Session = Depends(get_control_db),
+    _: None = Depends(verify_control_plane_secret),
+):
+    """
+    Populates a sample patient, active encounter, and settled invoice + receipt inside the hospital's
+    database so revenue, patient, and encounter telemetry blocks can be verified immediately.
+    """
+    from datetime import datetime, timezone
+    import uuid
+    from models import (
+        EncounterTypeEnum,
+        GenderEnum,
+        InvoiceLineItem,
+        InvoiceStatusEnum,
+        PaymentMethodEnum,
+        PaymentReceipt,
+    )
+
+    _verify_vendor_key(payload.master_setup_key)
+    tenant = control_db.execute(
+        select(TenantRegistry).where(TenantRegistry.subdomain_slug == slug.lower())
+    ).scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail=f"Tenant '{slug}' not found.")
+
+    t_engine = tenant_engine_pool.get_engine(tenant.db_name)
+    TSession = sessionmaker(bind=t_engine, autocommit=False, autoflush=False)
+    with TSession() as t_db:
+        doc = t_db.execute(select(User).order_by(User.id.asc())).scalars().first()
+        doc_id = doc.id if doc else 1
+        tag = uuid.uuid4().hex[:6].upper()
+
+        pt = Patient(
+            mrn=f"MRN-DEMO-{tag}",
+            full_name=f"Demo Verification Patient {tag}",
+            date_of_birth=datetime(1988, 6, 15, tzinfo=timezone.utc),
+            gender=GenderEnum.MALE,
+            phone_number="9888877777",
+            is_active=True,
+            allow_network_sharing=True,
+            created_by_id=doc_id,
+            updated_by_id=doc_id,
+        )
+        t_db.add(pt)
+        t_db.flush()
+
+        enc = PatientEncounter(
+            patient_id=pt.id,
+            encounter_type=EncounterTypeEnum.OPD,
+            status=EncounterStatusEnum.ACTIVE,
+            primary_doctor_id=doc_id,
+            department_id=1,
+            chief_complaint_notes="Control Plane Telemetry Verification Visit",
+        )
+        t_db.add(enc)
+        t_db.flush()
+
+        inv = Invoice(
+            invoice_number=f"INV-DEMO-{tag}",
+            patient_id=pt.id,
+            encounter_id=enc.id,
+            status=InvoiceStatusEnum.PAID,
+            total_amount_paise=250000,  # ₹2,500.00
+            discount_amount_paise=0,
+            amount_paid_paise=250000,   # ₹2,500.00 Paid
+            notes="Simulated OPD + Diagnostics Package",
+        )
+        t_db.add(inv)
+        t_db.flush()
+
+        t_db.add(
+            InvoiceLineItem(
+                invoice_id=inv.id,
+                service_id=None,
+                description="OPD CONSULTATION & COMPREHENSIVE PANEL",
+                quantity=1,
+                unit_price_paise=250000,
+                total_price_paise=250000,
+            )
+        )
+        t_db.add(
+            PaymentReceipt(
+                invoice_id=inv.id,
+                receipt_number=f"REC-DEMO-{tag}",
+                amount_paid_paise=250000,
+                payment_method=PaymentMethodEnum.UPI,
+                transaction_reference=f"UPI-{tag}",
+            )
+        )
+        t_db.commit()
+
+    control_db.add(
+        ControlPlaneAuditLog(
+            action="SEED_DEMO_ACTIVITY",
+            target_slug=tenant.subdomain_slug,
+            details=f"Seeded sample patient, encounter, and INR 2,500 paid invoice in {tenant.db_name}",
+        )
+    )
+    control_db.commit()
+    return {
+        "status": "success",
+        "message": f"Seeded demo patient, active encounter & ₹2,500 paid invoice in '{tenant.subdomain_slug}'.",
     }

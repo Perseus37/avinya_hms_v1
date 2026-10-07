@@ -3,7 +3,7 @@ from pathlib import Path
 import sys
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool,create_engine
 
 # Resolve backend/, backend/core/, and backend/scripts/
 _BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -42,16 +42,8 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    cfg_section = config.get_section(config.config_ini_section, {})
-    if not cfg_section.get("sqlalchemy.url"):
-        cfg_section["sqlalchemy.url"] = settings.DATABASE_URL
-
-    url = cfg_section["sqlalchemy.url"]
-    connectable = engine_from_config(
-        cfg_section,
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    url = config.get_main_option("sqlalchemy.url") or settings.DATABASE_URL
+    connectable = create_engine(url, poolclass=pool.NullPool)
 
     with connectable.connect() as connection:
         context.configure(
@@ -61,7 +53,6 @@ def run_migrations_online() -> None:
         )
         with context.begin_transaction():
             context.run_migrations()
-
 
 if context.is_offline_mode():
     run_migrations_offline()

@@ -12,7 +12,7 @@ from control_models import ControlBase
 from control_plane.fleet_ops_router import router as fleet_router
 from control_plane.provisioning_router import router as provision_router
 from database import control_engine, ensure_postgres_db_exists
-
+from control_plane.migration_router import router as migration_router
 logger = logging.getLogger("avinya.control_plane")
 
 
@@ -56,11 +56,18 @@ def control_plane_health():
 
 onboarding_app.include_router(provision_router)
 onboarding_app.include_router(fleet_router)
+onboarding_app.include_router(migration_router)
 
-# Serve compiled React SPA if built into /app/onboarding-ui/dist
-_SPA_DIST = Path(__file__).resolve().parents[2] / "onboarding-ui" / "dist"
-if _SPA_DIST.exists():
-    onboarding_app.mount("/assets", StaticFiles(directory=str(_SPA_DIST / "assets")), name="assets")
+_CANDIDATE_DISTS = [
+    Path("/app/onboarding-ui/dist"),
+    Path(__file__).resolve().parents[2] / "onboarding-ui" / "dist",
+    Path(__file__).resolve().parents[1] / "onboarding-ui" / "dist",
+]
+_SPA_DIST = next((p for p in _CANDIDATE_DISTS if p.exists()), None)
+
+if _SPA_DIST and (_SPA_DIST / "index.html").exists():
+    if (_SPA_DIST / "assets").exists():
+        onboarding_app.mount("/assets", StaticFiles(directory=str(_SPA_DIST / "assets")), name="assets")
 
     @onboarding_app.get("/{full_path:path}", include_in_schema=False)
     def serve_react_spa(full_path: str):

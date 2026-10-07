@@ -1,8 +1,8 @@
-"""v4_enterprise_baseline
+"""clean_baseline
 
-Revision ID: 1cda0a27599f
+Revision ID: 05b45e00c62d
 Revises: 
-Create Date: 2026-10-04 16:28:33.937232
+Create Date: 2026-10-07 17:02:49.440936
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '1cda0a27599f'
+revision: str = '05b45e00c62d'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -70,6 +70,24 @@ def upgrade() -> None:
     op.create_index(op.f('ix_federated_clients_api_key_hash'), 'federated_clients', ['api_key_hash'], unique=True)
     op.create_index(op.f('ix_federated_clients_branch_code'), 'federated_clients', ['branch_code'], unique=True)
     op.create_index(op.f('ix_federated_clients_id'), 'federated_clients', ['id'], unique=False)
+    op.create_table('finance_recurring_expenses',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('category', sa.Enum('PAYROLL', 'UTILITY', 'MAINTENANCE', 'MEDICAL_SUPPLIES', 'PHARMACY_STOCK', 'EQUIPMENT', 'OTHER', name='expensecategoryenum'), nullable=False),
+    sa.Column('title', sa.String(length=150), nullable=False),
+    sa.Column('amount_paise', sa.Integer(), nullable=False),
+    sa.Column('vendor_name', sa.String(length=150), nullable=True),
+    sa.Column('frequency', sa.Enum('DAILY', 'WEEKLY', 'MONTHLY', 'QUARTERLY', 'ANNUALLY', name='recurringfrequencyenum'), nullable=False),
+    sa.Column('next_generation_date', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('auto_approve', sa.Boolean(), nullable=False),
+    sa.Column('is_active', sa.Boolean(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('created_by_id', sa.Integer(), nullable=True),
+    sa.Column('updated_by_id', sa.Integer(), nullable=True),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_finance_recurring_expenses_id'), 'finance_recurring_expenses', ['id'], unique=False)
+    op.create_index(op.f('ix_finance_recurring_expenses_next_generation_date'), 'finance_recurring_expenses', ['next_generation_date'], unique=False)
     op.create_table('floors',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('floor_number', sa.Integer(), nullable=False),
@@ -359,6 +377,31 @@ def upgrade() -> None:
     op.create_index(op.f('ix_federation_transfer_logs_id'), 'federation_transfer_logs', ['id'], unique=False)
     op.create_index(op.f('ix_federation_transfer_logs_patient_id'), 'federation_transfer_logs', ['patient_id'], unique=False)
     op.create_index(op.f('ix_federation_transfer_logs_requesting_branch_code'), 'federation_transfer_logs', ['requesting_branch_code'], unique=False)
+    op.create_table('finance_expenses',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('category', sa.Enum('PAYROLL', 'UTILITY', 'MAINTENANCE', 'MEDICAL_SUPPLIES', 'PHARMACY_STOCK', 'EQUIPMENT', 'OTHER', name='expensecategoryenum'), nullable=False),
+    sa.Column('title', sa.String(length=150), nullable=False),
+    sa.Column('amount_paise', sa.Integer(), nullable=False),
+    sa.Column('status', sa.Enum('PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'PAID', 'CANCELLED', name='expensestatusenum'), nullable=False),
+    sa.Column('approved_by_id', sa.Integer(), nullable=True),
+    sa.Column('approved_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('rejection_reason', sa.String(length=255), nullable=True),
+    sa.Column('due_date', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('incurred_date', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('vendor_name', sa.String(length=150), nullable=True),
+    sa.Column('receipt_reference', sa.String(length=100), nullable=True),
+    sa.Column('recurring_template_id', sa.Integer(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('created_by_id', sa.Integer(), nullable=True),
+    sa.Column('updated_by_id', sa.Integer(), nullable=True),
+    sa.ForeignKeyConstraint(['approved_by_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['recurring_template_id'], ['finance_recurring_expenses.id'], ondelete='SET NULL'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_finance_expenses_category'), 'finance_expenses', ['category'], unique=False)
+    op.create_index(op.f('ix_finance_expenses_id'), 'finance_expenses', ['id'], unique=False)
+    op.create_index(op.f('ix_finance_expenses_incurred_date'), 'finance_expenses', ['incurred_date'], unique=False)
     op.create_table('insurance_plans',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('provider_id', sa.Integer(), nullable=False),
@@ -1422,6 +1465,10 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_insurance_plans_provider_id'), table_name='insurance_plans')
     op.drop_index(op.f('ix_insurance_plans_code'), table_name='insurance_plans')
     op.drop_table('insurance_plans')
+    op.drop_index(op.f('ix_finance_expenses_incurred_date'), table_name='finance_expenses')
+    op.drop_index(op.f('ix_finance_expenses_id'), table_name='finance_expenses')
+    op.drop_index(op.f('ix_finance_expenses_category'), table_name='finance_expenses')
+    op.drop_table('finance_expenses')
     op.drop_index(op.f('ix_federation_transfer_logs_requesting_branch_code'), table_name='federation_transfer_logs')
     op.drop_index(op.f('ix_federation_transfer_logs_patient_id'), table_name='federation_transfer_logs')
     op.drop_index(op.f('ix_federation_transfer_logs_id'), table_name='federation_transfer_logs')
@@ -1452,6 +1499,9 @@ def downgrade() -> None:
     op.drop_table('insurance_providers')
     op.drop_table('hospital_policy_settings')
     op.drop_table('floors')
+    op.drop_index(op.f('ix_finance_recurring_expenses_next_generation_date'), table_name='finance_recurring_expenses')
+    op.drop_index(op.f('ix_finance_recurring_expenses_id'), table_name='finance_recurring_expenses')
+    op.drop_table('finance_recurring_expenses')
     op.drop_index(op.f('ix_federated_clients_id'), table_name='federated_clients')
     op.drop_index(op.f('ix_federated_clients_branch_code'), table_name='federated_clients')
     op.drop_index(op.f('ix_federated_clients_api_key_hash'), table_name='federated_clients')

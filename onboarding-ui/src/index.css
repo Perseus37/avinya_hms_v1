@@ -2,16 +2,143 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  background:
-    radial-gradient(circle at 12% 8%, rgba(6, 182, 212, 0.12), transparent 35%),
-    radial-gradient(circle at 88% 12%, rgba(99, 102, 241, 0.12), transparent 40%),
-    #020617;
+:root,
+[data-theme="obsidian-gold"] {
+  --bg-canvas: #09090b;
+  --bg-panel: #121216;
+  --bg-elevated: #1c1c24;
+  --bg-input: #09090b;
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  --border-subtle: rgba(245, 158, 11, 0.22);
+  --accent-primary: #f59e0b;
+  --accent-text-on-primary: #09090b;
+  --accent-Glow: rgba(245, 158, 11, 0.12);
+  --row-hover: rgba(255, 255, 255, 0.04);
 }
 
-.grid-surface {
-  background-image:
-    linear-gradient(to right, rgba(30, 41, 59, 0.25) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(30, 41, 59, 0.25) 1px, transparent 1px);
-  background-size: 32px 32px;
+[data-theme="clinical-daylight"] {
+  --bg-canvas: #eef2f6;
+  --bg-panel: #ffffff;
+  --bg-elevated: #f1f5f9;
+  --bg-input: #ffffff;
+  --text-main: #0f172a;
+  --text-muted: #475569;
+  --border-subtle: #cbd5e1;
+  --accent-primary: #2563eb;
+  --accent-text-on-primary: #ffffff;
+  --accent-Glow: rgba(37, 99, 235, 0.10);
+  --row-hover: rgba(37, 99, 235, 0.05);
+}
+
+[data-theme="cyber-violet"] {
+  --bg-canvas: #070510;
+  --bg-panel: #110d24;
+  --bg-elevated: #1b1538;
+  --bg-input: #090617;
+  --text-main: #f5f3ff;
+  --text-muted: #94a3b8;
+  --border-subtle: rgba(139, 92, 246, 0.28);
+  --accent-primary: #8b5cf6;
+  --accent-text-on-primary: #ffffff;
+  --accent-Glow: rgba(139, 92, 246, 0.15);
+  --row-hover: rgba(139, 92, 246, 0.08);
+}
+
+[data-theme="bio-emerald"] {
+  --bg-canvas: #030e09;
+  --bg-panel: #071912;
+  --bg-elevated: #0d291e;
+  --bg-input: #04110b;
+  --text-main: #ecfdf5;
+  --text-muted: #6ee7b7;
+  --border-subtle: rgba(16, 185, 129, 0.26);
+  --accent-primary: #10b981;
+  --accent-text-on-primary: #030e09;
+  --accent-Glow: rgba(16, 185, 129, 0.14);
+  --row-hover: rgba(16, 185, 129, 0.08);
+}
+
+body {
+  background-color: var(--bg-canvas);
+  color: var(--text-main);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.theme-panel {
+  background-color: var(--bg-panel);
+  color: var(--text-main);
+  border: 1px solid var(--border-subtle);
+  box-shadow: 0 8px 24px -8px var(--accent-Glow);
+}
+
+.theme-elevated {
+  background-color: var(--bg-elevated);
+  color: var(--text-main);
+  border: 1px solid var(--border-subtle);
+}
+
+.theme-input {
+  background-color: var(--bg-input);
+  color: var(--text-main);
+  border: 1px solid var(--border-subtle);
+}
+
+.theme-input:focus {
+  border-color: var(--accent-primary);
+  outline: none;
+}
+
+.theme-text-muted {
+  color: var(--text-muted);
+}
+
+.theme-accent-bg {
+  background-color: var(--accent-primary);
+  color: var(--accent-text-on-primary);
+}
+
+.theme-accent-text {
+  color: var(--accent-primary);
+}
+
+.theme-row-hover:hover {
+  background-color: var(--row-hover);
+}
+
+/* =====================================================================
+   ULTRA-SLIM THEME SCROLLBARS & INVISIBLE SIDEBAR SCROLL UTILITY
+   ===================================================================== */
+
+/* 1. Completely hide scrollbar on the left sidebar while keeping scroll functionality */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;     /* Firefox */
+}
+
+/* 2. Ultra-thin 5px floating pill scrollbar for main workspace, drawers & tables */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-subtle) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-primary);
 }

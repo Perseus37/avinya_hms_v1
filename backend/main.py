@@ -34,6 +34,8 @@ from routers.v1 import (
     vital_registries_router,
     websocket_router,
     tenant_admin_router,
+    finance_ap_router,
+    equipment_router,
 )
 from core.dependencies import RequireLicensedModule
 
@@ -271,7 +273,9 @@ for target in (v1_app, app):
     target.include_router(blood_pacs_router.router, dependencies=[Depends(RequireLicensedModule("blood_bank"))])
     target.include_router(nursing_er_router.router, dependencies=[Depends(RequireLicensedModule("er_mlc"))])
     target.include_router(analytics_router.router, dependencies=[Depends(RequireLicensedModule("executive_bi"))])
-
+    target.include_router(finance_ap_router.router, dependencies=[Depends(RequireLicensedModule("executive_bi"))])
+    target.include_router(equipment_router.router, dependencies=[Depends(RequireLicensedModule("diagnostics"))])
+    
 app.mount("/v1", v1_app)
 
 # -----------------------------------------------------------------------------

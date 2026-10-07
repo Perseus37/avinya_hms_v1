@@ -371,6 +371,32 @@ class FederationPolicyEnum(str, PyEnum):
     EMERGENCY_ALLERGIES_ONLY = "EMERGENCY_ALLERGIES_ONLY"
     ISOLATED_SILO = "ISOLATED_SILO"
 
+class ExpenseCategoryEnum(str, PyEnum):
+    PAYROLL = "PAYROLL"
+    UTILITY = "UTILITY"
+    MAINTENANCE = "MAINTENANCE"
+    MEDICAL_SUPPLIES = "MEDICAL_SUPPLIES"
+    PHARMACY_STOCK = "PHARMACY_STOCK"
+    EQUIPMENT = "EQUIPMENT"
+    OTHER = "OTHER"
+
+class ExpenseStatusEnum(str, PyEnum):
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    PAID = "PAID"
+    CANCELLED = "CANCELLED"
+
+class RecurringFrequencyEnum(str, PyEnum):
+    DAILY = "DAILY"
+    WEEKLY = "WEEKLY"
+    MONTHLY = "MONTHLY"
+    QUARTERLY = "QUARTERLY"
+    ANNUALLY = "ANNUALLY"
+
+class ProtocolEnum(str, PyEnum):
+    HL7_V2 = "HL7_V2"
+    DICOM = "DICOM"
 
 # -----------------------------------------------------------------------------
 # Auditing mixin for timestamp fields
@@ -1751,3 +1777,79 @@ class HospitalPolicySetting(AuditMixin, Base):
     )
     federation_share_demographics: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     federation_share_allergies: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+class ExpenseRecord(AuditMixin, Base):
+    """Individual accounts payable ledger entry with a Maker-Checker approval workflow."""
+    __tablename__ = "finance_expenses"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    category: Mapped[ExpenseCategoryEnum] = mapped_column(Enum(ExpenseCategoryEnum), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(150), nullable=False)
+    amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    
+    # Maker-Checker Workflow
+    status: Mapped[ExpenseStatusEnum] = mapped_column(Enum(ExpenseStatusEnum), default=ExpenseStatusEnum.PENDING_APPROVAL, nullable=False)
+    approved_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    rejection_reason: Mapped[Optional[str]] = mapped_column(String(255))
+    
+    # Payment Tracking
+    due_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    incurred_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=func.now(), index=True)
+    vendor_name: Mapped[Optional[str]] = mapped_column(String(150))
+    receipt_reference: Mapped[Optional[str]] = mapped_column(String(100))
+    
+    recurring_template_id: Mapped[Optional[int]] = mapped_column(ForeignKey("finance_recurring_expenses.id", ondelete="SET NULL"))
+    
+    approved_by: Mapped[Optional["User"]] = relationship(foreign_keys=[approved_by_id])
+
+
+class RecurringExpenseTemplate(AuditMixin, Base):
+    """Cron-ready template that automatically generates PENDING_APPROVAL expenses at defined intervals."""
+    __tablename__ = "finance_recurring_expenses"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    category: Mapped[ExpenseCategoryEnum] = mapped_column(Enum(ExpenseCategoryEnum), nullable=False)
+    title: Mapped[str] = mapped_column(String(150), nullable=False)
+    amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    vendor_name: Mapped[Optional[str]] = mapped_column(String(150))
+    
+    frequency: Mapped[RecurringFrequencyEnum] = mapped_column(Enum(RecurringFrequencyEnum), nullable=False)
+    next_generation_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    auto_approve: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    generated_expenses: Mapped[List["ExpenseRecord"]] = relationship(back_populates="template")
+
+ExpenseRecord.template = relationship("RecurringExpenseTemplate", back_populates="generated_expenses")
+
+class EquipmentMaster(AuditMixin, Base):
+    """Registry of physical laboratory analyzers and imaging modalities."""
+    __tablename__ = "equipment_master"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    manufacturer: Mapped[str] = mapped_column(String(100), nullable=False)
+    device_model: Mapped[str] = mapped_column(String(100), nullable=False)
+    ip_address: Mapped[str] = mapped_column(String(50), nullable=False)
+    protocol: Mapped[ProtocolEnum] = mapped_column(Enum(ProtocolEnum), nullable=False)
+    is_bidirectional: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    department: Mapped["Department"] = relationship()
+
+
+class HL7IntegrationLog(AuditMixin, Base):
+    """Immutable audit trail of raw HL7/DICOM payloads received from machines."""
+    __tablename__ = "hl7_integration_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    equipment_id: Mapped[Optional[int]] = mapped_column(ForeignKey("equipment_master.id"))
+    message_control_id: Mapped[str] = mapped_column(String(100), index=True)
+    raw_payload: Mapped[str] = mapped_column(Text, nullable=False)
+    parsed_order_id: Mapped[Optional[str]] = mapped_column(String(100), index=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False)  # SUCCESS, FAILED_PARSING, TENANT_NOT_FOUND
+    error_details: Mapped[Optional[str]] = mapped_column(Text)
+
+    equipment: Mapped[Optional["EquipmentMaster"]] = relationship()
