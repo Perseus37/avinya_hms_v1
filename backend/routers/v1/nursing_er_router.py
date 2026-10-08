@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import List
-import uuid
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
@@ -298,7 +298,7 @@ def register_medico_legal_case(
         raise HTTPException(status_code=409, detail="An MLC is already registered for this encounter.")
 
     date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
-    mlc_num = f"MLC-{date_str}-{uuid.uuid4().hex[:8].upper()}"
+    mlc_num = f"MLC-{date_str}-{secrets.token_hex(6).upper()}"
 
     mlc = MedicoLegalCase(
         mlc_number=mlc_num,

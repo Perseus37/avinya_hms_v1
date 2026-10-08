@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import Optional
-import uuid
+import secrets
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import select
@@ -44,7 +44,8 @@ router = APIRouter(prefix="/api/billing", tags=["Enterprise Billing & Ledger"])
 
 def _generate_doc_number(prefix: str) -> str:
     date_prefix = datetime.now(timezone.utc).strftime("%Y%m%d")
-    return f"{prefix}-{date_prefix}-{uuid.uuid4().hex[:12].upper()}"
+    # CRYP-002: Use cryptographically secure hex generation instead of truncated UUIDs
+    return f"{prefix}-{date_prefix}-{secrets.token_hex(6).upper()}"
 
 
 # -----------------------------------------------------------------------------

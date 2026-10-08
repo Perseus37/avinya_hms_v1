@@ -8,7 +8,11 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 _ENC_PREFIX = "enc:v1:"    
 # SEC-004: Implement PBKDF2HMAC with salt to secure tenant JWT and Backup keys against rotation breaks
-_salt = getattr(settings, "ENVELOPE_ENCRYPTION_SALT", "avinya_secure_salt_2026").encode("utf-8")
+# CRYP-001: Enforce strict environment variables for cryptographic salts
+_salt_env = getattr(settings, "ENVELOPE_ENCRYPTION_SALT", None)
+if not _salt_env or _salt_env == "avinya_secure_salt_2026":
+    raise ValueError("CRITICAL: A secure, unique ENVELOPE_ENCRYPTION_SALT must be provided in the environment.")
+_salt = _salt_env.encode("utf-8")
 _kdf = PBKDF2HMAC(
     algorithm=hashes.SHA256(),
     length=32,

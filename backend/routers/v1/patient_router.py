@@ -1,4 +1,4 @@
-import uuid
+import secrets
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session, joinedload
@@ -43,7 +43,7 @@ def register_patient(
             raise HTTPException(status_code=409, detail="Patient with this MRN already exists.")
         mrn = payload.mrn
     else:
-        mrn = f"MRN-{uuid.uuid4().hex[:8].upper()}"
+        mrn = f"MRN-{secrets.token_hex(6).upper()}"
 
     dump_data = payload.model_dump(exclude={"mrn"})
     if not dump_data.get("phone_number"):

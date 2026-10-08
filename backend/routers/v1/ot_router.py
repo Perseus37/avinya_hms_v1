@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import List
-import uuid
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
@@ -129,7 +129,7 @@ def schedule_surgery(
             )
 
     date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
-    case_no = f"OT-{date_str}-{uuid.uuid4().hex[:8].upper()}"
+    case_no = f"OT-{date_str}-{secrets.token_hex(6).upper()}"
 
     surgery = SurgicalSchedule(
         case_number=case_no,

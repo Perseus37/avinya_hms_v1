@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import Optional
-import uuid
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -49,7 +49,7 @@ router = APIRouter(prefix="/api/pharmacy", tags=["Pharmacy & Inventory Managemen
 
 def _generate_invoice_number() -> str:
     date_prefix = datetime.now(timezone.utc).strftime("%Y%m%d")
-    return f"INV-{date_prefix}-{uuid.uuid4().hex[:12].upper()}"
+    return f"INV-{date_prefix}-{secrets.token_hex(6).upper()}"
 
 def _ensure_utc(dt: datetime) -> datetime:
     """Ensures a datetime is timezone-aware in UTC before comparison."""
@@ -629,7 +629,7 @@ def return_dispensed_medication(
     if invoice and invoice.status == InvoiceStatusEnum.PAID and total_credit_paise > 0:
         date_prefix = datetime.now(timezone.utc).strftime("%Y%m%d")
         voucher = RefundVoucher(
-            voucher_number=f"RFND-PHM-{date_prefix}-{uuid.uuid4().hex[:8].upper()}",
+            voucher_number=f"RFND-PHM-{date_prefix}-{secrets.token_hex(6).upper()}",
             patient_id=invoice.patient_id,
             deposit_id=None,
             invoice_id=invoice.id,

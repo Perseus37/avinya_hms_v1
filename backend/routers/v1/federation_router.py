@@ -2,7 +2,6 @@ import hashlib
 from datetime import datetime, timezone
 import secrets
 from typing import Optional
-import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
@@ -411,7 +410,7 @@ def import_federated_patient_locally(
         if existing:
             return existing
 
-    local_mrn = f"MRN-{uuid.uuid4().hex[:8].upper()}"
+    local_mrn = f"MRN-{secrets.token_hex(6).upper()}"
     new_patient = Patient(
         mrn=local_mrn,
         abha_number=payload.abha_number,

@@ -161,7 +161,9 @@ class RateLimiter:
         if not redis_client:
             return
 
-        client_ip = request.client.host if request.client else "unknown"
+        # INFRA-001: Extract true client IP through Traefik reverse proxy
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else request.client.host if request.client else "unknown"
         fed_prefix = request.headers.get("X-Federation-API-Key", "")[:14]
         actor = fed_prefix if fed_prefix else client_ip
         key = f"rl:{self.scope}:{actor}"

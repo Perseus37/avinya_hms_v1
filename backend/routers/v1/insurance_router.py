@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import List, Optional
-import uuid
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -52,7 +52,7 @@ router = APIRouter(prefix="/api/insurance", tags=["Insurance, TPA, Plans, Tariff
 
 def _gen_ref(prefix: str) -> str:
     date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
-    return f"{prefix}-{date_str}-{uuid.uuid4().hex[:10].upper()}"
+    return f"{prefix}-{date_str}-{secrets.token_hex(6).upper()}"
 
 
 def _to_utc(dt: datetime) -> datetime:

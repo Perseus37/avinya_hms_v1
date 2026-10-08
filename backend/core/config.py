@@ -6,8 +6,8 @@ from sqlalchemy.engine import URL
 
 class Settings(BaseSettings):
 
-    ENVIRONMENT: str = "development"  # Set to "production" in live deployments
-    CONTROL_PLANE_MASTER_KEY: Optional[str] = None  # When set, protects onboarding_app.py endpoints
+    ENVIRONMENT: str = "development"  # Safe default for local instances
+    CONTROL_PLANE_MASTER_KEY: Optional[str] = None
     
     # 1. Platform & Default Tenant Identity
     PLATFORM_NAME: str
@@ -15,40 +15,42 @@ class Settings(BaseSettings):
     DEFAULT_TENANT_SLUG: str
     DEFAULT_HOSPITAL_NAME: str
     DEFAULT_BRANCH_CODE: str
-    VERSION: str = "2.0.0"
+    VERSION: str
 
-    # 2. Atomic PostgreSQL Settings (Single Source of Truth with the 'db' container)
+    # 2. Atomic PostgreSQL Settings 
     POSTGRES_USER: str
     POSTGRES_PASSWORD: str
     POSTGRES_DB: str
-    POSTGRES_HOST: str = "db"
-    POSTGRES_PORT: int = 5432
-    CONTROL_PLANE_DB_NAME: str = "hms_control_plane"
+    POSTGRES_HOST: str
+    POSTGRES_PORT: int
+    CONTROL_PLANE_DB_NAME: str
 
     # 3. Atomic Redis Settings
-    REDIS_HOST: str = "redis"
-    REDIS_PORT: int = 6379
-    REDIS_DB: int = 0
+    REDIS_HOST: str
+    REDIS_PORT: int
+    REDIS_DB: int
+    REDIS_PASSWORD: str
 
     # 4. Security & Initial Seed
     SECRET_KEY: str = Field(min_length=32)
     MASTER_ONBOARDING_KEY: str = Field(min_length=16)
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    CORS_ORIGINS: str = "http://localhost:3000"
+    ALGORITHM: str
+    ACCESS_TOKEN_EXPIRE_MINUTES: int
+    CORS_ORIGINS: str
     SEED_ADMIN_EMAIL: str
     SEED_ADMIN_PASSWORD: str
+    ENVELOPE_ENCRYPTION_SALT: str
 
     # 5. SMTP & Backup Settings
     SMTP_HOST: Optional[str] = None
-    SMTP_PORT: int = 587
+    SMTP_PORT: int
     SMTP_USER: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
-    SMTP_FROM: str = "provisioning@avinyahms.com"
+    SMTP_FROM: str
 
     BACKUP_ENCRYPTION_SALT: str
     S3_ENDPOINT_URL: Optional[str] = None
-    S3_BUCKET_NAME: str = "hms-catastrophic-backups"
+    S3_BUCKET_NAME: str
     S3_ACCESS_KEY: Optional[str] = None
     S3_SECRET_KEY: Optional[str] = None
 
@@ -66,7 +68,7 @@ class Settings(BaseSettings):
 
     @property
     def REDIS_URL(self) -> str:
-        return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+        return f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
 
     @property
     def PROJECT_NAME(self) -> str:

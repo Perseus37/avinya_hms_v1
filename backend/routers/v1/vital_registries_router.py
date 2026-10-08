@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import List
-import uuid
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
@@ -41,7 +41,7 @@ router = APIRouter(
 
 def _gen_cert_no(prefix: str) -> str:
     date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
-    return f"{prefix}-{date_str}-{uuid.uuid4().hex[:8].upper()}"
+    return f"{prefix}-{date_str}-{secrets.token_hex(6).upper()}"
 
 
 # =====================================================================
@@ -78,7 +78,7 @@ def register_maternity_birth(
     newborn = None
 
     if not payload.is_stillborn:
-        newborn_mrn = f"MRN-NB-{uuid.uuid4().hex[:8].upper()}"
+        newborn_mrn = f"MRN-NB-{secrets.token_hex(6).upper()}"
         newborn = Patient(
             mrn=newborn_mrn,
             full_name=baby_name,
