@@ -2,7 +2,10 @@ import uuid
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session, joinedload
-
+# FED-002: Purge soft-deleted patient from the Central Discovery Index
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from control_models import GlobalPatientPointer
 from database import get_control_db, get_db, resolve_tenant_context
 from dependencies import RequirePermission, validate_pagination
 from models import AllergyMaster, AllergySeverityEnum, Patient, PatientAllergy, User
@@ -57,14 +60,26 @@ def register_patient(
     db.commit()
     db.refresh(patient)
 
-    sync_patient_pointer(
-        control_db=control_db,
-        branch_code=tenant.branch_code,
-        subdomain_slug=tenant.subdomain_slug,
-        patient=patient,
-        tenant_db=db,
-        has_critical_allergies=False,
-    )
+    try:
+        sync_patient_pointer(
+            control_db=control_db,
+            branch_code=tenant.branch_code,
+            subdomain_slug=tenant.subdomain_slug,
+            patient=patient,
+            tenant_db=db,
+            has_critical_allergies=False,
+        )
+    except IntegrityError:
+        control_db.rollback()
+        # Concurrency collision fallback: retry sync to heal the pointer across federation mesh
+        sync_patient_pointer(
+            control_db=control_db,
+            branch_code=tenant.branch_code,
+            subdomain_slug=tenant.subdomain_slug,
+            patient=patient,
+            tenant_db=db,
+            has_critical_allergies=False,
+        )
     return patient
 
 
@@ -137,16 +152,32 @@ def update_patient(
 @router.delete("/{patient_id}", status_code=200)
 def deactivate_patient(
     patient_id: int,
+    request: Request,
     db: Session = Depends(get_db),
+    control_db: Session = Depends(get_control_db),
     current_user: User = Depends(RequirePermission("patients:delete")),
 ):
+    tenant = resolve_tenant_context(request)
     patient = db.get(Patient, patient_id)
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found.")
+    
     patient.is_active = False
     patient.updated_by_id = current_user.id
     db.commit()
-    return {"status": "success", "message": f"Patient {patient.mrn} deactivated."}
+    
+    pointer = control_db.execute(
+        select(GlobalPatientPointer).where(
+            GlobalPatientPointer.source_mrn == patient.mrn,
+            GlobalPatientPointer.branch_code == tenant.branch_code
+        )
+    ).scalar_one_or_none()
+    
+    if pointer:
+        control_db.delete(pointer)
+        control_db.commit()
+
+    return {"status": "success", "message": f"Patient {patient.mrn} deactivated and purged from Central Index."}
 
 
 @router.post("/{patient_id}/allergies", response_model=PatientAllergyResponse, status_code=status.HTTP_201_CREATED)

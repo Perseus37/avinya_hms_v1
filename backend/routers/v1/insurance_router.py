@@ -483,10 +483,13 @@ def submit_insurance_claim(
                 if item.unit_price_paise > plan.max_room_rent_daily_paise:
                     disallowed_paise += (item.unit_price_paise - plan.max_room_rent_daily_paise) * item.quantity
 
-    eligible_pool_paise = max(0, outstanding_paise - disallowed_paise)
+    # FIN-001: Calculate insurer payable based on gross net_amount_paise before advance deposits are deducted
+    eligible_pool_paise = max(0, invoice.net_amount_paise - disallowed_paise)
     insurer_share_before_cap = (eligible_pool_paise * (100 - policy.copay_percentage)) // 100
     insurer_payable_paise = min(insurer_share_before_cap, coverage_cap_paise)
-    patient_copay_paise = outstanding_paise - insurer_payable_paise
+    
+    # Copay is the remaining portion of the original bill
+    patient_copay_paise = invoice.net_amount_paise - insurer_payable_paise
 
     claim = InsuranceClaim(
         invoice_id=invoice.id,

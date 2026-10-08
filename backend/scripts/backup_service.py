@@ -9,6 +9,8 @@ import subprocess
 import sys
 import threading
 import time
+import hashlib
+import shutil
 
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
@@ -112,9 +114,43 @@ def main():
     parser.add_argument("--daemon", action="store_true", help="Run continuously as a background sidecar")
     parser.add_argument("--interval", type=int, default=86400, help="Backup interval in seconds (default: 24h)")
     parser.add_argument("--output-dir", type=str, default="backups", help="Directory for .dump.enc files")
+    # Register the vault mode flag to prevent argparse crashes from docker-compose overrides
+    parser.add_argument("--vault-mode", action="store_true", help="Enable immutable backup sealing (WORM compliance)")
     args = parser.parse_args()
 
     out_dir = Path(args.output_dir)
+    
+    if args.vault_mode:
+        logger.info("VAULT MODE ACTIVE: Enforcing immutable backup sealing constraints.")
+        vault_dir = Path("/vault/immutable")
+        vault_dir.mkdir(parents=True, exist_ok=True)
+        source_dir = Path("/source")
+        
+        while _running:
+            for f in source_dir.glob("*.dump.enc"):
+                target = vault_dir / f.name
+                if not target.exists():
+                    shutil.copy2(f, target)
+                    
+                    # Generate SHA256
+                    sha256_hash = hashlib.sha256()
+                    with open(target, "rb") as file_obj:
+                        for byte_block in iter(lambda: file_obj.read(4096), b""):
+                            sha256_hash.update(byte_block)
+                    
+                    hash_file = vault_dir / f"{f.name}.sha256"
+                    hash_file.write_text(f"{sha256_hash.hexdigest()}  {f.name}\n")
+                    
+                    # Enforce WORM compliance (Read-Only)
+                    os.chmod(target, 0o400)
+                    os.chmod(hash_file, 0o400)
+                    logger.info("[VAULT] Sealed immutable snapshot: %s", f.name)
+            
+            for _ in range(30):
+                if not _running: break
+                time.sleep(1)
+        return
+
     if not args.daemon:
         run_backup_cycle(out_dir)
         return

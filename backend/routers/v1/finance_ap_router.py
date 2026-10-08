@@ -108,9 +108,11 @@ def process_due_recurring_expenses(
     from dateutil.relativedelta import relativedelta
     now = datetime.now(timezone.utc)
     
+    # ARCH-007: Apply skip_locked=True to prevent multiple API nodes from duplicating cron jobs
     templates = db.execute(
         select(RecurringExpenseTemplate)
         .where(RecurringExpenseTemplate.is_active == True, RecurringExpenseTemplate.next_generation_date <= now)
+        .with_for_update(skip_locked=True)
     ).scalars().all()
 
     generated_count = 0

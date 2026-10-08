@@ -251,13 +251,6 @@ def discover_and_aggregate_patient_across_branches(
     control_db: Session = Depends(get_control_db),
     _: None = Depends(RateLimiter(scope="fed_discover", max_requests=60, window_seconds=60)),
 ):
-    """
-    SOLVES HOSPITAL A -> B -> C ROUTING WITH 3-LAYER PRIVACY SOVEREIGNTY:
-    1. Queries the Central Discovery Index for all hospitals visited by this patient, ordered newest first.
-    2. Checks each source hospital's FederationPolicyEnum (FULL_MESH, CORPORATE_GROUP_ONLY,
-       EMERGENCY_ALLERGIES_ONLY, ISOLATED_SILO) and the patient's allow_network_sharing consent.
-    3. Pulls latest demographics and aggregates the union of active allergies across permitted branches.
-    """
     if not phone_number and not abha_number:
         raise HTTPException(status_code=400, detail="Provide either phone_number or abha_number.")
 
@@ -281,55 +274,35 @@ def discover_and_aggregate_patient_across_branches(
     redact_address: bool = False
     merged_allergies: dict[str, FederatedAllergySummary] = {}
 
-    for ptr in pointers:
-        tenant_reg = (
-            control_db.query(TenantRegistry)
-            .filter(TenantRegistry.branch_code == ptr.branch_code, TenantRegistry.is_active == True)
-            .first()
-        )
+    import concurrent.futures
+
+    def _fetch_branch_data(ptr):
+        tenant_reg = control_db.query(TenantRegistry).filter(
+            TenantRegistry.branch_code == ptr.branch_code, TenantRegistry.is_active == True
+        ).first()
         if not tenant_reg:
-            continue
+            return None
 
         branch_engine = tenant_engine_pool.get_engine(tenant_reg.db_name)
         BranchSession = sessionmaker(bind=branch_engine, autocommit=False, autoflush=False)
         with BranchSession() as branch_db:
             policy = _get_branch_policy(branch_db)
 
-            # Layer 1A: Hospital is an ISOLATED_SILO -> never share outbound
             if policy.federation_sharing_mode == FederationPolicyEnum.ISOLATED_SILO:
-                continue
-
-            # Layer 1B: CORPORATE_GROUP_ONLY -> only share if corporate prefix matches (e.g. APOLLO-*)
+                return None
             if policy.federation_sharing_mode == FederationPolicyEnum.CORPORATE_GROUP_ONLY:
-                src_prefix = ptr.branch_code.split("-")[0].strip().upper()
-                req_prefix = calling_node.branch_code.split("-")[0].strip().upper()
-                if src_prefix != req_prefix:
-                    continue
+                if ptr.branch_code.split("-")[0].strip().upper() != calling_node.branch_code.split("-")[0].strip().upper():
+                    return None
+            if policy.federation_sharing_mode == FederationPolicyEnum.EMERGENCY_ALLERGIES_ONLY and "EMERGENCY" not in purpose.upper():
+                return None
 
-            # Layer 1C: EMERGENCY_ALLERGIES_ONLY -> only share when purpose is EMERGENCY
-            if (
-                policy.federation_sharing_mode == FederationPolicyEnum.EMERGENCY_ALLERGIES_ONLY
-                and "EMERGENCY" not in purpose.upper()
-            ):
-                continue
-
-            patient = (
-                branch_db.query(Patient)
-                .filter(Patient.mrn == ptr.source_mrn, Patient.is_active == True)
-                .first()
-            )
-            # Layer 2: Individual Patient Privacy Opt-Out
+            patient = branch_db.query(Patient).filter(Patient.mrn == ptr.source_mrn, Patient.is_active == True).first()
             if not patient or getattr(patient, "allow_network_sharing", True) is False:
-                continue
+                return None
 
-            # Layer 3A: Granular Demographics Check
-            if latest_demographics is None and policy.federation_share_demographics:
-                branch_db.expunge(patient)
-                latest_demographics = patient
-                if policy.federation_sharing_mode == FederationPolicyEnum.EMERGENCY_ALLERGIES_ONLY:
-                    redact_address = True
-
-            # Layer 3B: Granular Allergies Check
+            branch_db.expunge(patient)
+            
+            local_allergies = []
             if policy.federation_share_allergies:
                 alg_stmt = (
                     select(PatientAllergy, AllergyMaster)
@@ -337,18 +310,27 @@ def discover_and_aggregate_patient_across_branches(
                     .where(PatientAllergy.patient_id == patient.id, PatientAllergy.is_active == True)
                 )
                 for pa, master in branch_db.execute(alg_stmt).all():
-                    key = master.name.strip().lower()
-                    if key not in merged_allergies:
-                        rx_note = pa.reaction_description or "Adverse reaction"
-                        tagged_reaction = (
-                            rx_note if "[Source:" in rx_note else f"{rx_note} [Source: {ptr.branch_code}]"
-                        )
-                        merged_allergies[key] = FederatedAllergySummary(
+                    rx_note = pa.reaction_description or "Adverse reaction"
+                    
+                    # FED-001:
+                    # Tag the allergy with the branch where this allergy record currently
+                    # originates. Do not add another tag if the reaction has already been
+                    # provenance-tagged during an earlier federation hop.
+                    if "[Source:" in rx_note:
+                        tagged_reaction = rx_note
+                    else:
+                        tagged_reaction = f"{rx_note} [Source: {ptr.branch_code}]"
+                    
+                    # Extract primitive data into schemas immediately to prevent DetachedInstanceError in main thread
+                    local_allergies.append({
+                        "key": master.name.strip().lower(),
+                        "summary": FederatedAllergySummary(
                             allergy_code=master.code,
                             allergy_name=master.name,
                             severity=pa.severity,
                             reaction=tagged_reaction,
                         )
+                    })
 
             branch_db.add(
                 FederationTransferLog(
@@ -360,6 +342,37 @@ def discover_and_aggregate_patient_across_branches(
                 )
             )
             branch_db.commit()
+            
+            return {
+                "ptr": ptr,
+                "patient": patient,
+                "allergies": local_allergies,
+                "redact_address": policy.federation_sharing_mode == FederationPolicyEnum.EMERGENCY_ALLERGIES_ONLY,
+                "share_demographics": policy.federation_share_demographics
+            }
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        ptr_to_future = {ptr: executor.submit(_fetch_branch_data, ptr) for ptr in pointers}
+        concurrent.futures.wait(ptr_to_future.values(), timeout=5.0, return_when=concurrent.futures.ALL_COMPLETED)
+
+    for ptr in pointers:
+        future = ptr_to_future[ptr]
+        try:
+            if not future.done():
+                continue
+            result = future.result()
+            if result:
+                if latest_demographics is None and result["share_demographics"]:
+                    latest_demographics = result["patient"]
+                    if result["redact_address"]:
+                        redact_address = True
+
+                # Process the already-extracted safe schemas
+                for alg_data in result["allergies"]:
+                    if alg_data["key"] not in merged_allergies:
+                        merged_allergies[alg_data["key"]] = alg_data["summary"]
+        except Exception as e:
+            pass  # Node timed out or failed circuit breaker
 
     if not latest_demographics:
         raise HTTPException(
@@ -381,7 +394,6 @@ def discover_and_aggregate_patient_across_branches(
         emergency_contact_phone=latest_demographics.emergency_contact_phone,
         active_allergies=list(merged_allergies.values()),
     )
-
 
 @router.post("/patients/import", response_model=PatientResponse, status_code=status.HTTP_201_CREATED)
 def import_federated_patient_locally(

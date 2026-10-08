@@ -21,6 +21,7 @@ from sqlalchemy import (
     UniqueConstraint,
     event,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, Session as SQLAlchemySession, mapped_column, relationship
 from database import Base
@@ -684,7 +685,7 @@ class Patient(AuditMixin, Base):
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
     date_of_birth: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     gender: Mapped[GenderEnum] = mapped_column(nullable=False)
-    phone_number: Mapped[Optional[str]] = mapped_column(String(20), index=True, nullable=True, default="0000000000")
+    phone_number: Mapped[Optional[str]] = mapped_column(String(20), index=True, nullable=True)
     abha_number: Mapped[Optional[str]] = mapped_column(String(50), unique=True, index=True, nullable=True)
     email: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     blood_group: Mapped[Optional[BloodGroupEnum]] = mapped_column(nullable=True)
@@ -844,6 +845,9 @@ class BedTransferLog(AuditMixin, Base):
     requested_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     transfer_reason: Mapped[Optional[str]] = mapped_column(String(255))
 
+    # FIN-002: Lock in historical bed rates at the exact time of transfer to prevent retroactive overcharging
+    unit_price_paise: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
     admission: Mapped[InpatientAdmission] = relationship(back_populates="transfer_logs")
     from_bed: Mapped[Optional["Bed"]] = relationship(foreign_keys=[from_bed_id])
     to_bed: Mapped["Bed"] = relationship(foreign_keys=[to_bed_id])
@@ -866,6 +870,14 @@ class Invoice(AuditMixin, Base):
         ),
         Index("ix_invoices_patient_id", "patient_id"),
         Index("ix_invoices_encounter_id", "encounter_id"),
+        # DB-005: Prevent multiple DRAFT invoices for a single encounter (PostgreSQL + SQLite compatible)
+        Index(
+            "uq_encounter_draft_inv", 
+            "encounter_id", 
+            unique=True, 
+            postgresql_where=text("status = 'DRAFT'"),
+            sqlite_where=text("status = 'DRAFT'")
+        ),
     )
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
@@ -878,6 +890,11 @@ class Invoice(AuditMixin, Base):
     discount_approved_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
     amount_paid_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     notes: Mapped[Optional[str]] = mapped_column(Text)
+
+    # DB-001: Enforce Optimistic Concurrency Control to prevent lost updates on financial ledgers
+    version_id: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    __mapper_args__ = {"version_id_col": version_id}
 
     patient: Mapped["Patient"] = relationship()
     encounter: Mapped[Optional["PatientEncounter"]] = relationship()
@@ -914,6 +931,7 @@ class PaymentReceipt(AuditMixin, Base):
     __tablename__ = "payment_receipts"
     __table_args__ = (
         CheckConstraint("amount_paid_paise > 0", name="ck_payment_receipt_amount_pos"),
+        UniqueConstraint("invoice_id", "transaction_reference", name="uq_invoice_txn_ref"),
         Index("ix_payment_receipts_invoice_id", "invoice_id"),
     )
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

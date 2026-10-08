@@ -148,11 +148,18 @@ def get_executive_command_center(
     total_transfers = db.scalar(select(func.count(BedTransferLog.id))) or 0
 
     # Encounters, ALOS by Admission Type & Readmission Rate
-    encounters = list(db.execute(select(PatientEncounter)).scalars().all())
+    # ARCH-002: Execute aggregations natively in PostgreSQL to prevent OOM
+    total_encounters = db.scalar(select(func.count(PatientEncounter.id))) or 0
+    
+    active_rows = db.execute(
+        select(PatientEncounter.encounter_type, func.count(PatientEncounter.id))
+        .where(PatientEncounter.status == EncounterStatusEnum.ACTIVE)
+        .group_by(PatientEncounter.encounter_type)
+    ).all()
+    
     active_by_type = {t.value: 0 for t in EncounterTypeEnum}
-    for e in encounters:
-        if e.status == EncounterStatusEnum.ACTIVE:
-            active_by_type[e.encounter_type.value] += 1
+    for r in active_rows:
+        active_by_type[r.encounter_type.value] = r[1]
 
     admissions = list(
         db.execute(select(InpatientAdmission).options(joinedload(InpatientAdmission.encounter))).scalars().all()
@@ -192,7 +199,7 @@ def get_executive_command_center(
     invoices = list(db.execute(select(Invoice).where(Invoice.status != InvoiceStatusEnum.VOID)).scalars().all())
     total_net_revenue_paise = sum(inv.net_amount_paise for inv in invoices)
     arpob_paise = total_net_revenue_paise // occupied_beds if occupied_beds > 0 else 0
-    arpu_encounter_paise = total_net_revenue_paise // len(encounters) if encounters else 0
+    arpu_encounter_paise = total_net_revenue_paise // total_encounters if total_encounters > 0 else 0
 
     return {
         "bed_census": {
@@ -207,7 +214,7 @@ def get_executive_command_center(
             "by_bed_type": bed_type_counts,
         },
         "encounters_and_ipd_alos": {
-            "total_encounters": len(encounters),
+            "total_encounters": total_encounters,
             "active_encounters_by_type": active_by_type,
             "total_ipd_admissions": len(admissions),
             "discharged_ipd_admissions": len(discharged_admissions),
@@ -775,7 +782,8 @@ def get_pharmacy_and_therapeutics_analytics(
 @router.get("/doctor-and-department-productivity")
 def get_doctor_and_department_productivity(
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("iam:read", "opd:read", "billing:read")),
+    # SEC-008: Restrict sensitive physician compensation and revenue analytics
+    _: User = Depends(RequirePermission("executive_bi:read", "finance:read")),
 ) -> Dict[str, Any]:
     now_utc = datetime.now(timezone.utc)
     doctors = list(

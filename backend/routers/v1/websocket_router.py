@@ -56,9 +56,6 @@ async def websocket_event_stream(
     await websocket.accept()
     pubsub = redis_client.pubsub()
 
-    # r = get_redis()
-    # pubsub = r.pubsub()
-
     channel_pattern = (
         f"tenant:{tenant_slug.lower()}:*"
         if stream == "all"
@@ -73,7 +70,8 @@ async def websocket_event_stream(
     async def _send_pump():
         try:
             while True:
-                message = pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                # PERF-003: Use timeout=0.0 for non-blocking read, yielding control back to the event loop
+                message = pubsub.get_message(ignore_subscribe_messages=True, timeout=0.0)
                 if message and message.get("data"):
                     raw_data = message["data"]
                     if isinstance(raw_data, bytes):
@@ -89,7 +87,6 @@ async def websocket_event_stream(
         try:
             while True:
                 data = await websocket.receive_text()
-                # Heartbeat reply
                 if data == "ping":
                     await websocket.send_text(json.dumps({"type": "pong"}))
         except (WebSocketDisconnect, asyncio.CancelledError):

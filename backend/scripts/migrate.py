@@ -103,10 +103,12 @@ def migrate_default_canary(message: str | None = None) -> None:
         if len(diffs) > 10:
             print(f"    ... and {len(diffs) - 10} more.")
 
-        comment = message or input("\n[?] Enter migration comment for new revision (or press Enter to abort): ").strip()
+        comment = message
         if not comment:
-            print("[x] Aborted. No revision generated.")
-            sys.exit(0)
+            # OPS-002: Prevent interactive hanging in Docker/CI environments
+            print("[x] CRITICAL: Unversioned schema changes detected but no --message was provided.")
+            print("    Run manually: docker compose run --rm api python backend/scripts/migrate.py -m 'your_comment'")
+            sys.exit(1)
 
         print(f"[*] Generating Alembic revision: '{comment}'...")
         command.revision(cfg, message=comment, autogenerate=True)

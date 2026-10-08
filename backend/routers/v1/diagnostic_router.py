@@ -508,6 +508,10 @@ def submit_task_result(
                     detail="A valid rejection_reason is mandatory when marking a sample as SAMPLE_REJECTED.",
                 )
             task.rejection_reason = payload.rejection_reason
+            # CLIN-002: Wipe previous results and panic flags if a sample is rejected
+            task.result_value = None
+            task.result_notes = None
+            task.is_critical_panic = False
         elif payload.status == TaskStatusEnum.RESULT_ENTERED:
             if not payload.result_value:
                 raise HTTPException(status_code=400, detail="result_value is required when status is RESULT_ENTERED.")

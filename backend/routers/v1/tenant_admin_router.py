@@ -242,11 +242,13 @@ class BulkImportSummaryResponse(BaseModel):
     details: List[BulkRowDetail]
 
 
-def _parse_file_rows(filename: str, content: bytes) -> List[Dict[str, Any]]:
+import codecs
+
+# SEC-005: Parse files as streaming generators to prevent OOM memory exhaustion DOS
+def _parse_file_rows(filename: str, file_obj):
     if filename.endswith(".json"):
-        return json.loads(content.decode("utf-8"))
-    stream = io.StringIO(content.decode("utf-8-sig"))
-    return list(csv.DictReader(stream))
+        return json.load(file_obj)
+    return csv.DictReader(codecs.iterdecode(file_obj, "utf-8-sig"))
 
 
 @router.post("/bulk-import/service-catalog", response_model=BulkImportSummaryResponse)
@@ -257,7 +259,7 @@ async def bulk_import_services(
     current_user: User = Depends(RequirePermission("mdm:write", "billing:write")),
 ):
     """Imports service catalog price lists from a CSV or JSON file."""
-    rows = _parse_file_rows(file.filename or "data.csv", await file.read())
+    rows = _parse_file_rows(file.filename or "data.csv", file.file)
     details: List[BulkRowDetail] = []
     success = 0
     errors = 0
@@ -299,7 +301,7 @@ async def bulk_import_services(
 
     db.commit()
     return BulkImportSummaryResponse(
-        entity="service_catalog", total_processed=len(rows), success_count=success, error_count=errors, details=details
+        entity="service_catalog", total_processed=success + errors, success_count=success, error_count=errors, details=details
     )
 
 
@@ -311,7 +313,7 @@ async def bulk_import_medications(
     current_user: User = Depends(RequirePermission("pharmacy:write", "mdm:write")),
 ):
     """Imports pharmacy formulary medications from a CSV or JSON file."""
-    rows = _parse_file_rows(file.filename or "meds.csv", await file.read())
+    rows = _parse_file_rows(file.filename or "meds.csv", file.file)
     details: List[BulkRowDetail] = []
     success = 0
     errors = 0
@@ -352,5 +354,5 @@ async def bulk_import_medications(
 
     db.commit()
     return BulkImportSummaryResponse(
-        entity="medications", total_processed=len(rows), success_count=success, error_count=errors, details=details
+        entity="medications", total_processed=success + errors, success_count=success, error_count=errors, details=details
     )

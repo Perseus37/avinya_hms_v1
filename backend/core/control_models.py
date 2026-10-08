@@ -104,7 +104,8 @@ class GlobalPatientPointer(ControlBase):
     """
     __tablename__ = "global_patient_pointers"
     __table_args__ = (
-        UniqueConstraint("phone_hash", "branch_code", name="uq_pointer_phone_branch"),
+        # DB-003: Include source_mrn so mother and newborn sharing a phone hash don't collide
+        UniqueConstraint("phone_hash", "branch_code", "source_mrn", name="uq_pointer_phone_branch_mrn"),
         Index("ix_pointer_lookup_phone", "phone_hash", "last_clinical_update_at"),
         Index("ix_pointer_lookup_abha", "abha_number", "last_clinical_update_at"),
     )

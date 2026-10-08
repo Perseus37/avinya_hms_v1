@@ -183,7 +183,13 @@ class RateLimiter:
         except HTTPException:
             raise
         except Exception:
-            # Fail-open if Redis connection drops
+            # SEC-001: Fail-closed for sensitive authentication paths to prevent brute force if Redis drops
+            if "auth_login" in self.scope:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Authentication temporarily unavailable due to security infrastructure outage."
+                )
+            # Safe fail-open for generic/non-sensitive rate limits
             return
 
 

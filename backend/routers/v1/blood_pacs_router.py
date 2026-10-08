@@ -167,6 +167,22 @@ def cross_match_and_reserve_blood_bag(
                     f"Cannot transfuse {bag.blood_group.value} FFP to a {patient.blood_group.value} recipient."
                 ),
             )
+    # CLIN-001: Enforce specific biological compatibility matrices for Platelets and Cryoprecipitate
+    elif bag.component_type in [BloodComponentTypeEnum.PLATELETS, BloodComponentTypeEnum.CRYOPRECIPITATE]:
+        if bag.blood_group != patient.blood_group:
+            # Strictest rule: require an exact ABO/Rh match for Platelets/Cryo
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"BIOLOGICAL HARD-STOP: Incompatible Platelet/Cryo group! "
+                    f"Cannot transfuse {bag.blood_group.value} {bag.component_type.value} to a {patient.blood_group.value} recipient. Exact match required."
+                ),
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail=f"No biological compatibility rule defined for {bag.component_type.value}."
+        )
 
     bag.status = BloodBagStatusEnum.CROSS_MATCHED
     cm_order = BloodCrossMatchOrder(

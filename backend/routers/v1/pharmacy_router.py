@@ -457,6 +457,24 @@ def dispense_medication(
             if batch.stock_quantity < disp_item.quantity_to_dispense:
                 raise HTTPException(status_code=409, detail=f"Insufficient stock in batch {batch.batch_number}.")
 
+            # CLIN-004: Enforce FEFO (First-Expiry, First-Out) dispensing protocol
+            older_unexpired_batch = db.execute(
+                select(InventoryBatch)
+                .where(
+                    InventoryBatch.medication_id == rx_item.medication_id,
+                    InventoryBatch.stock_quantity > 0,
+                    InventoryBatch.expiry_date > datetime.now(timezone.utc),
+                    InventoryBatch.expiry_date < batch.expiry_date,
+                    InventoryBatch.id != batch.id
+                )
+            ).scalar_one_or_none()
+            
+            if older_unexpired_batch and not getattr(disp_item, "override_fefo", False):
+                raise HTTPException(
+                    status_code=409, 
+                    detail=f"FEFO Violation: Older unexpired batch ({older_unexpired_batch.batch_number}) has available stock. Dispense it first or pass override_fefo=True."
+                )
+
             batch.stock_quantity -= disp_item.quantity_to_dispense
             rx_item.dispensed_quantity += disp_item.quantity_to_dispense
 
@@ -467,12 +485,13 @@ def dispense_medication(
             if med is None:
                 raise HTTPException(status_code=400, detail="Medication not found for the prescription item.")
 
+            # FIN-003: Embed exact entity ID in description to ensure strict idempotency without schema changes
             line_item = InvoiceLineItem(
                 invoice_id=invoice.id,
                 service_id=None,
                 description=(
                     f"PHARMACY: {med.brand_name} ({med.strength}) - "
-                    f"Batch: {batch.batch_number} [DispensedBy:{current_user.id}]"
+                    f"Batch: {batch.batch_number} [RxItem:{rx_item.id}] [DispensedBy:{current_user.id}]"
                 ),
                 quantity=disp_item.quantity_to_dispense,
                 unit_price_paise=batch.unit_price_paise,
@@ -574,13 +593,14 @@ def return_dispensed_medication(
         rx_item.dispensed_quantity -= ret.quantity_to_return
 
         # 2. Adjust DRAFT invoice line item if invoice is still open
+        # FIN-003: Rely on strict embedded RxItem tracking instead of fragile name matching
         if invoice and invoice.status == InvoiceStatusEnum.DRAFT and med:
-            batch_tag = f"Batch: {batch.batch_number}"
+            exact_tag = f"[RxItem:{rx_item.id}]"
             matching_line = next(
                 (
                     li
                     for li in invoice.line_items
-                    if li.description.startswith("PHARMACY:") and batch_tag in li.description
+                    if exact_tag in li.description
                 ),
                 None,
             )

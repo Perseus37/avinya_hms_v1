@@ -61,9 +61,24 @@ def login(
 ):
     """Authenticates a user against the active hospital database and signs a tenant-isolated JWT."""
     tenant = resolve_tenant_context(request)
-    user = db.query(User).filter(User.email == payload.email).first()
+    
+    # SEC-007: Implement pessimistic lock to prevent distributed brute-force lockout bypass
+    from sqlalchemy import select
+    user = db.execute(
+        select(User).where(User.email == payload.email).with_for_update()
+    ).scalar_one_or_none()
 
-    if not user or not pwd_context.verify(payload.password, user.hashed_password):
+    # SEC-003: Timing-Attack Mitigation. Run dummy verify if user is None.
+    # Mathematically valid bcrypt hash (matches "password" at cost 12)
+    dummy_hash = "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewKd.RvvJ8hYjT.W"
+    is_valid_pwd = False
+    
+    if user:
+        is_valid_pwd = pwd_context.verify(payload.password, user.hashed_password)
+    else:
+        pwd_context.verify(payload.password, dummy_hash)
+
+    if not user or not is_valid_pwd:
         if user:
             user.failed_login_attempts += 1
             if user.failed_login_attempts >= MAX_FAILED_LOGIN_ATTEMPTS:

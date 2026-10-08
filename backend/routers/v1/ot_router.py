@@ -100,30 +100,33 @@ def schedule_surgery(
     if end_utc <= start_utc:
         raise HTTPException(status_code=400, detail="scheduled_end_time must be after scheduled_start_time.")
 
-    # Check overlapping surgeries in the same OperationTheatre OR for the same Lead Surgeon
-    active_schedules = list(
-        db.execute(
-            select(SurgicalSchedule).where(
-                SurgicalSchedule.status != SurgeryStatusEnum.CANCELLED,
+    # ARCH-004: Push overlap evaluation down to PostgreSQL to prevent OOM and race conditions
+    from sqlalchemy import or_, and_
+    overlap_conflict = db.execute(
+        select(SurgicalSchedule).where(
+            SurgicalSchedule.status != SurgeryStatusEnum.CANCELLED,
+            or_(
+                SurgicalSchedule.theatre_id == payload.theatre_id,
+                SurgicalSchedule.lead_surgeon_id == payload.lead_surgeon_id,
+            ),
+            and_(
+                SurgicalSchedule.scheduled_start_time < end_utc,
+                SurgicalSchedule.scheduled_end_time > start_utc,
             )
-        )
-        .scalars()
-        .all()
-    )
-    for existing in active_schedules:
-        ex_start = _to_utc(existing.scheduled_start_time)
-        ex_end = _to_utc(existing.scheduled_end_time)
-        if start_utc < ex_end and end_utc > ex_start:
-            if existing.theatre_id == payload.theatre_id:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"OT Scheduling Conflict: Theatre '{theatre.code}' is already booked during this window.",
-                )
-            if existing.lead_surgeon_id == payload.lead_surgeon_id:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Surgeon Scheduling Conflict: Lead surgeon is already booked for another surgery during this window.",
-                )
+        ).with_for_update()
+    ).scalars().first()
+
+    if overlap_conflict:
+        if overlap_conflict.theatre_id == payload.theatre_id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"OT Scheduling Conflict: Theatre '{theatre.code}' is already booked during this window.",
+            )
+        if overlap_conflict.lead_surgeon_id == payload.lead_surgeon_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Surgeon Scheduling Conflict: Lead surgeon is already booked for another surgery during this window.",
+            )
 
     date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
     case_no = f"OT-{date_str}-{uuid.uuid4().hex[:8].upper()}"

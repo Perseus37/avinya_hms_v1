@@ -82,11 +82,13 @@ class TenantEngineRegistry:
                 _, oldest_engine = self._engines.popitem(last=False)
                 oldest_engine.dispose()
 
+            from sqlalchemy.pool import NullPool
+            
+            # ARCH-001: Prevent connection pool exhaustion across 4x Gunicorn workers
             tenant_engine = create_engine(
                 build_db_url(db_name),
+                poolclass=NullPool,
                 pool_pre_ping=True,
-                pool_size=3,
-                max_overflow=5,
                 pool_recycle=1800,
             )
             self._engines[db_name] = tenant_engine
@@ -99,8 +101,12 @@ redis_pool = redis.ConnectionPool.from_url(settings.REDIS_URL, decode_responses=
 
 def extract_subdomain_slug(request: Request) -> str:
     """Extracts the tenant slug from X-Hospital-Subdomain header or Host subdomain."""
+    # SEC-002: Restrict X-Hospital-Subdomain header extraction to internal networks
+    # Prevents external attackers from spoofing tenant routing
     header_override = request.headers.get("X-Hospital-Subdomain")
-    if header_override:
+    is_test_env = getattr(settings, "ENVIRONMENT", "") in ("development", "testing")
+    
+    if header_override and (getattr(settings, "ALLOW_HEADER_TENANT_OVERRIDE", False) or is_test_env):
         return header_override.strip().lower()
 
     host = request.headers.get("host", "").split(":")[0].strip().lower()

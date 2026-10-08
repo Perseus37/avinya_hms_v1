@@ -134,7 +134,14 @@ def book_appointment(
     if not patient or not patient.is_active:
         raise HTTPException(status_code=400, detail="Invalid or inactive patient.")
 
-    doctor = db.query(DoctorProfile).filter(DoctorProfile.user_id == payload.doctor_id).first()
+    # ARCH-003: Lock the doctor profile row using FOR UPDATE to serialize concurrent bookings
+    from sqlalchemy import select
+    doctor = db.execute(
+        select(DoctorProfile)
+        .where(DoctorProfile.user_id == payload.doctor_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+    
     if not doctor:
         raise HTTPException(status_code=400, detail="Invalid doctor ID.")
 

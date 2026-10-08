@@ -93,11 +93,12 @@ def auto_bill_opd_consultation(db: Session, patient_id: int, encounter_id: int, 
     invoice = get_or_create_draft_encounter_invoice(db, patient_id, encounter_id)
     desc = f"OPD CONSULTATION: {doc_profile.user.full_name} ({doc_profile.specialization})"
 
+    # CLIN-003: Use a wildcard LIKE match to decouple idempotency from volatile doctor profile strings
     existing = (
         db.execute(
             select(InvoiceLineItem).where(
                 InvoiceLineItem.invoice_id == invoice.id,
-                InvoiceLineItem.description == desc,
+                InvoiceLineItem.description.like("OPD CONSULTATION:%"),
             )
         )
         .scalars()
@@ -156,7 +157,13 @@ def auto_bill_ipd_bed_stay(db: Session, admission: InpatientAdmission, discharge
 
         elapsed_hours = max(0.0, (seg_end - seg_start).total_seconds() / 3600.0)
         billable_days = max(1, math.ceil(elapsed_hours / 24.0))
-        total_paise = billable_days * bed.base_daily_rate_paise
+        
+        # FIN-002: Use the locked-in historical rate from BedTransferLog, falling back if it was recorded as 0
+        historical_rate = getattr(log, "unit_price_paise", 0)
+        if historical_rate <= 0:
+            historical_rate = bed.base_daily_rate_paise
+            
+        total_paise = billable_days * historical_rate
 
         desc = f"IPD BED CHARGE: Bed {bed.bed_number} ({bed.bed_type.value})"
         line_item = InvoiceLineItem(
@@ -164,7 +171,7 @@ def auto_bill_ipd_bed_stay(db: Session, admission: InpatientAdmission, discharge
             service_id=None,
             description=desc,
             quantity=billable_days,
-            unit_price_paise=bed.base_daily_rate_paise,
+            unit_price_paise=historical_rate,
             total_price_paise=total_paise,
         )
         db.add(line_item)

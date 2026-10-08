@@ -114,8 +114,8 @@ async def handle_mllp_client(reader: asyncio.StreamReader, writer: asyncio.Strea
                     raw_msg = hl7_bytes.decode('utf-8', errors='ignore')
                     logger.info(f"Received HL7 Payload: {raw_msg[:50]}...")
                     
-                    # Process and route
-                    msg_control_id, success, err = process_and_route_result(raw_msg)
+                    # ARCH-005: Offload blocking SQLAlchemy DB I/O to a worker thread
+                    msg_control_id, success, err = await asyncio.to_thread(process_and_route_result, raw_msg)
                     
                     # Send Acknowledgement back to the machine
                     ack_bytes = build_hl7_ack(msg_control_id, success, err)

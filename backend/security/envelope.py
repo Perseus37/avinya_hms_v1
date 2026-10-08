@@ -3,11 +3,19 @@ import hashlib
 import os
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from config import settings
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-_ENC_PREFIX = "enc:v1:"
-
-# Derive a deterministic 32-byte AES-256 key directly from settings.SECRET_KEY
-_MASTER_KEY = hashlib.sha256(settings.SECRET_KEY.encode("utf-8")).digest()
+_ENC_PREFIX = "enc:v1:"    
+# SEC-004: Implement PBKDF2HMAC with salt to secure tenant JWT and Backup keys against rotation breaks
+_salt = getattr(settings, "ENVELOPE_ENCRYPTION_SALT", "avinya_secure_salt_2026").encode("utf-8")
+_kdf = PBKDF2HMAC(
+    algorithm=hashes.SHA256(),
+    length=32,
+    salt=_salt,
+    iterations=390000,
+)
+_MASTER_KEY = _kdf.derive(settings.SECRET_KEY.encode("utf-8"))
 
 
 def encrypt_tenant_secret(plaintext: str) -> str:
