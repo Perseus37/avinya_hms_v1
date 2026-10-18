@@ -1,128 +1,188 @@
-Generic single-database configuration.
+# Avinya HMS
 
-avinya_hms/
-├── alembic/                    # Database migrations
-│   ├── versions/               # Sequential migration scripts (e.g., init_phases)
-│   └── env.py                  # Alembic environment and metadata binding
-├── routers/                    # API routing layer (Controllers)
-│   ├── v1/                     # Current stable API endpoints
-│   │   ├── adt_router.py
-│   │   ├── auth_router.py
-│   │   ├── billing_router.py
-│   │   ├── clinical_router.py
-│   │   ├── diagnostic_router.py
-│   │   ├── opd_router.py
-│   │   ├── patient_router.py
-│   │   ├── pharmacy_router.py
-│   │   └── ward_router.py
-│   ├── v2/                     # Future iteration endpoints
-│   └── __init__.py
-├── schemas/                    # Pydantic validation contracts (DTOs)
-│   ├── v1/                     # Request/Response payloads for V1
-│   ├── v2/                     # Future varied payloads for V2
-│   └── __init__.py
-├── services/                   # Reusable core business logic
-│   ├── cpoe.py                 # Clinical safety and allergy hard-stops
-│   ├── explosion_engine.py     # Diagnostic bundle resolution
-│   ├── taxonomy_cache.py       # Redis caching layer
-│   └── __init__.py
-├── tests/                      # Pytest suite
-│   └── test_hms_foundations.py
-├── .env                        # Local environment variables (Git-ignored)
-├── .gitignore                  # Exclusion rules for caches and secrets
-├── alembic.ini                 # Alembic execution configuration
-├── config.py                   # Pydantic BaseSettings for environment variables
-├── database.py                 # PostgreSQL and Redis connection bootstrapping
-├── dependencies.py             # Security (JWT), RBAC checks, and shared injectables
-├── docker-compose.yml          # Container orchestration for backing services
-├── Dockerfile                  # Application container definition for ASGI workers
-├── main.py                     # Application composition, middleware, and exception envelopes
-├── models.py                   # SQLAlchemy ORM definitions and AuditMixin
-├── requirements.txt            # Python dependencies
-└── seed.py                     # Initial master data and test-scenario generation
+Avinya HMS is a multi-tenant hospital management platform. The repository contains a FastAPI hospital API, a separate SaaS control-plane application, a React onboarding console, PostgreSQL/Alembic tooling, Redis integration, and a pytest suite.
 
-# Architectural Rules for this Structure:
+## Repository map
 
-Domain Isolation: The models.py file can remain unified because it represents the single source of truth for the physical PostgreSQL schema. However, routers and schemas must be separated into /v1/ and /v2/ directories to prevent payload conflicts when you introduce breaking API changes.
-
-Thin Routers, Fat Services: As your workflows become more complex (e.g., generating PDF invoices, sending SMS notifications for OPD appointments), do not write that logic in the router files. Move heavy computational or third-party logic into dedicated files inside the services/ directory and import them into the router.
-
-Infrastructure Segregation: Everything required to boot the application environment (config.py, database.py, dependencies.py, docker-compose.yml, Dockerfile) sits at the root level so container runtimes and CI/CD pipelines can locate them instantly without traversing subdirectories.
-
-## The application code is functionally a masterpiece, but **we are not ready to deploy to a real hospital server just yet.**
-
-You have built a Tier-1, ACID-compliant, RBAC-secured backend with an unalterable audit trail. The `main.py` patch we just applied gave it the necessary API versioning (`/v1/`), cross-origin boundaries (CORS), and request tracing required for enterprise software.
-
-However, to legally and operationally run this in production, you must transition from "Development Mode" to "Production Infrastructure." Here is the final checklist to hit true production readiness:
-
-### 1. The Immediate Code Blocker
-
-We created the Phase 8 (Pharmacy & Inventory) models, but we never generated the database migration. If you deploy right now, the system will crash when a pharmacist tries to log in because the tables don't exist.
-
-* **Action:** Run `alembic revision --autogenerate -m "init_phase_8_pharmacy"` followed by `alembic upgrade head`.
-
-### 2. Deployment Server (ASGI vs. Workers)
-
-Right now, you are running `uvicorn main:app --reload`. This is strictly for local development. It runs on a single thread and will collapse under heavy hospital load.
-
-* **Action:** You must containerize the application using a `Dockerfile` and run it via **Gunicorn** with Uvicorn worker classes (e.g., `gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker`). This allows the app to utilize multiple CPU cores.
-
-### 3. Infrastructure & Network Security
-
-FastAPI is an application framework, not a web server. It cannot handle SSL certificates or block malicious IP addresses.
-
-* **Action:** Deploy the app behind a reverse proxy like **NGINX** or an API Gateway (like AWS API Gateway or Cloudflare). This layer will enforce Rate Limiting (to prevent brute-force attacks on the login route) and terminate HTTPS/SSL connections.
-
-### 4. Legal Compliance (HIPAA / NDHM)
-
-Healthcare data is heavily regulated. Storing patient demographics, allergies, and billing data in a plain-text PostgreSQL database is illegal in most jurisdictions without infrastructure safeguards.
-
-* **Action:** Ensure your managed PostgreSQL provider (e.g., AWS RDS, Azure Postgres) has **Encryption at Rest (TDE)** enabled and that daily automated backups with Point-in-Time Recovery (PITR) are turned on.
-
-### 5. Secrets Management
-
-Your `.env` file currently holds the `SECRET_KEY` and database passwords.
-
-* **Action:** In production, these must be injected at runtime using a secure vault like AWS Secrets Manager, HashiCorp Vault, or GitHub/GitLab CI/CD secrets.
-
-**The Verdict:**
-The Python architecture is **100% complete** for a V1 release. If you run the final Alembic migration for Phase 8, wrap this in a Dockerfile, and put it behind HTTPS, you can confidently ship Avinya HMS to your first client.
-
-## 🐳 Docker Development Environment
-
-This project utilizes a structured **Docker Compose** multi-container setup. To prevent cluttering your **Docker Desktop** dashboard with inactive or stopped components, database migration and seeding tasks are isolated using Docker **Profiles**.
-
-### 🛠️ Container Topology
-* **`api`**: Core FastAPI backend application server.
-* **`db`**: PostgreSQL database engine.
-* **`redis`**: Cache and session management layer.
-* **`api-migration`** *(Profile: tools)*: One-off task running Alembic schema updates.
-* **`api-seed`** *(Profile: tools)*: One-off task inserting core domain datasets.
-
----
-
-### 🚀 Getting Started
-
-#### 1. First-Time Setup or Database Reset
-Use this command when you are setting up the project for the first time, pulling schema modifications, or rewriting initial seed datasets. This explicitly activates the management profile to configure your database storage.
-
-```bash
-docker compose --profile tools up --build
+```text
+backend/
+  __init__.py              Importable backend package
+  main.py                  Hospital API entry point
+  core/                    Shared configuration, database access, audit, dependencies
+  domains/<domain>/        Tenant-owned models, schemas, routers, and services
+  control_plane/
+    models.py               Control-plane SQLAlchemy models
+    api/routers/            Provisioning, fleet, billing, migration, and console routes
+    services/               Control-plane auth, catalogs, pricing, and provisioning
+    alembic/                Independent control-plane Alembic history
+    app.py                  Control-plane FastAPI composition
+  schemas/common.py         Shared API schemas
+  security/                 Encryption helpers
+  scripts/                  Startup, migration, backup, and restore commands
+  alembic/                  Tenant-database Alembic environment and revisions
+onboarding-ui/
+  src/components/          Shared control-plane UI components
+  src/views/               Control-plane screens
+  src/hooks/               Authenticated API and fleet/catalog state hooks
+  src/lib/                  Shared UI helpers
+tests/                     Pytest integration and workflow tests
+docs/                      Architecture and operations documentation
+Dockerfile                 UI build and Python runtime stages
+docker-compose.yml         Local stack
+docker-compose.prod.yml    Traefik-backed production stack
 ```
-* **What happens:** Docker spins up the database cluster, runs all pending **Alembic updates**, inserts **seed datasets** (`seed.py`), and launches the API. The migration and seeding containers will gracefully terminate after completion.
 
-#### 2. Daily Local Development
-For normal daily work where you are only editing code inside your FastAPI routers or business logic (and no changes have been made to your database models):
+There is one active migration studio at `onboarding-ui/src/views/MigrationStudio.jsx`; the obsolete root-level duplicate and its unused Axios client have been removed.
 
-```bash
+For the current-versus-proposed module boundaries and known structural risks, see [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md).
+Tenant domains own their ORM models, request/response schemas, V1 routers, and
+business services. Control-plane routes and services are imported from their
+canonical `backend.control_plane.api.routers` and
+`backend.control_plane.services` packages.
+
+## Knowledge transfer and operations
+
+- [Project Report and KT](docs/PROJECT_REPORT_AND_KT.md) explains the system
+  topology, database ownership, backend domains, frontend files, tests, and
+  recommended reading path for a new engineer.
+- [Operations Runbook](docs/OPERATIONS_RUNBOOK.md) covers startup, health
+  checks, releases, migrations, backups, restores, troubleshooting, and release
+  readiness.
+- [Migration Studio Guide](docs/MIGRATION_STUDIO.md) documents CSV imports,
+  ETL operations, duplicate policies, and known limitations.
+- [Production Deployment Guide](docs/PRODUCTION_DEPLOYMENT.md) covers VM/cloud
+  deployment choices, cost guidance, secrets, networking, and project copying.
+- [Production Readiness Roadmap](docs/PRODUCTION_READINESS_ROADMAP.md) tracks
+  go-live blockers, evidence requirements, scaling gates, and future work.
+
+`docs/PROJECT_REPORT_AND_KT.md` is the current source-oriented handover.
+`docs/ARCHITECTURE_AND_KT.md` and the existing
+`docs/ARCHITECTURE_AND_KT.docx` contain legacy material; verify it against
+current code before relying on it.
+
+## Local development
+
+Copy `.env.example` to `.env`, replace the development placeholders with unique
+local values, and keep `.env` untracked. The same environment file is the source
+for deployment-specific ports, worker count, timezone, tenant database prefix,
+and runtime limits; the application no longer falls back to embedded values
+for those settings. Start the stack with:
+
+```sh
 docker compose up --build
 ```
-* **Why use this:** This skips checking migrations and seeding entirely. Your **Docker Desktop view remains completely clean** with no "grey" inactive tool containers cluttering your interface.
 
-#### 3. Tearing Down the Environment
-To completely wipe out your active runtime stack, free up local system memory, and remove ephemeral network interfaces:
+Compose runs `backend/scripts/bootstrap.py` in the one-shot `db-init` service
+before starting the API. It creates the configured control-plane and default
+tenant databases when missing and applies the control-plane migration history.
+Development also upgrades active cloud tenants. Production initializes a newly
+created default tenant but deliberately does not migrate existing tenants at
+every restart. It verifies active production tenant revisions and ORM schema
+parity, and blocks startup if a tenant was not explicitly migrated. Use the
+canary/fleet process below. This prevents a routine container restart from
+silently rolling schema changes across the hospital fleet. PostgreSQL and
+Redis are exposed only on the local host in this Compose file.
 
-```bash
-docker compose down
+Both Compose configurations require `REDIS_PASSWORD`. Compose passes only that variable to the Redis container; Redis fails at startup if it is absent, and its health check authenticates with it.
+
+Backend modules, tests, Alembic environments, and ASGI launch targets now use the `backend.*` package namespace; the runtime no longer needs custom `PYTHONPATH` entries.
+
+To run the onboarding UI separately during development, start its Vite server
+from `onboarding-ui/` with `npm run dev`. Vite proxies `/api` requests to the
+`VITE_API_PROXY_TARGET` configured in `.env`. The built UI uses same-origin
+`/api` requests.
+
+Tenant URLs are generated centrally by `Settings.tenant_url()` using
+`BASE_DOMAIN` and `ENVIRONMENT`: local development uses
+`http://<slug>.<BASE_DOMAIN>:<API_PORT>`, while production uses
+`https://<slug>.<BASE_DOMAIN>` through the production reverse proxy. These
+deployment-specific values are required in the environment file rather than
+silently defaulted in Python. Set `TENANT_URL_TEMPLATE` only when a deployment
+needs a custom URL, using `{slug}` and `{BASE_DOMAIN}` placeholders. Set
+`CORS_ORIGINS` once for both API and control-plane CORS, and `APP_TIMEZONE`
+once for API/worker/Postgres timezone configuration. The API root redirects to
+Swagger (`/docs`); this repository does not currently include a separate
+tenant-facing hospital web UI.
+
+The onboarding console sends the configured Master Setup Key with API requests. If the server also sets `CONTROL_PLANE_MASTER_KEY`, enter that value in the separate **Control Plane Secret** field; it is sent as `X-Control-Plane-Secret`. Both values are retained in the browser's local storage, so use the console only in a trusted browser profile and clear the saved keys when finished.
+
+Run tests locally with:
+
+```sh
+python -m pytest -q
 ```
-*(Add the `-v` flag if you want to explicitly wipe out the Postgres data volume and start with a completely pristine database instance: `docker compose down -v`)*.
+
+The Docker `testing` build target includes the test suite and `pytest.ini`:
+
+```sh
+docker compose --profile test run --build --rm test-runner
+```
+
+## Migrations
+
+Compose runs schema initialization and migration as a one-shot `db-init` service before starting the API. A failure leaves that service exited and blocks API startup. The onboarding portal starts after the API is healthy. Standalone Docker runs do not run bootstrap automatically; start the database and run `python backend/scripts/bootstrap.py` before starting the API.
+
+The local Compose stack explicitly enables `DEVELOPMENT_AUTO_CREATE_SCHEMA`. If Alembic revision files are absent, bootstrap creates tables from the complete tenant/control-plane ORM metadata only when the database has no application tables. If a volume already contains a schema matching the current models, it is reused without resetting data. Existing schema drift is reported and left untouched. This fallback is limited to `development`, `dev`, and `testing`; production Compose does not enable it and still requires checked-in migrations. `docker compose down` preserves volumes and data; deleting a local database volume is destructive and should be done only for disposable development data.
+
+Tenant databases use the Alembic environment under `backend/alembic/`. The
+control-plane database has its own Alembic configuration and revision history
+under `backend/control_plane/`. Schema changes must include a reviewed Alembic
+revision. Development bootstrap upgrades active tenants; production startup
+does not migrate existing tenants. Use the default-tenant canary followed by
+an explicitly approved fleet rollout:
+
+Tenant provisioning persists the selected pricing model, billing cycle, module entitlements, quotas, blueprint, and initial seed options. The fleet list and tenant command drawer read those saved settings back from the control-plane and tenant databases.
+
+```powershell
+# From the repository root, with local Compose PostgreSQL running and its
+# published port reflected in POSTGRES_PORT for this command:
+$env:POSTGRES_HOST = "127.0.0.1"
+python -m backend.scripts.migrate --default-only -m "describe_change"
+```
+
+The command generates and applies a tenant revision against the local default
+tenant. Review and commit the generated file before building a release. Never
+generate revisions on production. For production, build the reviewed image,
+run the default canary and fleet migration as one-off tasks, then start the
+stack; see the [production rollout guide](docs/PRODUCTION_DEPLOYMENT.md).
+
+Create control-plane schema revisions with:
+
+```sh
+python -m alembic -c backend/control_plane/alembic.ini revision --autogenerate -m "describe_control_plane_change"
+```
+
+Generate tenant revisions through the canary flow above. Review every
+generated migration before deployment. Production `db-init` upgrades the
+control-plane schema and initializes a newly created default tenant only;
+existing tenant migrations remain an explicit release step. Bootstrap detects
+incompatible unversioned control-plane schemas rather than stamping them
+automatically.
+
+For an existing unversioned control-plane database, bootstrap adopts it only when its schema already matches the current models or differs only by missing tables; it adds missing tables, validates the complete schema, and then records the baseline. It refuses to stamp databases with incompatible columns or constraints, and it rejects drift in versioned databases unless a reviewed migration repairs it. Do not replace an established Alembic revision chain with a new baseline for databases that may already have recorded older revision IDs; plan and test a bridge or controlled re-baseline first.
+
+The current tenant and control-plane baselines are `6f591125aedc` and `95769c3ab4b3`, respectively. These are fresh-install schemas; existing databases stamped with earlier revision IDs need a tested migration bridge before deployment. Control-plane migrations are tested on SQLite for fresh installation, safe adoption of a compatible unversioned schema, repeated startup, and explicit rejection of schema drift. PostgreSQL offline SQL generation succeeds; a live PostgreSQL upgrade was not run in this environment.
+
+## Production deployment
+
+Copy `.env.production.example` to a protected `.env.production` on the
+deployment host, replace every placeholder, and supply secrets through an
+approved secret manager. Never use the example values as production
+credentials. Production Compose requires its deployment-specific DNS/TLS
+settings and does not enable development schema creation. Validate without
+printing resolved values:
+
+```sh
+docker compose -f docker-compose.prod.yml --env-file .env.production config --quiet
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+```
+
+Production bootstrap does not roll migrations across existing tenant databases.
+Use staging, a reviewed migration, an explicit canary tenant, a verified
+backup, and an approved fleet rollout before deploying application code that
+requires the new schema. The Compose file is a deployment template, not
+evidence of regulatory compliance or production readiness. Validate security
+controls, backups and restores, migration compatibility, capacity, and
+applicable healthcare regulations in the target environment.
+
+For end-to-end VM deployment commands, AWS/Azure/GCP options, cost trade-offs, backup guidance, and clean project-copy commands, see [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md).

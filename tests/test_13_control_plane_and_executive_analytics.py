@@ -1,14 +1,19 @@
 from fastapi.testclient import TestClient
-from config import settings
-from database import get_control_db
-from onboarding_portal import onboarding_app
+from backend.core.config import settings
+from backend.core.database import get_control_db
+from backend.control_plane.app import app as control_plane_app
+from backend.control_plane.models import TenantRegistry
+from backend.control_plane.services.pricing import (
+    monthly_fee_from_annual_paise,
+    normalize_contract_arr_paise,
+)
 
 
 def _get_onboarding_client(client: TestClient) -> TestClient:
-    """Wires onboarding_app to use the same test Control Plane DB override as the main test suite."""
+    """Wires the control-plane app to the main test suite's control DB override."""
     if get_control_db in client.app.dependency_overrides:
-        onboarding_app.dependency_overrides[get_control_db] = client.app.dependency_overrides[get_control_db]
-    return TestClient(onboarding_app)
+        control_plane_app.dependency_overrides[get_control_db] = client.app.dependency_overrides[get_control_db]
+    return TestClient(control_plane_app)
 
 
 def test_01_control_plane_list_tenants_and_operational_telemetry(client):
@@ -99,6 +104,9 @@ def test_03_executive_command_center_bed_occupancy_alos_readmissions_and_arpob(
     assert "alos_hours_by_admission_type" in data["encounters_and_ipd_alos"]
     assert "readmission_rate_pct" in data["encounters_and_ipd_alos"]
     assert "arpob_paise" in data["unit_economics"]
+    assert data["window"]["timezone"] == "UTC"
+    assert "not standard ARPOB" in data["data_notes"][-1]
+    assert res.headers["cache-control"] == "private, no-store"
 
 
 def test_04_financial_revenue_cycle_ar_aging_mou_savings_and_tpa_pipeline(
@@ -115,6 +123,63 @@ def test_04_financial_revenue_cycle_ar_aging_mou_savings_and_tpa_pipeline(
     assert "top_revenue_generating_services" in data
     assert "claim_settlement_ratio_pct" in data["insurance_and_tpa_pipeline"]
     assert "deposits_and_refunds_ledger" in data
+
+
+def test_fleet_arr_matches_contract_cycles_and_excludes_one_time_fees(client, multi_tenant_env):
+    session_factory = multi_tenant_env["control_session_factory"]
+    with session_factory() as db:
+        tenants = {
+            tenant.subdomain_slug: tenant
+            for tenant in db.query(TenantRegistry).all()
+        }
+        tenants["default"].billing_cycle_string = "ANNUAL_LICENSE"
+        tenants["default"].base_license_fee_paise = 100_000
+        tenants["default"].enabled_modules_json = '{"ipd_adt": true}'
+        tenants["apollo"].billing_cycle_string = "MONTHLY_SUBSCRIPTION"
+        tenants["apollo"].base_license_fee_paise = 10_050
+        tenants["apollo"].enabled_modules_json = "{}"
+        tenants["sunrise"].billing_cycle_string = "ONE_TIME_PERPETUAL"
+        tenants["sunrise"].base_license_fee_paise = 300_000
+        tenants["sunrise"].enabled_modules_json = '{"ipd_adt": true}'
+        tenants["onprem"].billing_cycle_string = "PER_ACTIVE_BED_MONTHLY"
+        tenants["onprem"].base_license_fee_paise = 300_000
+        tenants["onprem"].enabled_modules_json = '{"ipd_adt": true}'
+        tenants["suspended"].base_license_fee_paise = 900_000
+        tenants["suspended"].is_active = False
+        db.commit()
+
+    cp_client = _get_onboarding_client(client)
+    headers = {"X-Master-Setup-Key": settings.MASTER_ONBOARDING_KEY}
+    overview = cp_client.get("/api/fleet/overview", headers=headers)
+    analytics = cp_client.get("/api/fleet/analytics", headers=headers)
+    assert overview.status_code == analytics.status_code == 200
+
+    overview_data = overview.json()
+    analytics_data = analytics.json()
+    expected_arr = 100_000 + (10_050 * 12) + (300_000 * 12)
+    assert overview_data["vendor_annual_license_arr_paise"] == expected_arr
+    assert analytics_data["annual_recurring_revenue_paise"] == expected_arr
+    assert sum(analytics_data["arr_by_pricing_model_paise"].values()) == expected_arr
+    assert analytics_data["one_time_license_value_paise"] == 300_000
+    assert sum(
+        tenant["normalized_arr_paise"]
+        for tenant in analytics_data["hospital_leaderboard"]
+        if tenant["is_active"]
+    ) == expected_arr
+    assert analytics_data["hospital_leaderboard"][
+        next(
+            index
+            for index, tenant in enumerate(analytics_data["hospital_leaderboard"])
+            if tenant["subdomain_slug"] == "suspended"
+        )
+    ]["normalized_arr_paise"] == 0
+    assert analytics_data["module_adoption_counts"]["ipd_adt"] == 3
+
+
+def test_pricing_uses_consistent_half_up_monthly_rounding_and_arr_cycles():
+    assert monthly_fee_from_annual_paise(60_600) == 5_100
+    assert normalize_contract_arr_paise(10_050, "MONTHLY_SUBSCRIPTION") == 120_600
+    assert normalize_contract_arr_paise(300_000, "ONE_TIME_PERPETUAL") == 0
 
 
 def test_05_patient_demographics_abha_adoption_and_news2_early_warning_radar(
@@ -149,6 +214,9 @@ def test_05_patient_demographics_abha_adoption_and_news2_early_warning_radar(
     assert demo_res.status_code == 200
     assert demo_res.json()["mpi_population_summary"]["abha_linked_patients_count"] >= 1
     assert demo_res.json()["mpi_population_summary"]["age_cohort_pyramid"]["60_plus_senior_citizen"] >= 1
+    assert demo_res.json()["window"]["timezone"] == "UTC"
+    assert sum(demo_res.json()["mpi_population_summary"]["age_cohort_pyramid"].values()) + demo_res.json()["mpi_population_summary"]["future_birth_dates_excluded_from_age_cohorts"] == demo_res.json()["mpi_population_summary"]["total_active_patients"]
+    assert demo_res.headers["cache-control"] == "private, no-store"
 
     ew_res = client.get("/v1/api/analytics/clinical-vitals-and-early-warning", headers=doctor_headers)
     assert ew_res.status_code == 200
@@ -157,6 +225,11 @@ def test_05_patient_demographics_abha_adoption_and_news2_early_warning_radar(
     assert triggers["hypertensive_crisis_sys_ge_180_count"] >= 1
     assert triggers["high_pyrexia_temp_ge_102f_count"] >= 1
     assert ew_res.json()["bmi_nutritional_distribution"]["obese_ge_30"] >= 1
+    fluid_radar = ew_res.json()["inpatient_fluid_balance_radar"]
+    assert "fluid_overload_ge_2000ml_encounters" not in fluid_radar
+    assert "net_intake_ge_2000ml_encounters_count" in fluid_radar
+    assert "not a validated NEWS2 score" in ew_res.json()["data_notes"][0]
+    assert ew_res.headers["cache-control"] == "private, no-store"
 
 
 def test_06_clinical_quality_pharmacy_fefo_doctor_productivity_and_inventory_radar(

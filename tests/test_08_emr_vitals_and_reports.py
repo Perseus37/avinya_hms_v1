@@ -1,3 +1,6 @@
+from datetime import datetime, timezone
+
+
 def _create_active_opd_encounter(client, doctor_headers):
     p = client.post(
         "/v1/api/patients",
@@ -182,6 +185,35 @@ def test_07_generate_printable_invoice_and_switch_to_thermal_80mm_template(clien
     assert a4_res.status_code == 200
     assert "TAX INVOICE &amp; PAYMENT RECEIPT" in a4_res.text
     assert "₹500.00" in a4_res.text
+    standard_pdf = client.get(f"/v1/api/billing/invoices/{inv['id']}/pdf", headers=billing_headers)
+    assert standard_pdf.status_code == 200
+    assert standard_pdf.headers["content-type"] == "application/pdf"
+    assert standard_pdf.content.startswith(b"%PDF-")
+
+    profile_res = client.put(
+        "/v1/api/admin/policies",
+        headers=superuser_headers,
+        json={
+            "invoice_document_profile": {
+                "legal_entity_name": "Avinya US Health LLC",
+                "address_lines": ["100 Main Street", "San Francisco, CA"],
+                "currency_code": "USD",
+                "currency_locale": "en_US",
+                "minor_unit_digits": 2,
+                "tax_registrations": [
+                    {"jurisdiction": "US-CA", "label": "Tax ID", "registration_number": "TAX-123"}
+                ],
+                "tax_note": "Configured for local tax review.",
+                "payment_terms": "Due on receipt.",
+            }
+        },
+    )
+    assert profile_res.status_code == 200
+    customized_html = client.get(f"/v1/api/billing/invoices/{inv['id']}/print", headers=billing_headers)
+    assert "Avinya US Health LLC" in customized_html.text
+    assert "TAX-123" in customized_html.text
+    assert "USD" in customized_html.text
+    assert "$500.00" in customized_html.text
 
     # 2. Switch on-the-fly to 80mm Thermal POS Receipt
     thermal_res = client.get(
@@ -191,6 +223,12 @@ def test_07_generate_printable_invoice_and_switch_to_thermal_80mm_template(clien
     assert thermal_res.status_code == 200
     assert "THERMAL POS RECEIPT" in thermal_res.text
     assert "width: 300px" in thermal_res.text
+    thermal_pdf = client.get(
+        f"/v1/api/billing/invoices/{inv['id']}/pdf?template_code=SYS_INV_THERMAL_80MM",
+        headers=billing_headers,
+    )
+    assert thermal_pdf.status_code == 200
+    assert thermal_pdf.content.startswith(b"%PDF-")
 
 
 def test_08_generate_printable_erx_with_doctor_nmc_and_allergy_banner(client, doctor_headers, pharmacist_headers):
@@ -327,6 +365,160 @@ def test_12_system_template_is_read_only_until_forked_and_customized(client, sup
     assert "Custom OPD BMI Box" in print_res.text
 
 
+def test_hospital_can_select_designed_or_preprinted_report_variant(
+    client, superuser_headers, doctor_headers
+):
+    source = client.get(
+        "/v1/api/reports/templates?report_type=OPD_APPOINTMENT_SLIP",
+        headers=superuser_headers,
+    ).json()
+    designed_template = next(
+        item for item in source if item["code"] == "SYS_OPD_CASE_SHEET_A4"
+    )
+    assert designed_template["print_mode"] == "DESIGNED"
+
+    fork = client.post(
+        "/v1/api/reports/templates/fork/SYS_OPD_CASE_SHEET_A4",
+        headers=superuser_headers,
+        json={
+            "new_code": "CUSTOM_OPD_PREPRINTED",
+            "new_name": "Preprinted OPD stationery",
+            "print_mode": "PREPRINTED_DATA_ONLY",
+            "set_as_default": True,
+        },
+    )
+    assert fork.status_code == 201, fork.text
+    data_template_id = fork.json()["id"]
+    updated = client.put(
+        f"/v1/api/reports/templates/{data_template_id}",
+        headers=superuser_headers,
+        json={
+            "html_template": (
+                "<main>{{ patient.full_name }}|{{ patient.mrn }}|"
+                "{{ appointment.appointment_time }}</main>"
+            ),
+            "css_styles": "main { position: absolute; top: 20mm; left: 30mm; }",
+            "page_size": "A5_PORTRAIT",
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["print_mode"] == "PREPRINTED_DATA_ONLY"
+
+    configured = client.put(
+        "/v1/api/admin/policies",
+        headers=superuser_headers,
+        json={
+            "report_print_modes": {
+                "OPD_APPOINTMENT_SLIP": "PREPRINTED_DATA_ONLY"
+            }
+        },
+    )
+    assert configured.status_code == 200, configured.text
+    assert configured.json()["report_print_modes"]["OPD_APPOINTMENT_SLIP"] == (
+        "PREPRINTED_DATA_ONLY"
+    )
+    assert client.put(
+        "/v1/api/admin/policies",
+        headers=superuser_headers,
+        json={
+            "report_print_modes": {
+                "DIAGNOSTIC_REPORT": "PREPRINTED_DATA_ONLY"
+            }
+        },
+    ).status_code == 409
+
+    patient, _ = _create_active_opd_encounter(client, doctor_headers)
+    appointment = client.post(
+        "/v1/api/opd/appointments",
+        headers=doctor_headers,
+        json={
+            "patient_id": patient["id"],
+            "doctor_id": 2,
+            "department_id": 1,
+            "appointment_time": "2026-10-22T10:00:00Z",
+        },
+    ).json()
+
+    default_print = client.get(
+        f"/v1/api/opd/appointments/{appointment['id']}/print",
+        headers=doctor_headers,
+    )
+    assert default_print.status_code == 200, default_print.text
+    assert "Preprinted OPD stationery" not in default_print.text
+    assert "position: absolute; top: 20mm" in default_print.text
+    assert "@page { size: A5 portrait" in default_print.text
+    assert patient["full_name"] in default_print.text
+    assert "CUSTOM LETTERHEAD" not in default_print.text
+    assert "Printed:" not in default_print.text
+
+    designed_override = client.get(
+        f"/v1/api/opd/appointments/{appointment['id']}/print?print_mode=DESIGNED",
+        headers=doctor_headers,
+    )
+    assert designed_override.status_code == 200
+    assert "OPD CONSULTATION CASE SHEET" in designed_override.text
+
+    mismatch = client.get(
+        f"/v1/api/opd/appointments/{appointment['id']}/print"
+        "?template_code=SYS_OPD_CASE_SHEET_A4&print_mode=PREPRINTED_DATA_ONLY",
+        headers=doctor_headers,
+    )
+    assert mismatch.status_code == 422
+
+
+def test_appointment_status_transitions_are_audited_and_browsable(
+    client, doctor_headers
+):
+    today = datetime.now(timezone.utc).date()
+    patient, _ = _create_active_opd_encounter(client, doctor_headers)
+    appointment = client.post(
+        "/v1/api/opd/appointments",
+        headers=doctor_headers,
+        json={
+            "patient_id": patient["id"],
+            "doctor_id": 2,
+            "department_id": 1,
+            "appointment_time": datetime.combine(
+                today, datetime.min.time(), tzinfo=timezone.utc
+            ).isoformat(),
+        },
+    )
+    assert appointment.status_code == 201, appointment.text
+    appointment_id = appointment.json()["id"]
+
+    updated = client.patch(
+        f"/v1/api/opd/appointments/{appointment_id}/status",
+        headers=doctor_headers,
+        json={"status": "ARRIVED", "reason": "Patient checked in"},
+    )
+    assert updated.status_code == 200, updated.text
+
+    history = client.get(
+        f"/v1/api/opd/appointments/{appointment_id}/status-history",
+        headers=doctor_headers,
+    )
+    assert history.status_code == 200, history.text
+    entries = history.json()
+    assert [entry["to_status"] for entry in entries] == ["SCHEDULED", "ARRIVED"]
+    assert entries[0]["from_status"] is None
+    assert entries[1]["from_status"] == "SCHEDULED"
+    assert entries[1]["reason"] == "Patient checked in"
+    assert entries[1]["changed_by_id"] is not None
+    performance = client.get(
+        "/v1/api/analytics/appointment-performance",
+        headers=doctor_headers,
+        params={"start_date": today.isoformat(), "end_date": today.isoformat()},
+    )
+    assert performance.status_code == 200, performance.text
+    summary = performance.json()
+    transitions = {
+        item["status"]: item["count"]
+        for item in summary["recorded_status_transition_counts"]
+    }
+    assert transitions["ARRIVED"] == 1
+    assert summary["appointments_with_observed_status_transitions"] == 1
+
+
 def test_13_create_template_from_scratch_and_switch_default(client, superuser_headers):
     """Scenario 13: Admin creates a brand-new template from scratch and promotes it via PATCH /set-default."""
     create_res = client.post(
@@ -365,6 +557,127 @@ def test_14_live_template_preview_renders_sample_context(client, superuser_heade
     assert prev_res.status_code == 200
     assert "Preview Header: HQ-HYD-01" in prev_res.text
     assert "Sample BMI: 22.22 kg/m²" in prev_res.text
+    data_only_preview = client.post(
+        "/v1/api/reports/templates/preview",
+        headers=superuser_headers,
+        json={
+            "report_type": "OPD_APPOINTMENT_SLIP",
+            "print_mode": "PREPRINTED_DATA_ONLY",
+            "page_size": "A5_PORTRAIT",
+            "header_html": "<h2>Must not print on preprinted paper</h2>",
+            "html_template": "<p>{{ patient.full_name }}</p>",
+        },
+    )
+    assert data_only_preview.status_code == 200, data_only_preview.text
+    assert "Must not print on preprinted paper" not in data_only_preview.text
+    assert "@page { size: A5 portrait; margin: 0; }" in data_only_preview.text
+
+
+def test_custom_paper_profile_persists_renders_forks_and_can_be_cleared(
+    client, superuser_headers
+):
+    created = client.post(
+        "/v1/api/reports/templates",
+        headers=superuser_headers,
+        json={
+            "report_type": "INVOICE",
+            "code": "CUSTOM_INVOICE_STOCK",
+            "name": "Custom invoice stock",
+            "paper_width_mm": 210,
+            "paper_height_mm": 280,
+            "page_margin_top_mm": 4,
+            "page_margin_right_mm": 5,
+            "page_margin_bottom_mm": 6,
+            "page_margin_left_mm": 7,
+            "content_offset_x_mm": 1.5,
+            "content_offset_y_mm": -2,
+            "layout_schema": {},
+            "html_template": "<main>Invoice</main>",
+        },
+    )
+    assert created.status_code == 201, created.text
+    template = created.json()
+    assert template["paper_width_mm"] == 210
+    assert template["page_margin_left_mm"] == 7
+
+    forked = client.post(
+        "/v1/api/reports/templates/fork/CUSTOM_INVOICE_STOCK",
+        headers=superuser_headers,
+        json={"new_code": "CUSTOM_INVOICE_STOCK_FORK", "new_name": "Forked invoice"},
+    )
+    assert forked.status_code == 201, forked.text
+    assert forked.json()["paper_height_mm"] == 280
+    assert forked.json()["content_offset_y_mm"] == -2
+
+    preview = client.post(
+        "/v1/api/reports/templates/preview",
+        headers=superuser_headers,
+        json={
+            "report_type": "INVOICE",
+            "paper_width_mm": 210,
+            "paper_height_mm": 280,
+            "page_margin_top_mm": 4,
+            "page_margin_right_mm": 5,
+            "page_margin_bottom_mm": 6,
+            "page_margin_left_mm": 7,
+            "content_offset_x_mm": 1.5,
+            "content_offset_y_mm": -2,
+            "html_template": "<main>Preview</main>",
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    assert "@page { size: 210mm 280mm; margin: 4mm 5mm 6mm 7mm; }" in preview.text
+    assert "left: 1.5mm; top: -2mm;" in preview.text
+
+    cleared = client.put(
+        f"/v1/api/reports/templates/{template['id']}",
+        headers=superuser_headers,
+        json={
+            "paper_width_mm": None,
+            "paper_height_mm": None,
+            "page_margin_top_mm": None,
+            "page_margin_right_mm": None,
+            "page_margin_bottom_mm": None,
+            "page_margin_left_mm": None,
+            "content_offset_x_mm": None,
+            "content_offset_y_mm": None,
+        },
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["paper_width_mm"] is None
+    assert cleared.json()["content_offset_y_mm"] is None
+
+
+def test_custom_paper_profile_rejects_incomplete_or_unprintable_dimensions(
+    client, superuser_headers
+):
+    incomplete = client.post(
+        "/v1/api/reports/templates",
+        headers=superuser_headers,
+        json={
+            "report_type": "INVOICE",
+            "code": "INVALID_PAPER_PROFILE",
+            "name": "Invalid paper profile",
+            "paper_width_mm": 210,
+            "layout_schema": {},
+            "html_template": "<main>Invoice</main>",
+        },
+    )
+    assert incomplete.status_code == 422
+
+    unprintable = client.post(
+        "/v1/api/reports/templates/preview",
+        headers=superuser_headers,
+        json={
+            "report_type": "INVOICE",
+            "paper_width_mm": 100,
+            "paper_height_mm": 100,
+            "page_margin_top_mm": 50,
+            "page_margin_bottom_mm": 50,
+            "html_template": "<main>Preview</main>",
+        },
+    )
+    assert unprintable.status_code == 422
 
 
 def test_15_sandboxed_jinja2_blocks_ssti_code_execution_attempts(client, superuser_headers):

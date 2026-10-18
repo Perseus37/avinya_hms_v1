@@ -1,8 +1,8 @@
 import json
 import pytest
 from starlette.websockets import WebSocketDisconnect
-import services.event_bus as event_bus
-from services.event_bus import publish_tenant_event
+import backend.core.event_bus as event_bus
+from backend.core.event_bus import publish_tenant_event
 
 
 def test_01_websocket_waiting_room_public_connection_and_heartbeat(client):
@@ -18,6 +18,92 @@ def test_02_websocket_authenticated_streams_reject_unauthorized_tokens(client):
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect("/v1/ws/panic_labs?token=invalid_token&tenant_slug=default") as ws:
             ws.receive_text()
+
+
+def test_websocket_authorizes_requested_stream_and_rejects_wildcard_for_staff(
+    client, multi_tenant_env, monkeypatch
+):
+    from backend.domains.realtime import router as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "ControlSessionLocal", multi_tenant_env["control_session_factory"]
+    )
+    monkeypatch.setattr(
+        realtime_router.tenant_engine_pool,
+        "get_engine",
+        lambda db_name: multi_tenant_env["tenant_engines"][db_name],
+    )
+    doctor_login = client.post(
+        "/v1/api/auth/login",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={"email": "doctor@default.com", "password": "StaffPass123!"},
+    )
+    assert doctor_login.status_code == 200
+    doctor_token = doctor_login.json()["access_token"]
+
+    with client.websocket_connect(
+        f"/v1/ws/panic_labs?token={doctor_token}&tenant_slug=default"
+    ) as ws:
+        ws.send_text("ping")
+        assert json.loads(ws.receive_text())["type"] == "pong"
+
+    billing_login = client.post(
+        "/v1/api/auth/login",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={"email": "billing@default.com", "password": "StaffPass123!"},
+    )
+    assert billing_login.status_code == 200
+    billing_token = billing_login.json()["access_token"]
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(
+            f"/v1/ws/panic_labs?token={billing_token}&tenant_slug=default"
+        ):
+            pass
+
+    for stream in ("all", "unknown_stream"):
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect(
+                f"/v1/ws/{stream}?token={doctor_token}&tenant_slug=default"
+            ):
+                pass
+
+
+def test_websocket_rejects_missing_users_even_with_valid_jwt(
+    client, multi_tenant_env, monkeypatch
+):
+    import jwt
+    from datetime import datetime, timedelta, timezone
+    from backend.core.config import settings
+    from backend.control_plane.models import TenantRegistry
+    from backend.security.envelope import decrypt_tenant_secret
+    from backend.domains.realtime import router as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "ControlSessionLocal", multi_tenant_env["control_session_factory"]
+    )
+    monkeypatch.setattr(
+        realtime_router.tenant_engine_pool,
+        "get_engine",
+        lambda db_name: multi_tenant_env["tenant_engines"][db_name],
+    )
+
+    with multi_tenant_env["control_session_factory"]() as control_db:
+        tenant = control_db.query(TenantRegistry).filter_by(subdomain_slug="default").one()
+        signing_key = decrypt_tenant_secret(tenant.jwt_secret_key)
+    token = jwt.encode(
+        {
+            "sub": "9999999",
+            "tenant_slug": "default",
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+        },
+        signing_key,
+        algorithm=settings.ALGORITHM,
+    )
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(
+            f"/v1/ws/panic_labs?token={token}&tenant_slug=default"
+        ):
+            pass
 
 
 def test_03_event_bus_publishes_tenant_namespaced_messages(monkeypatch, fake_redis):

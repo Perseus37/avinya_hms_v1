@@ -1,4 +1,7 @@
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
+
+from pypdf import PdfReader
 
 
 def _setup_patient_and_encounter(client, doctor_headers, encounter_type="IPD"):
@@ -141,7 +144,19 @@ def test_03_block_preauth_with_non_billable_icd10_diagnosis(client, superuser_he
 
 def test_04_cashless_preauth_lifecycle_submit_query_and_approve(client, superuser_headers, doctor_headers, billing_headers):
     """Scenario 4: Walk a pre-auth through SUBMITTED -> QUERY_RAISED -> APPROVED with approved_amount_paise."""
-    prov = client.post("/v1/api/insurance/providers", headers=superuser_headers, json={"code": "TPA_FHPL", "name": "FHPL TPA", "provider_type": "TPA"}).json()
+    prov_res = client.post(
+        "/v1/api/insurance/providers",
+        headers=superuser_headers,
+        json={
+            "code": "TPA_FHPL",
+            "name": "FHPL TPA",
+            "provider_type": "TPA",
+            "document_requirements": ["Employer referral letter", "Signed treatment estimate"],
+        },
+    )
+    assert prov_res.status_code == 201
+    prov = prov_res.json()
+    assert prov["document_requirements"] == ["Employer referral letter", "Signed treatment estimate"]
     p, enc = _setup_patient_and_encounter(client, doctor_headers)
     now = datetime.now(timezone.utc)
     pol = client.post(
@@ -165,6 +180,14 @@ def test_04_cashless_preauth_lifecycle_submit_query_and_approve(client, superuse
         json={"encounter_id": enc["id"], "policy_id": pol["id"], "primary_diagnosis_id": 1, "requested_amount_paise": 5000000, "clinical_justification": "Acute pneumonia requiring IV antibiotics"},
     ).json()
     assert pa["status"] == "SUBMITTED"
+    preauth_pdf = client.get(
+        f"/v1/api/insurance/preauths/{pa['id']}/documents.pdf",
+        headers=billing_headers,
+    )
+    assert preauth_pdf.status_code == 200
+    assert preauth_pdf.content.startswith(b"%PDF-")
+    preauth_text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(preauth_pdf.content)).pages)
+    assert "Employer referral letter" in preauth_text
 
     q_res = client.patch(
         f"/v1/api/insurance/preauths/{pa['id']}/status",
@@ -227,6 +250,14 @@ def test_05_create_claim_settle_via_insurance_and_collect_patient_copay(client, 
     clm = clm_res.json()
     assert clm["insurer_payable_paise"] == 800000
     assert clm["patient_copay_paise"] == 200000
+    claim_pdf = client.get(
+        f"/v1/api/insurance/claims/{clm['id']}/documents.pdf",
+        headers=billing_headers,
+    )
+    assert claim_pdf.status_code == 200
+    assert claim_pdf.content.startswith(b"%PDF-")
+    claim_text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(claim_pdf.content)).pages)
+    assert "INSURANCE CLAIM SUPPORTING SUMMARY" in claim_text
 
     settle_res = client.patch(
         f"/v1/api/insurance/claims/{clm['id']}/settle",

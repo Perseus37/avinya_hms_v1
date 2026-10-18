@@ -1,6 +1,6 @@
 services:
   docker-proxy:
-    image:   tecnativa/docker-socket-proxy
+    image: tecnativa/docker-socket-proxy
     restart: unless-stopped
     environment:
       - CONTAINERS=1
@@ -16,20 +16,20 @@ services:
       - "--providers.docker=true"
       - "--providers.docker.endpoint=tcp://docker-proxy:2375"
       - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.address=:${TRAEFIK_HTTP_PORT:?TRAEFIK_HTTP_PORT is required}"
       - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
       - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
-      - "--entrypoints.websecure.address=:443"
-      - "--certificatesresolvers.le-ssl.acme.email=${ACME_EMAIL:-admin@avinyahms.com}"
+      - "--entrypoints.websecure.address=:${TRAEFIK_HTTPS_PORT:?TRAEFIK_HTTPS_PORT is required}"
+      - "--certificatesresolvers.le-ssl.acme.email=${ACME_EMAIL:?ACME_EMAIL is required}"
       - "--certificatesresolvers.le-ssl.acme.storage=/letsencrypt/acme.json"
       - "--certificatesresolvers.le-ssl.acme.dnschallenge=true"
-      - "--certificatesresolvers.le-ssl.acme.dnschallenge.provider=cloudflare"
-      - "--certificatesresolvers.le-ssl.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53"
+      - "--certificatesresolvers.le-ssl.acme.dnschallenge.provider=${ACME_DNS_PROVIDER:?ACME_DNS_PROVIDER is required}"
+      - "--certificatesresolvers.le-ssl.acme.dnschallenge.resolvers=${ACME_DNS_RESOLVERS:?ACME_DNS_RESOLVERS is required}"
     environment:
-      - CF_DNS_API_TOKEN=${CF_DNS_API_TOKEN}
+      - CF_DNS_API_TOKEN=${CF_DNS_API_TOKEN:?CF_DNS_API_TOKEN is required}
     ports:
-      - "80:80"
-      - "443:443"
+      - "${PUBLIC_HTTP_PORT:?PUBLIC_HTTP_PORT is required}:${TRAEFIK_HTTP_PORT:?TRAEFIK_HTTP_PORT is required}"
+      - "${PUBLIC_HTTPS_PORT:?PUBLIC_HTTPS_PORT is required}:${TRAEFIK_HTTPS_PORT:?TRAEFIK_HTTPS_PORT is required}"
     volumes:
       - traefik_certificates:/letsencrypt
     networks:
@@ -41,27 +41,53 @@ services:
     restart: unless-stopped
     env_file: .env.production
     environment:
-      TZ: "Asia/Kolkata"
-      PGTZ: "Asia/Kolkata"
-    command: ["postgres", "-c", "timezone=Asia/Kolkata"]
+      TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+      PGTZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+    command:
+      - postgres
+      - -c
+      - timezone=${APP_TIMEZONE:?APP_TIMEZONE is required}
+      - -p
+      - "${POSTGRES_PORT:?POSTGRES_PORT is required}"
     volumes:
       - hms_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test: ["CMD-SHELL", "pg_isready -p $$POSTGRES_PORT -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 3s
       timeout: 3s
       retries: 5
     networks:
       - internal-net
 
+  db-init:
+    image: avinya-hms-api:latest
+    restart: "no"
+    env_file: .env.production
+    environment:
+      TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+      PGTZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+    command: ["python", "backend/scripts/bootstrap.py"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal-net
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "volatile-lru", "--requirepass", "${REDIS_PASSWORD}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      REDIS_PORT: ${REDIS_PORT:?REDIS_PORT is required}
+      REDIS_MAX_MEMORY: ${REDIS_MAX_MEMORY:?REDIS_MAX_MEMORY is required}
+    command:
+      - sh
+      - -c
+      - exec redis-server --port "$${REDIS_PORT:?REDIS_PORT is required}" --appendonly yes --maxmemory "$${REDIS_MAX_MEMORY:?REDIS_MAX_MEMORY is required}" --maxmemory-policy volatile-lru --requirepass "$${REDIS_PASSWORD:?REDIS_PASSWORD is required}"
     volumes:
       - hms_redisdata:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "$$REDIS_PASSWORD", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli -p $$REDIS_PORT ping"]
       interval: 3s
       timeout: 3s
       retries: 5
@@ -77,20 +103,36 @@ services:
     restart: unless-stopped
     env_file: .env.production
     environment:
-      TZ: "Asia/Kolkata"
-      PGTZ: "Asia/Kolkata"
+      TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+      PGTZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+    command:
+      - gunicorn
+      - backend.main:app
+      - --workers
+      - "${GUNICORN_WORKERS:?GUNICORN_WORKERS is required}"
+      - --worker-class
+      - uvicorn.workers.UvicornWorker
+      - --bind
+      - 0.0.0.0:${API_PORT:?API_PORT is required}
+      - --access-logfile
+      - "-"
+      - --error-logfile
+      - "-"
     volumes:
       - hms_backups:/app/backups
+      - ${ATTACHMENTS_HOST_PATH:?ATTACHMENTS_HOST_PATH is required}:/app/attachments
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.hms-api.rule=Host(`${BASE_DOMAIN}`) || HostRegexp(`{subdomain:[a-z0-9-]+}.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.hms-api.rule=Host(`${BASE_DOMAIN:?BASE_DOMAIN is required}`) || HostRegexp(`{subdomain:[a-z0-9-]+}.${BASE_DOMAIN:?BASE_DOMAIN is required}`)"
       - "traefik.http.routers.hms-api.entrypoints=websecure"
       - "traefik.http.routers.hms-api.tls=true"
       - "traefik.http.routers.hms-api.tls.certresolver=le-ssl"
-      - "traefik.http.routers.hms-api.tls.domains[0].main=${BASE_DOMAIN}"
-      - "traefik.http.routers.hms-api.tls.domains[0].sans=*.${BASE_DOMAIN}"
-      - "traefik.http.services.hms-api.loadbalancer.server.port=8000"
+      - "traefik.http.routers.hms-api.tls.domains[0].main=${BASE_DOMAIN:?BASE_DOMAIN is required}"
+      - "traefik.http.routers.hms-api.tls.domains[0].sans=*.${BASE_DOMAIN:?BASE_DOMAIN is required}"
+      - "traefik.http.services.hms-api.loadbalancer.server.port=${API_PORT:?API_PORT is required}"
     depends_on:
+      db-init:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
       redis:
@@ -103,35 +145,27 @@ services:
     image: avinya-hms-api:latest
     restart: unless-stopped
     env_file: .env.production
-    command: ["uvicorn", "onboarding_portal:onboarding_app", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+      PGTZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+    command: ["uvicorn", "backend.control_plane.app:app", "--host", "0.0.0.0", "--port", "${CONTROL_PLANE_PORT:?CONTROL_PLANE_PORT is required}"]
     volumes:
       - hms_backups:/app/backups
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.onboard.rule=Host(`onboard.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.onboard.rule=Host(`onboard.${BASE_DOMAIN:?BASE_DOMAIN is required}`)"
       - "traefik.http.routers.onboard.entrypoints=websecure"
       - "traefik.http.routers.onboard.tls=true"
       - "traefik.http.routers.onboard.tls.certresolver=le-ssl"
-      - "traefik.http.services.onboard.loadbalancer.server.port=8080"
+      - "traefik.http.services.onboard.loadbalancer.server.port=${CONTROL_PLANE_PORT:?CONTROL_PLANE_PORT is required}"
     depends_on:
       db:
+        condition: service_healthy
+      api:
         condition: service_healthy
     networks:
       - internal-net
       - public-net
-
-  backup-sidecar:
-    image: avinya-hms-api:latest
-    restart: unless-stopped
-    env_file: .env.production
-    command: ["python", "backend/scripts/backup_service.py", "--daemon"]
-    volumes:
-      - hms_backups:/app/backups
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - internal-net
 
 networks:
   public-net:

@@ -8,9 +8,9 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from config import settings
-from control_models import DeploymentModeEnum, TenantRegistry
-from security.envelope import decrypt_tenant_secret
+from backend.core.config import settings
+from backend.control_plane.models import DeploymentModeEnum, TenantRegistry
+from backend.security.envelope import decrypt_tenant_secret
 
 MAX_CACHED_TENANT_ENGINES = 64
 
@@ -93,6 +93,13 @@ class TenantEngineRegistry:
             )
             self._engines[db_name] = tenant_engine
             return tenant_engine
+
+    def dispose_all(self) -> None:
+        with self._lock:
+            engines = tuple(self._engines.values())
+            self._engines.clear()
+            for engine in engines:
+                engine.dispose()
 
 
 tenant_engine_pool = TenantEngineRegistry()

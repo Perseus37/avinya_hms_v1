@@ -2,8 +2,8 @@ from cryptography.fernet import Fernet, InvalidToken
 import pytest
 from sqlalchemy.orm import sessionmaker
 
-from backup_service import derive_fernet_key
-from models import FederationTransferLog
+from backend.scripts.backup_service import derive_fernet_key
+from backend.domains.federation.models import FederationTransferLog
 
 
 def test_01_register_and_revoke_federation_partner_key(client, superuser_headers):

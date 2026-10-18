@@ -2,7 +2,11 @@ from datetime import datetime, timezone
 from dateutil.relativedelta import relativedelta
 from sqlalchemy.orm import sessionmaker
 
-from models import ExpenseRecord, ExpenseStatusEnum, RecurringExpenseTemplate
+from backend.domains.finance.models import (
+    ExpenseRecord,
+    ExpenseStatusEnum,
+    RecurringExpenseTemplate,
+)
 
 
 def test_01_accounts_payable_maker_checker_workflow(client, superuser_headers):
