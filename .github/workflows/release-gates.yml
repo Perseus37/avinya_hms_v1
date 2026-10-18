@@ -35,7 +35,7 @@ jobs:
           --health-retries 10
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -76,7 +76,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -107,7 +107,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Validate development Compose configuration
         run: |
@@ -125,7 +125,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build production image
         run: docker build --target production --tag avinya-hms-api:ci .
