@@ -1,6 +1,6 @@
 import calendar
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import and_, case, extract, func, or_, select
@@ -340,15 +340,44 @@ def _daily_aggregate(
     }
 
 
+def _analytics_bucket_bounds(
+    day: date,
+    granularity: Literal["day", "week", "month", "quarter", "half_year", "year"],
+) -> tuple[date, date]:
+    if granularity == "day":
+        return day, day
+    if granularity == "week":
+        start = day - timedelta(days=day.weekday())
+        return start, start + timedelta(days=6)
+    if granularity == "month":
+        start = day.replace(day=1)
+        return start, date(day.year, day.month, calendar.monthrange(day.year, day.month)[1])
+    if granularity == "quarter":
+        start_month = ((day.month - 1) // 3) * 3 + 1
+        end_month = start_month + 2
+        return (
+            date(day.year, start_month, 1),
+            date(day.year, end_month, calendar.monthrange(day.year, end_month)[1]),
+        )
+    if granularity == "half_year":
+        if day.month <= 6:
+            return date(day.year, 1, 1), date(day.year, 6, 30)
+        return date(day.year, 7, 1), date(day.year, 12, 31)
+    return date(day.year, 1, 1), date(day.year, 12, 31)
+
+
 @router.get("/trends", response_model=AnalyticsTrendResponse)
 def get_analytics_trends(
     response: Response,
     start_date: Optional[date] = Query(default=None),
     end_date: Optional[date] = Query(default=None),
+    granularity: Literal["day", "week", "month", "quarter", "half_year", "year"] = Query(
+        default="day"
+    ),
     db: Session = Depends(get_db),
     _: User = Depends(RequirePermission("billing:read")),
 ) -> AnalyticsTrendResponse:
-    """Return UTC daily billing, collection, encounter and appointment series."""
+    """Return time-bucketed UTC billing, collection, encounter and appointment series."""
     start_day, end_day, start_at, end_at = _resolve_analytics_window(
         start_date, end_date
     )
@@ -407,25 +436,55 @@ def get_analytics_trends(
         end_at,
     )
 
+    buckets = []
+    bucket_start_by_day = {}
+    cursor = start_day
+    while cursor <= end_day:
+        natural_start, natural_end = _analytics_bucket_bounds(cursor, granularity)
+        bucket_start = max(start_day, natural_start)
+        bucket_end = min(end_day, natural_end)
+        buckets.append(
+            {
+                "date": bucket_start,
+                "bucket_end": bucket_end,
+                "net_billed_paise": 0,
+                "payments_received_paise": 0,
+                "encounters_started": 0,
+                "appointments_scheduled": 0,
+            }
+        )
+        for offset in range((bucket_end - bucket_start).days + 1):
+            bucket_start_by_day[bucket_start + timedelta(days=offset)] = len(buckets) - 1
+        cursor = bucket_end + timedelta(days=1)
+
+    daily_values = (
+        (billed_by_day, "net_billed_paise"),
+        (payments_by_day, "payments_received_paise"),
+        (encounters_by_day, "encounters_started"),
+        (appointments_by_day, "appointments_scheduled"),
+    )
+    for values_by_day, metric in daily_values:
+        for day, value in values_by_day.items():
+            bucket_index = bucket_start_by_day.get(day)
+            if bucket_index is not None:
+                buckets[bucket_index][metric] += value
+
     series = []
-    for offset in range((end_day - start_day).days + 1):
-        day = start_day + timedelta(days=offset)
+    for bucket in buckets:
         series.append(
             DailyAnalyticsPoint(
-                date=day,
-                net_billed_paise=billed_by_day.get(day, 0),
-                payments_received_paise=payments_by_day.get(day, 0),
-                encounters_started=encounters_by_day.get(day, 0),
-                appointments_scheduled=appointments_by_day.get(day, 0),
+                **bucket,
             )
         )
     return AnalyticsTrendResponse(
         window=_window_metadata(start_day, end_day),
+        granularity=granularity,
         definitions={
-            "net_billed_paise": "Net finalized invoices created on the UTC date; excludes draft and void invoices.",
-            "payments_received_paise": "Payment receipts recorded on the UTC date, excluding receipts attached to void invoices.",
-            "encounters_started": "Patient encounters with start_time on the UTC date, across all encounter statuses.",
-            "appointments_scheduled": "Appointments with appointment_time on the UTC date, across all statuses.",
+            "net_billed_paise": "Net finalized invoices created in each UTC calendar bucket; excludes draft and void invoices.",
+            "payments_received_paise": "Payment receipts recorded in each UTC calendar bucket, excluding receipts attached to void invoices.",
+            "encounters_started": "Patient encounters with start_time in each UTC calendar bucket, across all encounter statuses.",
+            "appointments_scheduled": "Appointments with appointment_time in each UTC calendar bucket, across all statuses.",
+            "bucket_boundaries": "date and bucket_end are inclusive UTC calendar dates; first and last buckets are clipped to the requested date window.",
         },
         series=series,
     )

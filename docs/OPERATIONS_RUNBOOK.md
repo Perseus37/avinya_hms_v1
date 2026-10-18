@@ -262,9 +262,13 @@ dashboard views:
   returns period net billings, recorded payments, new patients, encounters and
   scheduled appointments, each compared with the immediately preceding period
   of equal length, plus current outstanding receivables. Requires `billing:read`.
-- `GET /v1/api/analytics/trends?...` returns one UTC daily point for every date
-  in the requested window: finalized net billings, recorded collections,
-  encounters started and appointments scheduled. Requires `billing:read`.
+- `GET /v1/api/analytics/trends?...` returns finalized net billings, recorded
+  collections, encounters started and appointments scheduled. Use inclusive
+  `start_date` / `end_date` values for a custom window of up to 366 days and
+  optional `granularity=day|week|month|quarter|half_year|year`. The default is
+  `day`; weeks are Monday-Sunday, and all calendar buckets use UTC. First and
+  last buckets are clipped to the requested window; each point's `date` and
+  `bucket_end` mark its inclusive bounds. Requires `billing:read`.
 - `GET /v1/api/analytics/operational-throughput?...` returns encounters by
   type, appointments by current status and diagnostic tasks by current status.
   Requires `adt:read`.

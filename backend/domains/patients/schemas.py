@@ -18,6 +18,11 @@ class PatientCreate(BaseModel):
     email: Optional[EmailStr] = None
     blood_group: Optional[BloodGroupEnum] = None
     address: Optional[str] = None
+    pincode: Optional[str] = Field(default=None, pattern=r"^[0-9]{6}$")
+    city: Optional[str] = Field(default=None, max_length=100)
+    district: Optional[str] = Field(default=None, max_length=100)
+    state: Optional[str] = Field(default=None, max_length=100)
+    village: Optional[str] = Field(default=None, max_length=100)
     emergency_contact_name: Optional[str] = None
     emergency_contact_phone: Optional[str] = None
     allow_network_sharing: bool = True
@@ -31,6 +36,11 @@ class PatientUpdate(BaseModel):
     email: Optional[EmailStr] = None
     blood_group: Optional[BloodGroupEnum] = None
     address: Optional[str] = None
+    pincode: Optional[str] = Field(default=None, pattern=r"^[0-9]{6}$")
+    city: Optional[str] = Field(default=None, max_length=100)
+    district: Optional[str] = Field(default=None, max_length=100)
+    state: Optional[str] = Field(default=None, max_length=100)
+    village: Optional[str] = Field(default=None, max_length=100)
     emergency_contact_name: Optional[str] = None
     emergency_contact_phone: Optional[str] = None
     is_active: Optional[bool] = None
@@ -47,11 +57,29 @@ class PatientResponse(BaseModel):
     email: Optional[str] = None
     blood_group: Optional[BloodGroupEnum] = None
     address: Optional[str] = None
+    pincode: Optional[str] = None
+    city: Optional[str] = None
+    district: Optional[str] = None
+    state: Optional[str] = None
+    village: Optional[str] = None
     emergency_contact_name: Optional[str] = None
     emergency_contact_phone: Optional[str] = None
     is_active: bool
     allow_network_sharing: bool = True
     model_config = ConfigDict(from_attributes=True)
+
+
+class PatientPincodeSuggestion(BaseModel):
+    village: str
+    district: Optional[str] = None
+    state: Optional[str] = None
+    pincode: str
+
+
+class PatientPincodeSuggestionsResponse(BaseModel):
+    pincode: str
+    suggestions: List[PatientPincodeSuggestion]
+
 
 class PatientAllergyCreate(BaseModel):
     patient_id: Optional[int] = None

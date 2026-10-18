@@ -1,6 +1,7 @@
 import secrets
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session, joinedload
 # FED-002: Purge soft-deleted patient from the Central Discovery Index
 from sqlalchemy import select
@@ -17,9 +18,67 @@ from backend.domains.patients.models import (
 )
 from backend.domains.federation.router import sync_patient_pointer
 from backend.schemas.common import PaginatedResponse
-from backend.domains.patients.schemas import PatientAllergyCreate, PatientAllergyResponse, PatientCreate, PatientResponse, PatientUpdate
+from backend.domains.patients.schemas import (
+    PatientAllergyCreate,
+    PatientAllergyResponse,
+    PatientCreate,
+    PatientPincodeSuggestionsResponse,
+    PatientResponse,
+    PatientUpdate,
+)
 
 router = APIRouter(prefix="/api/patients", tags=["Master Patient Index (MPI)"])
+
+
+@router.get("/pincode-suggestions", response_model=PatientPincodeSuggestionsResponse)
+def suggest_patient_location_by_pincode(
+    pincode: str = Query(..., min_length=6, max_length=6, pattern=r"^[0-9]{6}$"),
+    _: User = Depends(RequirePermission("patients:write")),
+):
+    """Returns postal office and locality suggestions for a six-digit PIN code."""
+    try:
+        response = httpx.get(
+            f"https://api.postalpincode.in/pincode/{pincode}",
+            timeout=5.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The postal-code lookup provider returned an unsuccessful response.",
+        ) from exc
+    except (httpx.RequestError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The postal-code lookup provider could not be reached or returned invalid data.",
+        ) from exc
+
+    if (
+        not isinstance(result, list)
+        or not result
+        or not isinstance(result[0], dict)
+        or not isinstance(result[0].get("PostOffice"), (list, type(None)))
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The postal-code lookup provider returned an invalid response.",
+        )
+
+    post_offices = result[0].get("PostOffice") or []
+    suggestions = [
+        {
+            "village": office["Name"].strip(),
+            "district": office.get("District") if isinstance(office.get("District"), str) else None,
+            "state": office.get("State") if isinstance(office.get("State"), str) else None,
+            "pincode": office.get("Pincode") or pincode,
+        }
+        for office in post_offices
+        if isinstance(office, dict)
+        and isinstance(office.get("Name"), str)
+        and office["Name"].strip()
+    ]
+    return {"pincode": pincode, "suggestions": suggestions}
 
 
 @router.post("", response_model=PatientResponse, status_code=status.HTTP_201_CREATED)

@@ -46,6 +46,19 @@ Control-plane persistence models live in `backend/control_plane/models.py`. HTTP
 
 The React console uses `useControlPlaneApi` for authenticated JSON and multipart requests and `useFleetData` for fleet/catalog synchronization. The active migration screen is `onboarding-ui/src/views/MigrationStudio.jsx`; its duplicate root-level screen and unused Axios client have been removed. Vite proxies development `/api` calls to the backend.
 
+Patient registration and updates are exposed by the tenant API in
+`backend/domains/patients/`; this repository does not include a tenant-facing
+patient registration UI. Patient `address` remains optional, and the structured
+`pincode`, `city`, `district`, `state`, and `village` fields are also optional
+for backward compatibility. Authenticated clients with `patients:write` can
+request locality suggestions from
+`GET /v1/api/patients/pincode-suggestions?pincode=560001`. The endpoint validates
+six-digit Indian PIN codes and returns postal-office/locality names with their
+district and state; clients can use those names to suggest village values and
+leave city entry editable. The lookup forwards only the PIN code to the
+external provider. If the lookup is unavailable, it responds with HTTP 502 so
+clients can allow manual entry.
+
 ## Structural risks and current fixes
 
 | Area | Finding | Status |
