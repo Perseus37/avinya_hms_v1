@@ -55,7 +55,8 @@ services:
       test: ["CMD-SHELL", "pg_isready -p $$POSTGRES_PORT -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 3s
       timeout: 3s
-      retries: 5
+      retries: 10
+      start_period: 10s
     networks:
       - internal-net
 
@@ -151,6 +152,12 @@ services:
     command: ["uvicorn", "backend.control_plane.app:app", "--host", "0.0.0.0", "--port", "${CONTROL_PLANE_PORT:?CONTROL_PLANE_PORT is required}"]
     volumes:
       - hms_backups:/app/backups
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f \"http://localhost:$$CONTROL_PLANE_PORT/\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.onboard.rule=Host(`onboard.${BASE_DOMAIN:?BASE_DOMAIN is required}`)"

@@ -68,6 +68,6 @@ USER avinya
 EXPOSE 8000
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -f "http://localhost:${API_PORT:?API_PORT is required}/health" || exit 1
+    CMD curl -f "http://localhost:${API_PORT:?API_PORT is required}/health/ready" || exit 1
 
 CMD ["sh", "-c", "exec gunicorn backend.main:app --workers ${GUNICORN_WORKERS:?GUNICORN_WORKERS is required} --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${API_PORT:?API_PORT is required} --access-logfile - --error-logfile -"]

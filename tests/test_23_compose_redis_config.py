@@ -85,8 +85,21 @@ def test_environment_templates_define_all_required_settings():
 def test_backup_timing_and_storage_paths_are_environment_configured():
     local = yaml.safe_load((REPOSITORY_ROOT / "docker-compose.yml").read_text())
     backup_command = local["services"]["backup-sidecar"]["command"]
+    dockerfile = (REPOSITORY_ROOT / "Dockerfile").read_text()
     assert any("BACKUP_INTERVAL_SECONDS" in part for part in backup_command)
     assert any("BACKUP_OUTPUT_DIR" in part for part in backup_command)
+    assert "/health/ready" in dockerfile
+    assert local["services"]["backup-sidecar"]["depends_on"] == {
+        "db": {"condition": "service_healthy"},
+        "db-init": {"condition": "service_completed_successfully"},
+    }
+    assert local["services"]["db"]["healthcheck"]["start_period"] == "10s"
+    assert local["services"]["onboarding-portal"]["healthcheck"]["test"] == [
+        "CMD-SHELL",
+        'curl -f "http://localhost:$$CONTROL_PLANE_PORT/" || exit 1',
+    ]
+    for service_name in ("backup-sidecar", "backup-vault"):
+        assert local["services"][service_name]["healthcheck"] == {"disable": True}
     assert (
         "VAULT_POLL_INTERVAL_SECONDS"
         in local["services"]["backup-vault"]["environment"]
@@ -107,3 +120,7 @@ def test_production_backup_and_attachment_paths_are_host_mounts():
     assert "BACKUP_HOST_PATH=/mnt/avinya-data/backups" in production_env
     assert "ATTACHMENTS_HOST_PATH=/mnt/avinya-data/attachments" in production_env
     assert "hms_backups" in production["volumes"]
+    assert production["services"]["onboarding-portal"]["healthcheck"]["test"] == [
+        "CMD-SHELL",
+        'curl -f "http://localhost:$$CONTROL_PLANE_PORT/" || exit 1',
+    ]

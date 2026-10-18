@@ -274,5 +274,18 @@ restore, or privacy controls from CI.
   passed **2 tests** in 44.76 seconds, covering both migration/schema parity
   and encrypted custom-format dump/restore. The exact named container was
   removed by the test command's cleanup.
+- Investigated the observed local `docker compose up -d --build` failure using
+  the actual container logs. `backup-sidecar` queried `hms_control_plane`
+  before `db-init` had created it, then encountered a transient PostgreSQL
+  recovery rejection; it later successfully created a backup. The shared
+  image healthcheck also probed API port 8000 in the onboarding portal and
+  non-HTTP backup containers, leaving those services marked unhealthy.
+  Current changes gate the backup sidecar on successful bootstrap, add
+  bounded exponential retry for SQLAlchemy connection failures, configure
+  service-appropriate healthchecks, and extend PostgreSQL startup health
+  allowance. Focused tests: **18 passed**; development and production Compose
+  config validation and a production Docker image build passed. The currently
+  running containers still use the prior configuration; rebuild/recreate them
+  after the fix is merged.
 - The outdated repository and branch details elsewhere in this log describe
   historical checkpoints, not current branch state.

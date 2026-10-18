@@ -78,6 +78,13 @@ tenant database and Redis; Redis may be reported degraded while the DB check
 still passes, so read the JSON response. The app logs include request IDs;
 capture that ID when investigating an HTTP error.
 
+The API container's healthcheck calls `/health/ready`; the onboarding portal
+checks its own listener on `CONTROL_PLANE_PORT`. The backup sidecar and vault
+do not serve HTTP, so they intentionally have no inherited API healthcheck.
+Check their logs and backup freshness instead. On first startup, the backup
+sidecar waits for `db-init` to finish; transient PostgreSQL connection errors
+are logged and retried with backoff.
+
 Check database/storage pressure and host monitoring using the VM/provider
 tools. Compose does not provide a complete alerting, log-retention, uptime, or
 off-host monitoring system. The browser API inspector is session-local and

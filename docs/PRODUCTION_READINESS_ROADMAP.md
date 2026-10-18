@@ -126,6 +126,18 @@ not mark an item complete based only on implementation code existing.
   PostgreSQL 17 container: **2 passed** in 44.76 seconds (migration/schema
   parity and encrypted dump/GPG/restore sample-row round-trip). The test
   container and generated databases were removed afterward.
+- Diagnosed the local `docker compose up -d --build` startup log from
+  `backup-sidecar`: it raced `db-init` (control-plane database not created yet)
+  and also encountered PostgreSQL recovery. The running sidecar later completed
+  a backup. Its image-level HTTP healthcheck was also probing port 8000 in
+  services with no API listener, marking the sidecars and onboarding portal
+  unhealthy. The current fix gates the backup sidecar on successful `db-init`,
+  retries transient SQLAlchemy `OperationalError`s, gives onboarding its own
+  port healthcheck, disables HTTP checks for non-HTTP sidecars, and makes API
+  health report database readiness. Focused tests (18 passed), Compose syntax
+  validation, and a production image build passed locally. These changes are
+  not yet in the running Compose containers; rebuild/recreate after merging
+  their PR.
 - Before any live-data decision, an operator must run the encrypted host backup
   script with the real protected passphrase file and independent remote
   destination, verify remote checksums, restore into a new isolated PostgreSQL
