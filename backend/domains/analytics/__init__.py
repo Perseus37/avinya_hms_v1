@@ -1,0 +1,1 @@
+"""Hospital analytics API domain."""

@@ -3,14 +3,21 @@ import logging
 import os
 from pathlib import Path
 import subprocess
+import sys
 from cryptography.fernet import Fernet
 from sqlalchemy.engine import make_url
 
-from security.envelope import decrypt_tenant_secret
-from backup_service import derive_fernet_key
-from config import settings
-from control_models import DeploymentModeEnum, TenantRegistry
-from database import ControlSessionLocal, ensure_postgres_db_exists
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+_REPO_DIR = _BACKEND_DIR.parent
+for _path in (_REPO_DIR,):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
+from backend.security.envelope import decrypt_tenant_secret
+from backend.scripts.backup_service import derive_fernet_key
+from backend.core.config import settings
+from backend.control_plane.models import DeploymentModeEnum, TenantRegistry
+from backend.core.database import ControlSessionLocal, ensure_postgres_db_exists
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("avinya.restore")
@@ -51,10 +58,8 @@ def restore_encrypted_backup(
         ]
         res = subprocess.run(cmd, env=env, capture_output=True, text=True)
         if res.returncode != 0:
-            stderr_text = res.stderr or ""
-            if "FATAL:" in stderr_text:
-                raise RuntimeError(f"pg_restore failed with fatal error:\n{stderr_text}")
-            logger.warning("pg_restore completed with non-fatal warnings:\n%s", stderr_text.strip())
+            logger.error("pg_restore failed with exit code %s: %s", res.returncode, (res.stderr or "").strip())
+            raise RuntimeError(f"pg_restore failed with exit code {res.returncode}.")
 
         logger.info("Successfully restored encrypted backup into database '%s'.", target_db_name)
 

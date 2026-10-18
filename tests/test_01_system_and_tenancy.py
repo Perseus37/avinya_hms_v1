@@ -1,5 +1,5 @@
 from sqlalchemy.orm import sessionmaker
-from models import Floor
+from backend.domains.facility.models import Floor
 
 
 def test_01_liveness_probe(client):

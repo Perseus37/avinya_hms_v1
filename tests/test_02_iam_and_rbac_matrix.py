@@ -1,5 +1,5 @@
-from jose import jwt
-from config import settings
+import jwt
+from backend.core.config import settings
 
 
 def test_01_login_mints_tenant_scoped_jwt(client, multi_tenant_env):
@@ -105,13 +105,13 @@ def test_05_read_only_auditor_allowed_on_gets_blocked_on_writes(client, auditor_
     ).status_code == 403
 
 
-def test_06_permissions_matrix_categorizes_27_permissions(client, superuser_headers):
-    """Scenario 6: GET /api/auth/permissions/matrix returns all 9 modules grouped by read/write/destructive."""
+def test_06_permissions_matrix_categorizes_30_permissions(client, superuser_headers):
+    """Scenario 6: GET /api/auth/permissions/matrix returns all 10 modules grouped by read/write/destructive."""
     matrix_res = client.get("/v1/api/auth/permissions/matrix", headers=superuser_headers)
     assert matrix_res.status_code == 200
     modules = matrix_res.json()["modules"]
     assert set(modules.keys()) == {
-        "ADT", "Billing", "ClinicalMDM", "Diagnostics", "IAM", "OPD", "Patients", "Pharmacy", "WardManagement"
+        "ADT", "Billing", "ClinicalMDM", "Diagnostics", "IAM", "OPD", "Patients", "Pharmacy", "WardManagement","Procurement",
     }
     assert any(p["code"] == "billing:reverse" for p in modules["Billing"]["destructive"])
 
@@ -192,6 +192,57 @@ def test_09_privilege_escalation_guard_unheld_permission_grant(client, superuser
         json=[billing_rev_id],
     )
     assert esc_perm.status_code == 403
+
+
+def test_non_superuser_cannot_assign_role_with_unheld_permissions(
+    client, superuser_headers
+):
+    hr_headers, _, _ = _create_hr_subadmin_headers(client, superuser_headers)
+    elevated_role = client.post(
+        "/v1/api/auth/roles",
+        headers=superuser_headers,
+        json={
+            "name": "Sensitive Billing Role",
+            "description": "Role with billing privileges",
+        },
+    )
+    assert elevated_role.status_code == 201
+    all_permissions = client.get(
+        "/v1/api/auth/permissions", headers=superuser_headers
+    ).json()
+    elevated_permission_ids = [
+        permission["id"]
+        for permission in all_permissions
+        if permission["code"] in {"iam:write", "billing:reverse"}
+    ]
+    assert client.post(
+        f"/v1/api/auth/roles/{elevated_role.json()['id']}/permissions",
+        headers=superuser_headers,
+        json=elevated_permission_ids,
+    ).status_code == 200
+
+    create_attempt = client.post(
+        "/v1/api/auth/users/doctor",
+        headers=hr_headers,
+        json={
+            "login_id": "ESCALATE001",
+            "email": "escalate@default.com",
+            "password": "StaffPass123!",
+            "full_name": "Privilege Escalation Attempt",
+            "gender": "OTHER",
+            "role_ids": [elevated_role.json()["id"]],
+        },
+    )
+    assert create_attempt.status_code == 403
+
+    users = client.get("/v1/api/auth/users", headers=superuser_headers).json()["items"]
+    target_user = next(user for user in users if not user["is_superuser"])
+    assignment_attempt = client.post(
+        f"/v1/api/auth/users/{target_user['id']}/departments",
+        headers=hr_headers,
+        params={"department_id": 1, "role_id": elevated_role.json()["id"]},
+    )
+    assert assignment_attempt.status_code == 403
 
 
 def test_10_system_role_modification_and_deletion_protection(client, superuser_headers):

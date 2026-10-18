@@ -1,19 +1,19 @@
 import io
 import json
 from fastapi.testclient import TestClient
-from config import settings
-from database import get_control_db
-from onboarding_portal import onboarding_app
+from backend.core.config import settings
+from backend.core.database import get_control_db
+from backend.control_plane.app import app as control_plane_app
 
 
 def _get_cp_client(client: TestClient) -> TestClient:
     if get_control_db in client.app.dependency_overrides:
-        onboarding_app.dependency_overrides[get_control_db] = client.app.dependency_overrides[get_control_db]
-    return TestClient(onboarding_app)
+        control_plane_app.dependency_overrides[get_control_db] = client.app.dependency_overrides[get_control_db]
+    return TestClient(control_plane_app)
 
 
 def test_01_control_plane_blueprints_pricing_catalog_and_fleet_overview(client):
-    """Scenario 1: Verify /api/blueprints, /api/pricing/catalog (11 modules + 4 bundles), and /api/fleet/overview."""
+    """Scenario 1: Verify /api/blueprints, /api/pricing/catalog (12 modules + 4 bundles), and /api/fleet/overview."""
     cp = _get_cp_client(client)
     bp_res = cp.get("/api/blueprints")
     assert bp_res.status_code == 200
@@ -23,7 +23,7 @@ def test_01_control_plane_blueprints_pricing_catalog_and_fleet_overview(client):
 
     prc_res = cp.get("/api/pricing/catalog")
     assert prc_res.status_code == 200
-    assert len(prc_res.json()["modules"]) == 11
+    assert len(prc_res.json()["modules"]) == 12
     bundle_codes = {b["code"] for b in prc_res.json()["bundles"]}
     assert "BUNDLE_SURGICAL_SUITE" in bundle_codes
     assert "BUNDLE_TOTAL_HOSPITAL" in bundle_codes
@@ -57,7 +57,7 @@ def test_02_control_plane_modular_entitlements_and_schema_status(client):
     )
     assert ent_res.status_code == 200
     assert ent_res.json()["pricing_model"] == "BUNDLE_SURGICAL_SUITE"
-    assert ent_res.json()["base_license_fee_paise"] == 14500000
+    assert ent_res.json()["base_license_fee_paise"] == 17500000
 
     sch_res = cp.get("/api/fleet/schema-status", headers={"X-Master-Setup-Key": settings.MASTER_ONBOARDING_KEY})
     assert sch_res.status_code == 200
@@ -161,8 +161,8 @@ def test_05_tenant_admin_bulk_import_service_catalog_and_medications(client, sup
     assert svc_res.json()["success_count"] == 2
 
     meds_csv = (
-        "code,brand_name,generic_name,form,strength\n"
-        "BLK_ATOR_20,Lipitor-20,Atorvastatin,TABLET,20mg\n"
+        "code,brand_name,generic_name,form,strength,low_stock_threshold_units,fefo_expiry_warning_days\n"
+        "BLK_ATOR_20,Lipitor-20,Atorvastatin,TABLET,20mg,8,60\n"
         "BLK_MET_500,Glycomet-500,Metformin,TABLET,500mg\n"
     ).encode("utf-8")
 
@@ -173,6 +173,15 @@ def test_05_tenant_admin_bulk_import_service_catalog_and_medications(client, sup
     )
     assert med_res.status_code == 200
     assert med_res.json()["success_count"] == 2
+    medications = client.get(
+        "/v1/api/pharmacy/medications", headers=superuser_headers
+    )
+    assert medications.status_code == 200
+    atorvastatin = next(
+        item for item in medications.json()["items"] if item["code"] == "BLK_ATOR_20"
+    )
+    assert atorvastatin["low_stock_threshold_units"] == 8
+    assert atorvastatin["fefo_expiry_warning_days"] == 60
 
 
 def test_06_control_plane_tenant_inspector_federation_topology_and_audit_ledger(client, doctor_headers):
@@ -192,6 +201,17 @@ def test_06_control_plane_tenant_inspector_federation_topology_and_audit_ledger(
     aud_res = cp.get("/api/fleet/audit-logs", headers={"X-Master-Setup-Key": master_key})
     assert aud_res.status_code == 200
     assert "items" in aud_res.json()
+    page_res = cp.get(
+        "/api/fleet/audit-logs?limit=1&offset=0&target=apollo",
+        headers={"X-Master-Setup-Key": master_key},
+    )
+    assert page_res.status_code == 200
+    page_data = page_res.json()
+    assert page_data["limit"] == 1
+    assert page_data["offset"] == 0
+    assert page_data["total"] >= len(page_data["items"])
+    assert len(page_data["items"]) <= 1
+    assert all("apollo" in item["target_slug"].lower() for item in page_data["items"])
 
 def test_07_federation_privacy_sovereignty_patient_opt_out_and_hospital_isolated_silo(
     client, apollo_admin_headers, sunrise_admin_headers

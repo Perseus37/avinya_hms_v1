@@ -3,35 +3,67 @@ import secrets
 
 # 1. Auto-generate ephemeral test secrets if no .env file exists (e.g. in CI/CD runners)
 os.environ.setdefault("ENVIRONMENT", "testing")
+os.environ.setdefault("DEVELOPMENT_AUTO_CREATE_SCHEMA", "false")
+os.environ.setdefault("API_PORT", "8000")
+os.environ.setdefault("API_SERVICE_HOST", "api")
+os.environ.setdefault("CONTROL_PLANE_PORT", "8080")
+os.environ.setdefault("GUNICORN_WORKERS", "4")
+os.environ.setdefault("TENANT_DATABASE_PREFIX", "hms_")
+os.environ.setdefault("APP_TIMEZONE", "Asia/Kolkata")
+os.environ.setdefault("MAX_PAGE_SIZE", "200")
+os.environ.setdefault("MIGRATION_PREVIEW_ROWS", "5")
+os.environ.setdefault("MIGRATION_PREVIEW_ERROR_LIMIT", "100")
+os.environ.setdefault("MIGRATION_MAX_UPLOAD_BYTES", str(50 * 1024 * 1024))
+os.environ.setdefault("ATTACHMENTS_STORAGE_DIR", "attachments")
+os.environ.setdefault("MAX_ATTACHMENT_UPLOAD_BYTES", str(20 * 1024 * 1024))
+os.environ.setdefault("MIGRATION_MAX_EXPRESSION_DEPTH", "20")
+os.environ.setdefault("MIGRATION_MAX_INPUTS", "50")
+os.environ.setdefault("BACKUP_INTERVAL_SECONDS", "86400")
+os.environ.setdefault("BACKUP_OUTPUT_DIR", "backups")
+os.environ.setdefault("VAULT_POLL_INTERVAL_SECONDS", "30")
+os.environ.setdefault("MAIL_PROVIDER", "smtp")
 os.environ.setdefault("PLATFORM_NAME", "Avinya HMS")
 os.environ.setdefault("BASE_DOMAIN", "localhost")
 os.environ.setdefault("DEFAULT_TENANT_SLUG", "default")
 os.environ.setdefault("DEFAULT_HOSPITAL_NAME", "Avinya Default Hospital")
 os.environ.setdefault("DEFAULT_BRANCH_CODE", "HQ-HYD-01")
+os.environ.setdefault("VERSION", "test")
 os.environ.setdefault("POSTGRES_USER", "postgres")
 os.environ.setdefault("POSTGRES_PASSWORD", secrets.token_urlsafe(16))
 os.environ.setdefault("POSTGRES_DB", "hms_default")
+os.environ.setdefault("POSTGRES_HOST", "db")
+os.environ.setdefault("POSTGRES_PORT", "5432")
+os.environ.setdefault("CONTROL_PLANE_DB_NAME", "hms_control_plane")
+os.environ.setdefault("REDIS_HOST", "redis")
+os.environ.setdefault("REDIS_PORT", "6379")
+os.environ.setdefault("REDIS_DB", "0")
+os.environ.setdefault("REDIS_PASSWORD", secrets.token_urlsafe(16))
 os.environ.setdefault("SECRET_KEY", secrets.token_hex(32))
 os.environ.setdefault("MASTER_ONBOARDING_KEY", secrets.token_urlsafe(24))
 os.environ.setdefault("BACKUP_ENCRYPTION_SALT", secrets.token_hex(16))
+os.environ.setdefault("ENVELOPE_ENCRYPTION_SALT", secrets.token_hex(16))
+os.environ.setdefault("ALGORITHM", "HS256")
+os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
+os.environ.setdefault("CORS_ORIGINS", "http://localhost:3000")
 os.environ.setdefault("SEED_ADMIN_EMAIL", "admin@default.com")
 os.environ.setdefault("SEED_ADMIN_PASSWORD", "AdminPassword123!")
+os.environ.setdefault("SMTP_PORT", "25")
+os.environ.setdefault("SMTP_FROM", "provisioning@example.invalid")
 
 from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
-from jose import jwt
-from passlib.context import CryptContext
+import jwt
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from config import settings
-from control_models import ControlBase, DeploymentModeEnum, TenantRegistry
-import database
-from database import Base, get_control_db, get_redis
-from main import app, v1_app
-from models import (
+from backend.core.config import settings
+from backend.control_plane.models import ControlBase, DeploymentModeEnum, TenantRegistry
+from backend.core import database
+from backend.core.database import Base, get_control_db, get_redis
+from backend.main import app, v1_app
+from backend.domains.identity.models import (
     Department,
     DoctorProfile,
     GenderEnum,
@@ -40,11 +72,11 @@ from models import (
     UserRole,
     UserStatusEnum,
 )
-from security.envelope import encrypt_tenant_secret
-import seed
-from seed import seed_universal_hospital_data
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+from backend.domains.identity.passwords import pwd_context
+from backend.security.envelope import encrypt_tenant_secret
+from backend.core import seed
+from backend.core.seed import seed_universal_hospital_data
+from backend.control_plane.services.catalogs import seed_control_plane
 
 # Pre-compute bcrypt hashes ONCE per test session so fixtures run in milliseconds
 _HASH_CACHE: dict[str, str] = {
@@ -121,6 +153,8 @@ def multi_tenant_env(monkeypatch, fake_redis):
     )
     ControlBase.metadata.create_all(bind=control_eng)
     TestControlSession = sessionmaker(autocommit=False, autoflush=False, bind=control_eng)
+    with TestControlSession() as control_db:
+        seed_control_plane(control_db)
 
     tenant_engines = {}
     for db_name in ("hms_default", "hms_apollo", "hms_sunrise"):

@@ -1,17 +1,9 @@
 import logging
-from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
-from models import ReportTemplate
-from services.standard_templates import STANDARD_TEMPLATES
-from models import (
-    AllergyCategoryEnum,
-    AllergyMaster,
-    AllergySeverityEnum,
-    ChiefComplaintMaster,
-    ComorbidityMaster,
+from backend.domains.reports.models import ReportTemplate
+from backend.domains.identity.models import (
     Department,
-    DiagnosisMaster,
     GenderEnum,
     Permission,
     Role,
@@ -19,10 +11,19 @@ from models import (
     UserRole,
     UserStatusEnum,
 )
+from backend.domains.patients.models import (
+    AllergyCategoryEnum,
+    AllergyMaster,
+    AllergySeverityEnum,
+    ChiefComplaintMaster,
+    ComorbidityMaster,
+    DiagnosisMaster,
+)
+from backend.domains.reports.templates import STANDARD_TEMPLATES
+from backend.domains.identity.passwords import pwd_context
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("avinya.seed")
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # 27 Granular Resource:Action Permissions Across All 9 Modules
 GRANULAR_PERMISSIONS = [
@@ -62,6 +63,10 @@ GRANULAR_PERMISSIONS = [
     ("iam:read", "View users, roles, departments, and permissions", "IAM"),
     ("iam:write", "Create/update users, doctors, roles, and assign permissions", "IAM"),
     ("iam:delete", "Delete custom roles and suspend user accounts", "IAM"),
+    # procurement
+    ("procurement:read", "View vendors, POs, GRNs, and vendor invoices", "Procurement"),
+    ("procurement:write", "Draft POs, register vendors, and upload invoices", "Procurement"),
+    ("procurement:approve", "Approve POs, GRNs, and financial matching", "Procurement"),
 ]
 
 STANDARD_ALLERGIES = [
@@ -127,7 +132,7 @@ def seed_universal_hospital_data(
     seed_allergies: bool = True,
     seed_complaints: bool = True,
 ) -> bool:
-    """Seeds ONLY the 27 granular permissions, standard role templates, universal dictionaries, and 1 Admin."""
+    """Seeds ONLY the 30 granular permissions, standard role templates, universal dictionaries, and 1 Admin."""
     perm_map = ensure_permissions_exist(db)
 
     if db.query(User).first():
@@ -195,9 +200,11 @@ def seed_universal_hospital_data(
     role_pharm.permissions.extend([
         perm_map["patients:read"], perm_map["pharmacy:read"],
         perm_map["pharmacy:write"], perm_map["pharmacy:void"],
+        perm_map["procurement:read"], perm_map["procurement:write"],
     ])
     role_billing.permissions.extend([
         perm_map["patients:read"], perm_map["billing:read"], perm_map["billing:write"],
+        perm_map["procurement:approve"],
     ])
     role_auditor.permissions.extend([
         perm for code, perm in perm_map.items() if code.endswith(":read")

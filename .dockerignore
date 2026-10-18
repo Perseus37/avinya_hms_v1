@@ -16,6 +16,9 @@ __pycache__/
 *.log
 tests/
 pytest.ini
+!tests/
+!tests/**
+!pytest.ini
 docs/
 frontend/
 onboarding-ui/node_modules/

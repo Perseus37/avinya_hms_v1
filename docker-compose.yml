@@ -4,29 +4,50 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      TZ: "Asia/Kolkata"
-      PGTZ: "Asia/Kolkata"
-    command: ["postgres", "-c", "timezone=Asia/Kolkata"]
+      TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+      PGTZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+    command:
+      - postgres
+      - -c
+      - timezone=${APP_TIMEZONE:?APP_TIMEZONE is required}
+      - -p
+      - "${POSTGRES_PORT:?POSTGRES_PORT is required}"
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${POSTGRES_PUBLISHED_PORT:?POSTGRES_PUBLISHED_PORT is required}:${POSTGRES_PORT:?POSTGRES_PORT is required}"
     volumes:
       - hms_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test: ["CMD-SHELL", "pg_isready -p $$POSTGRES_PORT -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 3s
       timeout: 3s
       retries: 5
 
+  db-init:
+    build: .
+    image: avinya-hms-api:latest
+    restart: "no"
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    command: python backend/scripts/bootstrap.py
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      REDIS_PORT: ${REDIS_PORT:?REDIS_PORT is required}
+    command:
+      - sh
+      - -c
+      - exec redis-server --port "$${REDIS_PORT:?REDIS_PORT is required}" --appendonly yes --requirepass "$${REDIS_PASSWORD:?REDIS_PASSWORD is required}"
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:${REDIS_PUBLISHED_PORT:?REDIS_PUBLISHED_PORT is required}:${REDIS_PORT:?REDIS_PORT is required}"
     volumes:
       - hms_redisdata:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "$$REDIS_PASSWORD", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli -p $$REDIS_PORT ping"]
       interval: 3s
       timeout: 3s
       retries: 5
@@ -40,13 +61,29 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      TZ: "Asia/Kolkata"
-      PGTZ: "Asia/Kolkata"
+      TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+      PGTZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+    command:
+      - gunicorn
+      - backend.main:app
+      - --workers
+      - "${GUNICORN_WORKERS:?GUNICORN_WORKERS is required}"
+      - --worker-class
+      - uvicorn.workers.UvicornWorker
+      - --bind
+      - 0.0.0.0:${API_PORT:?API_PORT is required}
+      - --access-logfile
+      - "-"
+      - --error-logfile
+      - "-"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${API_PUBLISHED_PORT:?API_PUBLISHED_PORT is required}:${API_PORT:?API_PORT is required}"
     volumes:
       - hms_backups:/app/backups
+      - hms_attachments:/app/attachments
     depends_on:
+      db-init:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
       redis:
@@ -56,20 +93,35 @@ services:
     image: avinya-hms-api:latest
     restart: unless-stopped
     env_file: .env
-    command: ["uvicorn", "onboarding_portal:onboarding_app", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+      PGTZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+    command: ["uvicorn", "backend.control_plane.app:app", "--host", "0.0.0.0", "--port", "${CONTROL_PLANE_PORT:?CONTROL_PLANE_PORT is required}"]
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${CONTROL_PLANE_PUBLISHED_PORT:?CONTROL_PLANE_PUBLISHED_PORT is required}:${CONTROL_PLANE_PORT:?CONTROL_PLANE_PORT is required}"
     volumes:
       - hms_backups:/app/backups
     depends_on:
       db:
+        condition: service_healthy
+      api:
         condition: service_healthy
 
   backup-sidecar:
     image: avinya-hms-api:latest
     restart: unless-stopped
     env_file: .env
-    command: ["python", "backend/scripts/backup_service.py", "--daemon"]
+    environment:
+      TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+      PGTZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+    command:
+      - python
+      - backend/scripts/backup_service.py
+      - --daemon
+      - --interval
+      - "${BACKUP_INTERVAL_SECONDS:?BACKUP_INTERVAL_SECONDS is required}"
+      - --output-dir
+      - "${BACKUP_OUTPUT_DIR:?BACKUP_OUTPUT_DIR is required}"
     volumes:
       - hms_backups:/app/backups
     depends_on:
@@ -80,7 +132,15 @@ services:
     image: avinya-hms-api:latest
     restart: unless-stopped
     env_file: .env
-    command: ["python", "backend/scripts/backup_service.py", "--daemon", "--vault-mode"]
+    environment:
+      TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+      PGTZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+      VAULT_POLL_INTERVAL_SECONDS: "${VAULT_POLL_INTERVAL_SECONDS:?VAULT_POLL_INTERVAL_SECONDS is required}"
+    command:
+      - python
+      - backend/scripts/backup_service.py
+      - --daemon
+      - --vault-mode
     volumes:
       - hms_backups:/source:ro
       - hms_vault_storage:/vault
@@ -94,7 +154,6 @@ services:
     profiles: ["test"]
     environment:
       ENVIRONMENT: "testing"
-      PYTHONPATH: "/app/backend:/app/backend/core:/app/backend/scripts"
     volumes:
       - .:/app
 
@@ -102,4 +161,5 @@ volumes:
   hms_pgdata:
   hms_redisdata:
   hms_backups:
+  hms_attachments:
   hms_vault_storage:

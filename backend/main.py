@@ -5,39 +5,40 @@ import time
 import uuid
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
-from config import settings
-from database import get_db, get_redis
-from routers.v1 import (
-    adt_router,
-    auth_router,
-    billing_router,
-    clinical_router,
-    diagnostic_router,
-    federation_router,
-    opd_router,
-    patient_router,
-    pharmacy_router,
-    ward_router,
-    reports_router,
-    insurance_router,
+from backend.core.config import settings
+from backend.core.database import get_db, get_redis
+from backend.domains.encounters import adt_router, opd_router
+from backend.domains.identity import auth_router
+from backend.domains.billing import router as billing_router
+from backend.domains.clinical import (
+    router as clinical_router,
     nursing_er_router,
-    ot_router,
-    blood_pacs_router,
-    analytics_router,
     vital_registries_router,
-    websocket_router,
-    tenant_admin_router,
-    finance_ap_router,
-    equipment_router,
 )
-from core.dependencies import RequireLicensedModule
+from backend.domains.diagnostics import router as diagnostic_router
+from backend.domains.federation import router as federation_router
+from backend.domains.patients import router as patient_router
+from backend.domains.pharmacy import router as pharmacy_router
+from backend.domains.facility import router as ward_router
+from backend.domains.reports import router as reports_router
+from backend.domains.insurance import router as insurance_router
+from backend.domains.surgery import router as ot_router
+from backend.domains.bloodbank import router as blood_pacs_router
+from backend.domains.analytics import router as analytics_router
+from backend.domains.policies import router as tenant_admin_router
+from backend.domains.finance import router as finance_ap_router
+from backend.domains.integrations import router as equipment_router
+from backend.domains.realtime import router as websocket_router
+from backend.core.dependencies import RequireLicensedModule
+from backend.domains.procurement import router as procurement_router
 
 # -----------------------------------------------------------------------------
 # M1 FIX: Context-Safe Request ID Logging Across All Libraries
@@ -87,12 +88,14 @@ def register_exception_handlers(target_app: FastAPI) -> None:
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
         req_id = request_id_ctx_var.get("UNKNOWN")
         return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={
                 "error": True,
                 "code": "ERR_VALIDATION_FAILED",
                 "message": "Payload validation failed. Check 'details' for specific field errors.",
-                "details": exc.errors(),
+                "details": jsonable_encoder(
+                    exc.errors(), custom_encoder={Exception: str}
+                ),
                 "request_id": req_id,
             },
         )
@@ -205,7 +208,7 @@ register_exception_handlers(v1_app)
 
 cors_origins = [
     origin.strip()
-    for origin in getattr(settings, "CORS_ORIGINS", "http://localhost:3000").split(",")
+    for origin in settings.CORS_ORIGINS.split(",")
     if origin.strip()
 ]
 
@@ -221,6 +224,8 @@ app.add_middleware(
         "Idempotency-Key",
         "X-Federation-API-Key",
         "X-Hospital-Subdomain",
+        "X-Master-Setup-Key",
+        "X-Control-Plane-Secret",
     ],
 )
 
@@ -275,8 +280,15 @@ for target in (v1_app, app):
     target.include_router(analytics_router.router, dependencies=[Depends(RequireLicensedModule("executive_bi"))])
     target.include_router(finance_ap_router.router, dependencies=[Depends(RequireLicensedModule("executive_bi"))])
     target.include_router(equipment_router.router, dependencies=[Depends(RequireLicensedModule("diagnostics"))])
+    target.include_router(procurement_router.router, dependencies=[Depends(RequireLicensedModule("procurement"))])
     
 app.mount("/v1", v1_app)
+
+
+@app.get("/", include_in_schema=False)
+def api_home():
+    """Give direct tenant URLs a useful local/prod landing page."""
+    return RedirectResponse(url="/docs")
 
 # -----------------------------------------------------------------------------
 # M11 FIX: Liveness & Deep Readiness Health Probes

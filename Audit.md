@@ -550,7 +550,7 @@ It maps `w_spec.department_code` against `depts.get(...)`.
 
 * **Category:** Frontend Stability & Performance
 * **Severity:** MEDIUM
-* **Location:** `onboarding-ui/src/MigrationStudio.jsx:32-65`
+* **Location:** `onboarding-ui/src/views/MigrationStudio.jsx` (CSV upload flow)
 * **Evidence:** `handleFileUpload` uploads raw CSV files via standard `FormData` without client-side file size caps or chunked transfer encoding.
 
 

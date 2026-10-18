@@ -2,7 +2,7 @@ import base64
 import hashlib
 import os
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from config import settings
+from backend.core.config import settings
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 

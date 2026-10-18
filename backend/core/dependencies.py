@@ -3,14 +3,15 @@ import json
 from datetime import datetime, timezone
 from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+import jwt
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from config import settings
-from control_models import FederatedNode
-from database import TenantContext, get_control_db, get_db, get_redis, resolve_tenant_context
-from models import Bed, Permission, Role, User, UserStatusEnum
+from backend.core.config import settings
+from backend.control_plane.models import FederatedNode
+from backend.core.database import TenantContext, get_control_db, get_db, get_redis, resolve_tenant_context
+from backend.domains.facility.models import Bed
+from backend.domains.identity.models import Permission, Role, User, UserStatusEnum
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/api/auth/login")
 
@@ -19,8 +20,11 @@ def validate_pagination(page: int = 1, page_size: int = 20) -> tuple[int, int]:
     """Enforces safe pagination boundaries across all list endpoints."""
     if page < 1:
         raise HTTPException(status_code=400, detail="Page must be greater than 0")
-    if page_size < 1 or page_size > 200:
-        raise HTTPException(status_code=400, detail="Page size must be between 1 and 200")
+    if page_size < 1 or page_size > settings.MAX_PAGE_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Page size must be between 1 and {settings.MAX_PAGE_SIZE}",
+        )
     return page, page_size
 
 
@@ -42,7 +46,7 @@ def get_current_user(
         token_tenant: str = payload.get("tenant_slug")
         if user_id is None or token_tenant != tenant.subdomain_slug:
             raise credentials_exception
-    except JWTError:
+    except jwt.InvalidTokenError:
         raise credentials_exception
 
     user = db.get(User, int(user_id))
@@ -166,7 +170,14 @@ class RateLimiter:
         client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else request.client.host if request.client else "unknown"
         fed_prefix = request.headers.get("X-Federation-API-Key", "")[:14]
         actor = fed_prefix if fed_prefix else client_ip
-        key = f"rl:{self.scope}:{actor}"
+        hostname = (request.url.hostname or "").lower().rstrip(".")
+        base_domain = settings.BASE_DOMAIN.strip(".").lower()
+        tenant_slug = settings.DEFAULT_TENANT_SLUG
+        if hostname.endswith(f".{base_domain}"):
+            candidate = hostname[: -(len(base_domain) + 1)]
+            if candidate and "." not in candidate:
+                tenant_slug = candidate
+        key = f"rl:{self.scope}:{tenant_slug}:{actor}"
 
         try:
             current = redis_client.get(key)

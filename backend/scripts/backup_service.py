@@ -19,14 +19,15 @@ from sqlalchemy import select
 
 # Ensure core modules are importable when executed as a standalone script
 _BACKEND_DIR = Path(__file__).resolve().parents[1]
-for _p in (_BACKEND_DIR, _BACKEND_DIR / "core", _BACKEND_DIR / "scripts"):
+_REPO_DIR = _BACKEND_DIR.parent
+for _p in (_REPO_DIR,):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from config import settings
-from control_models import DeploymentModeEnum, TenantRegistry
-from database import ControlSessionLocal
-from security.envelope import decrypt_tenant_secret
+from backend.core.config import settings
+from backend.control_plane.models import DeploymentModeEnum, TenantRegistry
+from backend.core.database import ControlSessionLocal
+from backend.security.envelope import decrypt_tenant_secret
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("avinya.backup")
@@ -60,7 +61,7 @@ def derive_fernet_key(secret_key: str) -> bytes:
 def _dump_and_encrypt(db_name: str, encryption_key: str, output_dir: Path) -> Path:
     """Runs pg_dump in custom format and encrypts the binary artifact with the tenant's Fernet key."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     out_file = output_dir / f"{db_name}_{ts}.dump.enc"
 
     env = os.environ.copy()
@@ -81,7 +82,12 @@ def _dump_and_encrypt(db_name: str, encryption_key: str, output_dir: Path) -> Pa
     proc = subprocess.run(cmd, env=env, capture_output=True, check=True)
     cipher = Fernet(derive_fernet_key(encryption_key))
     encrypted_bytes = cipher.encrypt(proc.stdout)
-    out_file.write_bytes(encrypted_bytes)
+    pending_file = out_file.with_name(f".{out_file.name}.tmp")
+    try:
+        pending_file.write_bytes(encrypted_bytes)
+        pending_file.replace(out_file)
+    finally:
+        pending_file.unlink(missing_ok=True)
     logger.info("Created encrypted backup snapshot: %s (%d bytes)", out_file.name, len(encrypted_bytes))
     return out_file
 
@@ -112,8 +118,18 @@ def run_backup_cycle(output_dir: Path) -> int:
 def main():
     parser = argparse.ArgumentParser(description="Avinya HMS Encrypted Backup Service")
     parser.add_argument("--daemon", action="store_true", help="Run continuously as a background sidecar")
-    parser.add_argument("--interval", type=int, default=86400, help="Backup interval in seconds (default: 24h)")
-    parser.add_argument("--output-dir", type=str, default="backups", help="Directory for .dump.enc files")
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=settings.BACKUP_INTERVAL_SECONDS,
+        help="Backup interval in seconds",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=settings.BACKUP_OUTPUT_DIR,
+        help="Directory for .dump.enc files",
+    )
     # Register the vault mode flag to prevent argparse crashes from docker-compose overrides
     parser.add_argument("--vault-mode", action="store_true", help="Enable immutable backup sealing (WORM compliance)")
     args = parser.parse_args()
@@ -146,7 +162,7 @@ def main():
                     os.chmod(hash_file, 0o400)
                     logger.info("[VAULT] Sealed immutable snapshot: %s", f.name)
             
-            for _ in range(30):
+            for _ in range(settings.VAULT_POLL_INTERVAL_SECONDS):
                 if not _running: break
                 time.sleep(1)
         return

@@ -1,4 +1,4 @@
-from control_models import GlobalPatientPointer
+from backend.control_plane.models import GlobalPatientPointer
 
 
 def test_01_register_patient_generates_mrn_and_syncs_discovery_pointer(client, multi_tenant_env, doctor_headers):

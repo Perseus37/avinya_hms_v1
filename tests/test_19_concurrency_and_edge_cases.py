@@ -2,8 +2,8 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm.exc import StaleDataError
 
-from control_models import GlobalPatientPointer
-from models import Invoice
+from backend.control_plane.models import GlobalPatientPointer
+from backend.domains.billing.models import Invoice
 
 def test_01_optimistic_concurrency_control_on_invoices(client, doctor_headers, superuser_headers, multi_tenant_env):
     """Scenario 1: OCC prevents 'lost updates' when concurrent transactions target the same invoice."""

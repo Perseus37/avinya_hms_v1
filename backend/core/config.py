@@ -1,13 +1,34 @@
 from typing import Optional
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
 
 class Settings(BaseSettings):
 
-    ENVIRONMENT: str = "development"  # Safe default for local instances
+    ENVIRONMENT: str
+    DEVELOPMENT_AUTO_CREATE_SCHEMA: bool
     CONTROL_PLANE_MASTER_KEY: Optional[str] = None
+    TENANT_URL_TEMPLATE: Optional[str] = None
+    API_PORT: int = Field(gt=0, le=65535)
+    API_SERVICE_HOST: str
+    CONTROL_PLANE_PORT: int = Field(gt=0, le=65535)
+    GUNICORN_WORKERS: int = Field(gt=0)
+    TENANT_DATABASE_PREFIX: str = Field(
+        min_length=1, max_length=13, pattern=r"^[a-z][a-z0-9_]*$"
+    )
+    APP_TIMEZONE: str
+    MAX_PAGE_SIZE: int = Field(gt=0)
+    MIGRATION_PREVIEW_ROWS: int = Field(gt=0)
+    MIGRATION_PREVIEW_ERROR_LIMIT: int = Field(gt=0)
+    MIGRATION_MAX_UPLOAD_BYTES: int = Field(gt=0)
+    ATTACHMENTS_STORAGE_DIR: str = "attachments"
+    MAX_ATTACHMENT_UPLOAD_BYTES: int = Field(gt=0)
+    MIGRATION_MAX_EXPRESSION_DEPTH: int = Field(gt=0)
+    MIGRATION_MAX_INPUTS: int = Field(gt=0)
+    BACKUP_INTERVAL_SECONDS: int = Field(gt=0)
+    BACKUP_OUTPUT_DIR: str
+    VAULT_POLL_INTERVAL_SECONDS: int = Field(gt=0)
     
     # 1. Platform & Default Tenant Identity
     PLATFORM_NAME: str
@@ -47,12 +68,26 @@ class Settings(BaseSettings):
     SMTP_USER: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
     SMTP_FROM: str
+    MAIL_PROVIDER: str
+    AWS_SES_REGION: Optional[str] = None
+    AZURE_COMMUNICATION_CONNECTION_STRING: Optional[str] = None
+    AZURE_COMMUNICATION_SENDER: Optional[str] = None
+
+    @field_validator("MAIL_PROVIDER")
+    @classmethod
+    def validate_mail_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"smtp", "aws_ses", "azure_communication_services"}:
+            raise ValueError(
+                "MAIL_PROVIDER must be smtp, aws_ses, or azure_communication_services."
+            )
+        return normalized
 
     BACKUP_ENCRYPTION_SALT: str
-    S3_ENDPOINT_URL: Optional[str] = None
-    S3_BUCKET_NAME: str
-    S3_ACCESS_KEY: Optional[str] = None
-    S3_SECRET_KEY: Optional[str] = None
+
+    # Payment keys
+    STRIPE_SECRET_KEY: Optional[str] = None
+    STRIPE_WEBHOOK_SECRET: Optional[str] = None
 
     @property
     def DATABASE_URL(self) -> str:
@@ -73,6 +108,22 @@ class Settings(BaseSettings):
     @property
     def PROJECT_NAME(self) -> str:
         return self.PLATFORM_NAME
+
+    def tenant_url(self, slug: str) -> str:
+        """Return the public base URL for a tenant using one deployment setting."""
+        template = self.TENANT_URL_TEMPLATE
+        if template:
+            return template.replace("{slug}", slug).replace(
+                "{BASE_DOMAIN}", self.BASE_DOMAIN
+            )
+
+        if self.ENVIRONMENT.lower() in {"production", "prod"}:
+            return f"https://{slug}.{self.BASE_DOMAIN}"
+        return f"http://{slug}.{self.BASE_DOMAIN}:{self.API_PORT}"
+
+    @property
+    def API_INTERNAL_URL(self) -> str:
+        return f"http://{self.API_SERVICE_HOST}:{self.API_PORT}"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
