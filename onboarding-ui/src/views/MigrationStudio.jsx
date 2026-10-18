@@ -84,6 +84,12 @@ function EtlTransformNode({ id, data }) {
 }
 
 const nodeTypes = { targetNode: TargetSchemaNode, etlNode: EtlTransformNode };
+const ETL_START_X = 390;
+const ETL_STEP_X = 290;
+const ETL_NODE_WIDTH = 230;
+const ETL_NODE_GAP = 80;
+const ETL_LANE_Y = 120;
+const TARGET_START_X = 1010;
 
 export default function MigrationStudio({ tenants, request, catalogs, notify }) {
   // Extract dynamic schemas passed from the Control Plane API
@@ -205,22 +211,33 @@ export default function MigrationStudio({ tenants, request, catalogs, notify }) 
 
   const addTransformNode = useCallback((operation, kind) => {
     const id = `etl-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
-    setNodes((current) => [
-      ...current,
-      {
-        id,
-        type: "etlNode",
-        position: { x: 480, y: 100 + current.filter((node) => node.type === "etlNode").length * 115 },
-        data: {
-          kind,
-          operation,
-          config: {},
-          onEdit: handleOpenTransformModal,
-          onRemove: handleRemoveNode,
-          onOperationChange: handleChangeOperation,
+    setNodes((current) => {
+      const transformNodes = current.filter((node) => node.type === "etlNode");
+      const lastTransformX = transformNodes.reduce(
+        (maxX, node) => Math.max(maxX, node.position.x),
+        ETL_START_X - ETL_STEP_X,
+      );
+      const x = lastTransformX + ETL_STEP_X;
+      const targetX = Math.max(TARGET_START_X, x + ETL_NODE_WIDTH + ETL_NODE_GAP);
+      return [
+        ...current.map((node) => node.type === "targetNode"
+          ? { ...node, position: { ...node.position, x: Math.max(node.position.x, targetX) } }
+          : node),
+        {
+          id,
+          type: "etlNode",
+          position: { x, y: ETL_LANE_Y },
+          data: {
+            kind,
+            operation,
+            config: {},
+            onEdit: handleOpenTransformModal,
+            onRemove: handleRemoveNode,
+            onOperationChange: handleChangeOperation,
+          },
         },
-      },
-    ]);
+      ];
+    });
   }, [handleChangeOperation, handleOpenTransformModal, handleRemoveNode]);
 
   const handleSaveTransformRules = () => {
@@ -284,7 +301,7 @@ export default function MigrationStudio({ tenants, request, catalogs, notify }) 
     const newTargetNodes = schemaFields.map((field, idx) => ({
       id: `target-${field.id}`,
       type: 'targetNode',
-      position: { x: 1010, y: 90 + (idx * 90) },
+      position: { x: TARGET_START_X, y: 90 + (idx * 90) },
       data: {
         label: field.label || field.id,
         required: field.required,

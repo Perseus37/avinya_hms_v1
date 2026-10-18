@@ -9,7 +9,9 @@ small representative CSV before importing production data.
 
 1. Open **Migration Studio**, select the hospital tenant and destination table,
    then upload a UTF-8 CSV with a header row. The portal displays the CSV
-   columns as source nodes and destination fields as target nodes.
+   columns as source nodes and destination fields as target nodes. ETL blocks
+   are arranged in a horizontal lane between the source and destination columns;
+   additional blocks extend the lane to the right.
 2. Drag connections from CSV columns into destination fields. To transform a
    value, add a block, connect the source into it, and connect its output to a
    target field. Blocks can be chained. Delete a block with its trash icon;

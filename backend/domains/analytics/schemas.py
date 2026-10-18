@@ -39,6 +39,7 @@ class AnalyticsDashboardResponse(BaseModel):
 
 class DailyAnalyticsPoint(BaseModel):
     date: date
+    bucket_end: date
     net_billed_paise: int = Field(ge=0)
     payments_received_paise: int = Field(ge=0)
     encounters_started: int = Field(ge=0)
@@ -49,6 +50,7 @@ class AnalyticsTrendResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     window: AnalyticsWindow
+    granularity: str
     definitions: dict[str, str]
     series: list[DailyAnalyticsPoint]
 

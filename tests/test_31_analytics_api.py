@@ -202,7 +202,11 @@ def test_trends_fill_each_day_and_operations_return_status_groups(
     )
     assert trends.status_code == 200, trends.text
     body = trends.json()
+    assert body["granularity"] == "day"
     assert [point["date"] for point in body["series"]] == [
+        (start + timedelta(days=offset)).isoformat() for offset in range(3)
+    ]
+    assert [point["bucket_end"] for point in body["series"]] == [
         (start + timedelta(days=offset)).isoformat() for offset in range(3)
     ]
     assert all(point["net_billed_paise"] >= 0 for point in body["series"])
@@ -239,6 +243,61 @@ def test_trends_fill_each_day_and_operations_return_status_groups(
     ).status_code == 403
 
 
+def test_trends_support_calendar_bucket_granularities_and_partial_windows(
+    client, billing_headers
+):
+    cases = [
+        (
+            date(2024, 1, 5),
+            date(2024, 1, 9),
+            "week",
+            [("2024-01-05", "2024-01-07"), ("2024-01-08", "2024-01-09")],
+        ),
+        (
+            date(2024, 1, 30),
+            date(2024, 2, 3),
+            "month",
+            [("2024-01-30", "2024-01-31"), ("2024-02-01", "2024-02-03")],
+        ),
+        (
+            date(2024, 3, 31),
+            date(2024, 4, 1),
+            "quarter",
+            [("2024-03-31", "2024-03-31"), ("2024-04-01", "2024-04-01")],
+        ),
+        (
+            date(2024, 6, 30),
+            date(2024, 7, 1),
+            "half_year",
+            [("2024-06-30", "2024-06-30"), ("2024-07-01", "2024-07-01")],
+        ),
+        (
+            date(2024, 12, 31),
+            date(2025, 1, 1),
+            "year",
+            [("2024-12-31", "2024-12-31"), ("2025-01-01", "2025-01-01")],
+        ),
+    ]
+
+    for start, end, granularity, expected_buckets in cases:
+        response = client.get(
+            "/v1/api/analytics/trends",
+            params={
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "granularity": granularity,
+            },
+            headers=billing_headers,
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["granularity"] == granularity
+        assert [
+            (point["date"], point["bucket_end"]) for point in body["series"]
+        ] == expected_buckets
+        assert all(point["net_billed_paise"] == 0 for point in body["series"])
+
+
 def test_analytics_rejects_invalid_or_unbounded_date_windows(client, billing_headers):
     today = datetime.now(timezone.utc).date()
     too_early = today - timedelta(days=366)
@@ -258,8 +317,13 @@ def test_analytics_rejects_invalid_or_unbounded_date_windows(client, billing_hea
             params={"end_date": (today + timedelta(days=1)).isoformat()},
             headers=billing_headers,
         ),
+        client.get(
+            "/v1/api/analytics/trends",
+            params={"granularity": "decade"},
+            headers=billing_headers,
+        ),
     ]
-    assert [response.status_code for response in responses] == [422, 422, 422]
+    assert [response.status_code for response in responses] == [422, 422, 422, 422]
 
 
 def test_appointment_performance_reports_aggregate_outcomes_and_lead_time(
