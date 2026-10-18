@@ -30,10 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils \
 
 COPY requirements.txt requirements-integrations.txt ./
 RUN pip install --root-user-action=ignore \
-        --index-url https://download.pytorch.org/whl/cpu \
-        --extra-index-url https://pypi.org/simple \
-        "torch==2.14.1+cpu" \
-    && pip install --root-user-action=ignore -r requirements.txt -r requirements-integrations.txt \
+        -r requirements.txt -r requirements-integrations.txt \
     && pip install --root-user-action=ignore --upgrade "setuptools==84.0.0"
 
 # =====================================================================

@@ -1,0 +1,3 @@
+-r requirements.txt
+-r requirements-integrations.txt
+pytest==9.0.3

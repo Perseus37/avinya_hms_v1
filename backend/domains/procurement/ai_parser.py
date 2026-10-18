@@ -1,12 +1,9 @@
 import re
-import json
-import torch
-from PIL import Image
-from transformers import DonutProcessor, VisionEncoderDecoderModel
-from pdf2image import convert_from_path
 
 class DonutInvoiceParser:
     _instance = None
+    MODEL_NAME = "naver-clova-ix/donut-base-finetuned-cord-v2"
+    MODEL_REVISION = "8003d433113256b4ce3a0f5bf604b29ff78a7451"
 
     def __new__(cls):
         if cls._instance is None:
@@ -15,19 +12,29 @@ class DonutInvoiceParser:
         return cls._instance
 
     def _initialize_model(self):
+        import torch
+        from transformers import DonutProcessor, VisionEncoderDecoderModel
+
         # Using the base fine-tuned receipt/invoice model.
         # For production, replace with your custom fine-tuned weights path.
-        model_name = "naver-clova-ix/donut-base-finetuned-cord-v2"
-        self.processor = DonutProcessor.from_pretrained(model_name)
-        self.model = VisionEncoderDecoderModel.from_pretrained(model_name)
+        self.processor = DonutProcessor.from_pretrained(
+            self.MODEL_NAME, revision=self.MODEL_REVISION
+        )
+        self.model = VisionEncoderDecoderModel.from_pretrained(
+            self.MODEL_NAME, revision=self.MODEL_REVISION
+        )
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model.to(self.device)
         self.model.eval()
 
-    def _pdf_to_image(self, file_path: str) -> Image.Image:
+    def _pdf_to_image(self, file_path: str):
         """Converts the first page of a PDF to a PIL Image."""
+        from PIL import Image
+
         if file_path.lower().endswith('.pdf'):
+            from pdf2image import convert_from_path
+
             images = convert_from_path(file_path, first_page=1, last_page=1)
             return images[0].convert("RGB")
         return Image.open(file_path).convert("RGB")

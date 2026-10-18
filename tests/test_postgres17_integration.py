@@ -27,7 +27,9 @@ def test_postgresql_17_migrations_match_control_and_tenant_metadata():
         upgrade_tenant_database_url,
     )
 
-    admin_url = make_url(os.environ["POSTGRES17_TEST_URL"])
+    admin_url = make_url(os.environ["POSTGRES17_TEST_URL"]).set(
+        drivername="postgresql+psycopg2"
+    )
     admin_engine = create_engine(admin_url)
     suffix = uuid.uuid4().hex[:10]
     db_names = (f"test_cp_{suffix}", f"test_tenant_{suffix}")
@@ -85,7 +87,9 @@ def test_postgresql_17_migrations_match_control_and_tenant_metadata():
     reason="Set POSTGRES17_DOCKER_CONTAINER to exercise pg_dump/GPG/pg_restore round-trip.",
 )
 def test_postgresql_17_encrypted_custom_dump_restores_into_isolated_database():
-    admin_url = make_url(os.environ["POSTGRES17_TEST_URL"])
+    admin_url = make_url(os.environ["POSTGRES17_TEST_URL"]).set(
+        drivername="postgresql+psycopg2"
+    )
     admin_engine = create_engine(admin_url)
     suffix = uuid.uuid4().hex[:10]
     source_name = f"test_backup_{suffix}"

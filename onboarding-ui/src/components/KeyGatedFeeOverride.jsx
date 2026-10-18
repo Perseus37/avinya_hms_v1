@@ -6,21 +6,12 @@ export default function KeyGatedFeeOverride({
   autoFeeInr, suffix,
   isUnlocked, onUnlockChange,
   customFeeInr, onCustomFeeChange,
-  masterKey, notify
+  notify
 }) {
   const handleUnlock = () => {
-    if (!masterKey) {
-      notify("Master key is not set in the environment.", "err");
-      return;
-    }
-    const entered = window.prompt("Enter Master Vendor Key to unlock custom commercial pricing:");
-    if (entered !== null) {
-      if (entered.trim() === masterKey.trim()) {
-        onUnlockChange(true);
-        notify("Custom fee override unlocked.");
-      } else {
-        notify("Invalid Master Key. Override denied.", "err");
-      }
+    if (window.confirm("Custom pricing changes are sensitive and will be audited. Continue as the signed-in operator?")) {
+      onUnlockChange(true);
+      notify("Custom fee override unlocked for this session.");
     }
   };
 

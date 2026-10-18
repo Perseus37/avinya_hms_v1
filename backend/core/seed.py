@@ -67,6 +67,24 @@ GRANULAR_PERMISSIONS = [
     ("procurement:read", "View vendors, POs, GRNs, and vendor invoices", "Procurement"),
     ("procurement:write", "Draft POs, register vendors, and upload invoices", "Procurement"),
     ("procurement:approve", "Approve POs, GRNs, and financial matching", "Procurement"),
+    # Hospital support services
+    ("ambulance:read", "View ambulance vehicles and dispatches", "Ambulance"),
+    ("ambulance:write", "Register vehicles and manage emergency dispatches", "Ambulance"),
+    ("dietary:read", "View patient meal orders and delivery status", "Dietary"),
+    ("dietary:write", "Create and fulfill patient meal orders", "Dietary"),
+    ("cssd:read", "View sterile instrument sets and cycle batches", "CSSD"),
+    ("cssd:write", "Register instrument sets and document sterilization cycles", "CSSD"),
+    ("mortuary:read", "View mortuary custody records", "Mortuary"),
+    ("mortuary:write", "Receive and release mortuary cases", "Mortuary"),
+    # Privacy governance
+    ("privacy:read", "View consent records and retention policies", "Privacy"),
+    ("privacy:write", "Record consent decisions and retention policies", "Privacy"),
+    # Workforce and payroll
+    ("hr:read", "View staff attendance, leave, salary profiles and payroll", "Workforce"),
+    ("hr:write", "Record attendance, leave requests and salary profiles", "Workforce"),
+    ("hr:approve", "Approve leave requests and finalize payroll periods", "Workforce"),
+    ("hr:payroll", "Create payroll periods and calculate payroll lines", "Workforce"),
+    ("payroll:read", "View confidential salary and payroll records", "Payroll"),
 ]
 
 STANDARD_ALLERGIES = [
@@ -111,7 +129,7 @@ STANDARD_COMORBIDITIES = [
 
 
 def ensure_permissions_exist(db: Session) -> dict[str, Permission]:
-    """Idempotently ensures all 27 granular permissions exist in a tenant database."""
+    """Idempotently ensures all granular permissions exist in a tenant database."""
     existing = {p.code: p for p in db.query(Permission).all()}
     for code, desc, module in GRANULAR_PERMISSIONS:
         if code not in existing:
@@ -207,7 +225,8 @@ def seed_universal_hospital_data(
         perm_map["procurement:approve"],
     ])
     role_auditor.permissions.extend([
-        perm for code, perm in perm_map.items() if code.endswith(":read")
+        perm for code, perm in perm_map.items()
+        if code.endswith(":read") and code != "payroll:read"
     ])
 
     db.add_all([role_admin, role_doctor, role_nurse, role_pharm, role_billing, role_auditor])

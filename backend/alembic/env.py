@@ -31,6 +31,9 @@ import backend.domains.finance.models  # noqa: F401
 import backend.domains.integrations.models  # noqa: F401
 import backend.domains.federation.models  # noqa: F401
 import backend.domains.procurement.models  # noqa: F401
+import backend.domains.service_ops.models  # noqa: F401
+import backend.domains.privacy.models  # noqa: F401
+import backend.domains.workforce.models  # noqa: F401
 
 config = context.config
 

@@ -25,7 +25,9 @@ from backend.domains.clinical import (
 )
 from backend.domains.diagnostics import router as diagnostic_router
 from backend.domains.federation import router as federation_router
+from backend.domains.fhir import router as fhir_router
 from backend.domains.patients import router as patient_router
+from backend.domains.patients.break_glass_router import router as break_glass_router
 from backend.domains.pharmacy import router as pharmacy_router
 from backend.domains.facility import router as ward_router
 from backend.domains.reports import router as reports_router
@@ -39,6 +41,9 @@ from backend.domains.integrations import router as equipment_router
 from backend.domains.realtime import router as websocket_router
 from backend.core.dependencies import RequireLicensedModule
 from backend.domains.procurement import router as procurement_router
+from backend.domains.service_ops import router as service_ops_router
+from backend.domains.privacy import router as privacy_router
+from backend.domains.workforce import router as workforce_router
 
 # -----------------------------------------------------------------------------
 # M1 FIX: Context-Safe Request ID Logging Across All Libraries
@@ -259,6 +264,8 @@ for target in (v1_app, app):
     # Core identity, MPI, print engine, websockets, and admin policies are always enabled for every tenant
     target.include_router(auth_router.router)
     target.include_router(patient_router.router)
+    target.include_router(break_glass_router)
+    target.include_router(fhir_router.router)
     target.include_router(clinical_router.router)
     target.include_router(federation_router.router)
     target.include_router(reports_router.router)
@@ -281,6 +288,27 @@ for target in (v1_app, app):
     target.include_router(finance_ap_router.router, dependencies=[Depends(RequireLicensedModule("executive_bi"))])
     target.include_router(equipment_router.router, dependencies=[Depends(RequireLicensedModule("diagnostics"))])
     target.include_router(procurement_router.router, dependencies=[Depends(RequireLicensedModule("procurement"))])
+    target.include_router(
+        service_ops_router.ambulance_router,
+        dependencies=[Depends(RequireLicensedModule("ambulance"))],
+    )
+    target.include_router(
+        service_ops_router.dietary_router,
+        dependencies=[Depends(RequireLicensedModule("dietary"))],
+    )
+    target.include_router(
+        service_ops_router.cssd_router,
+        dependencies=[Depends(RequireLicensedModule("cssd"))],
+    )
+    target.include_router(
+        service_ops_router.mortuary_router,
+        dependencies=[Depends(RequireLicensedModule("mortuary"))],
+    )
+    target.include_router(privacy_router)
+    target.include_router(
+        workforce_router,
+        dependencies=[Depends(RequireLicensedModule("workforce"))],
+    )
     
 app.mount("/v1", v1_app)
 

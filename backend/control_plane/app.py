@@ -1,10 +1,12 @@
 import os
+import asyncio
 import logging
 import traceback
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, BackgroundTasks, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import event
 
 # Router Imports
 from backend.control_plane.api.routers.fleet_ops import router as fleet_ops_router
@@ -14,6 +16,11 @@ from backend.control_plane.api.routers.provisioning import router as provisionin
 from backend.control_plane.api.routers.saas_billing import router as saas_billing_router
 from backend.control_plane.api.routers.ui_console import router as ui_console_router
 from backend.control_plane.api.routers.network import router as control_plane_network_router
+from backend.control_plane.services.auth import (
+    authenticate_operator_token,
+    control_plane_actor,
+    create_operator_auth_router,
+)
 
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -30,6 +37,13 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("avinya.control_plane")
+
+
+@event.listens_for(ControlPlaneAuditLog, "before_insert")
+def _attribute_operator_audit(mapper, connection, audit_log):
+    actor = control_plane_actor.get()
+    if actor:
+        audit_log.actor = actor[:100]
 
 
 @asynccontextmanager
@@ -85,6 +99,30 @@ async def db_session_cleanup_middleware(request: Request, call_next):
             request.state.db.close()
     return response
 
+
+@app.middleware("http")
+async def operator_session_middleware(request: Request, call_next):
+    """Validates named operator bearer sessions before protected dependencies run."""
+    authorization = request.headers.get("Authorization", "")
+    token = authorization[7:].strip() if authorization.lower().startswith("bearer ") else None
+    identity = (
+        await asyncio.to_thread(authenticate_operator_token, token)
+        if token
+        else None
+    )
+    request.state.operator_token_present = token is not None
+    request.state.operator_email = identity["email"] if identity else None
+    request.state.operator_id = identity["id"] if identity else None
+    request.state.operator_token_id = identity["token_id"] if identity else None
+    actor_context = (
+        control_plane_actor.set(str(identity["email"])) if identity else None
+    )
+    try:
+        return await call_next(request)
+    finally:
+        if actor_context is not None:
+            control_plane_actor.reset(actor_context)
+
 # -------------------------------------------------------------------------
 # GLOBAL EXCEPTION HANDLERS
 # -------------------------------------------------------------------------
@@ -139,6 +177,7 @@ app.include_router(provisioning_router)
 app.include_router(saas_billing_router)
 app.include_router(ui_console_router)
 app.include_router(control_plane_network_router)
+app.include_router(create_operator_auth_router())
 
 # -------------------------------------------------------------------------
 # GLOBAL WEBHOOK RECEIVER (ASYNCHRONOUS)

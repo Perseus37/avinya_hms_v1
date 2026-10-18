@@ -17,10 +17,15 @@ MODULES = (
     ("er_mlc", "Emergency Triage & MLC", "Triage prioritization and police intimations.", 3000000),
     ("executive_bi", "CFO Revenue Cycle & BI", "AR aging and doctor productivity.", 5000000),
     ("procurement", "Supply Chain & Procurement", "Vendor POs, GRNs, and 3-way matching.", 3000000),
+    ("ambulance", "Ambulance Operations", "Vehicle dispatch, response status and transfer coordination.", 2000000),
+    ("dietary", "Dietary Services", "Patient diet orders, meal preparation and delivery.", 1500000),
+    ("cssd", "Central Sterile Services", "Instrument set tracking and sterilization cycle release controls.", 2000000),
+    ("mortuary", "Mortuary Services", "Decedent custody, case intake and witnessed release records.", 1500000),
+    ("workforce", "Workforce & Payroll", "Staff attendance, leave requests, salary profiles and auditable payroll calculations.", 2500000),
 )
 
 BUNDLES = (
-    ("BUNDLE_TOTAL_HOSPITAL", "Total Flagship", ("opd", "ipd_adt", "pharmacy", "diagnostics", "pacs_radiology", "billing", "insurance_tpa", "ot_surgery", "blood_bank", "er_mlc", "executive_bi", "procurement"), 32500000),
+    ("BUNDLE_TOTAL_HOSPITAL", "Total Flagship", ("opd", "ipd_adt", "pharmacy", "diagnostics", "pacs_radiology", "billing", "insurance_tpa", "ot_surgery", "blood_bank", "er_mlc", "executive_bi", "procurement", "ambulance", "dietary", "cssd", "mortuary", "workforce"), 39000000),
     ("BUNDLE_SURGICAL_SUITE", "Surgical Pack", ("ipd_adt", "ot_surgery", "pharmacy", "billing", "insurance_tpa", "procurement"), 17500000),
     ("BUNDLE_DIAGNOSTICS_HUB", "Diagnostics Hub", ("diagnostics", "pacs_radiology", "billing", "pharmacy"), 11000000),
     ("BUNDLE_OPD_DAYCARE", "OPD Daycare", ("opd", "pharmacy", "billing"), 6500000),

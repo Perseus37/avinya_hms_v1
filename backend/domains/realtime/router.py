@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status, Depends
 import jwt
@@ -8,18 +9,20 @@ from sqlalchemy.orm import Session, sessionmaker
 from backend.core.config import settings
 from backend.control_plane.models import TenantRegistry
 from backend.core.database import ControlSessionLocal, get_redis, tenant_engine_pool
-from backend.domains.identity.models import User, UserStatusEnum
+from backend.domains.identity.models import AuthSession, User, UserStatusEnum
 from backend.core.dependencies import user_has_permission
 
 from backend.security.envelope import decrypt_tenant_secret
 
 logger = logging.getLogger("avinya.websocket")
 ws_router = APIRouter(tags=["Real-Time WebSockets & Hospital Alerts"])
+_connection_limit = asyncio.Semaphore(settings.WS_MAX_CONNECTIONS)
 
 STREAM_PERMISSIONS = {
     "panic_labs": ("diagnostics:read",),
     "er_trauma": ("adt:read", "opd:read"),
     "housekeeping": ("adt:read", "wards:read"),
+    "break_glass": ("iam:read",),
 }
 
 
@@ -56,6 +59,20 @@ def _authenticate_ws(token: Optional[str], tenant_slug: str, stream: str) -> boo
         user = tenant_db.get(User, int(subject))
         if not user or user.status != UserStatusEnum.ACTIVE:
             return False
+        token_id = payload.get("jti")
+        if token_id is not None:
+            auth_session = tenant_db.get(AuthSession, token_id)
+            if (
+                not auth_session
+                or auth_session.user_id != user.id
+                or auth_session.revoked_at is not None
+            ):
+                return False
+            expires_at = auth_session.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at <= datetime.now(timezone.utc):
+                return False
         if stream == "all":
             return user.is_superuser
         return user_has_permission(
@@ -67,7 +84,6 @@ def _authenticate_ws(token: Optional[str], tenant_slug: str, stream: str) -> boo
 async def websocket_event_stream(
     websocket: WebSocket,
     stream: str,
-    token: Optional[str] = Query(default=None),
     tenant_slug: str = Query(default="default"),
     redis_client=Depends(get_redis),
 ):
@@ -80,64 +96,88 @@ async def websocket_event_stream(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
-    # Waiting-room displays intentionally expose only the public call-up feed.
-    if normalized_stream != "waiting_room" and not _authenticate_ws(
-        token, tenant_slug, normalized_stream
-    ):
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+    if _connection_limit.locked():
+        await websocket.close(code=status.WS_1013_TRY_AGAIN_LATER)
         return
 
-    await websocket.accept()
-    pubsub = redis_client.pubsub()
-
-    channel_pattern = (
-        f"tenant:{tenant_slug.strip().lower()}:*"
-        if normalized_stream == "all"
-        else f"tenant:{tenant_slug.strip().lower()}:{normalized_stream}"
-    )
-
-    if normalized_stream == "all":
-        pubsub.psubscribe(channel_pattern)
-    else:
-        pubsub.subscribe(channel_pattern)
-
-    async def _send_pump():
-        try:
-            while True:
-                # PERF-003: Use timeout=0.0 for non-blocking read, yielding control back to the event loop
-                message = pubsub.get_message(ignore_subscribe_messages=True, timeout=0.0)
-                if message and message.get("data"):
-                    raw_data = message["data"]
-                    if isinstance(raw_data, bytes):
-                        raw_data = raw_data.decode("utf-8")
-                    await websocket.send_text(raw_data)
-                await asyncio.sleep(0.05)
-        except (WebSocketDisconnect, asyncio.CancelledError):
-            pass
-        except Exception as exc:
-            logger.debug("WebSocket client disconnected: %s", str(exc))
-
-    async def _receive_pump():
-        try:
-            while True:
-                data = await websocket.receive_text()
-                if data == "ping":
-                    await websocket.send_text(json.dumps({"type": "pong"}))
-        except (WebSocketDisconnect, asyncio.CancelledError):
-            pass
-
-    pump_task = asyncio.create_task(_send_pump())
-    recv_task = asyncio.create_task(_receive_pump())
-
+    await _connection_limit.acquire()
+    pubsub = None
     try:
-        done, pending = await asyncio.wait(
-            [pump_task, recv_task],
-            return_when=asyncio.FIRST_COMPLETED,
+        # Browser WebSocket clients pass credentials through the handshake
+        # subprotocol header instead of a URL that can be recorded in logs.
+        offered_protocols = websocket.scope.get("subprotocols", [])
+        token = (
+            offered_protocols[1]
+            if len(offered_protocols) == 2 and offered_protocols[0] == "bearer"
+            else None
         )
-        for task in pending:
-            task.cancel()
+        if normalized_stream != "waiting_room":
+            try:
+                authorized = await asyncio.to_thread(
+                    _authenticate_ws, token, tenant_slug, normalized_stream
+                )
+            except Exception:
+                logger.exception("WebSocket authentication failed.")
+                await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+                return
+            if not authorized:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+
+        await websocket.accept(
+            subprotocol="bearer" if normalized_stream != "waiting_room" else None
+        )
+        pubsub = redis_client.pubsub()
+
+        channel_pattern = (
+            f"tenant:{tenant_slug.strip().lower()}:*"
+            if normalized_stream == "all"
+            else f"tenant:{tenant_slug.strip().lower()}:{normalized_stream}"
+        )
+        if normalized_stream == "all":
+            pubsub.psubscribe(channel_pattern)
+        else:
+            pubsub.subscribe(channel_pattern)
+
+        async def _send_pump():
+            try:
+                while True:
+                    message = pubsub.get_message(
+                        ignore_subscribe_messages=True, timeout=0.0
+                    )
+                    if message and message.get("data"):
+                        raw_data = message["data"]
+                        if isinstance(raw_data, bytes):
+                            raw_data = raw_data.decode("utf-8")
+                        await websocket.send_text(raw_data)
+                    await asyncio.sleep(0.2)
+            except (WebSocketDisconnect, asyncio.CancelledError):
+                pass
+            except Exception as exc:
+                logger.debug("WebSocket client disconnected: %s", str(exc))
+
+        async def _receive_pump():
+            try:
+                while True:
+                    data = await websocket.receive_text()
+                    if data == "ping":
+                        await websocket.send_text(json.dumps({"type": "pong"}))
+            except (WebSocketDisconnect, asyncio.CancelledError):
+                pass
+
+        pump_task = asyncio.create_task(_send_pump())
+        recv_task = asyncio.create_task(_receive_pump())
+        tasks = [pump_task, recv_task]
+        try:
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
     finally:
         try:
-            pubsub.close()
-        except Exception:
-            pass
+            if pubsub is not None:
+                pubsub.close()
+        finally:
+            _connection_limit.release()

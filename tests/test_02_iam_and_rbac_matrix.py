@@ -1,5 +1,8 @@
 import jwt
+import pytest
+from pydantic import ValidationError
 from backend.core.config import settings
+from backend.domains.identity.schemas import UserCreate
 
 
 def test_01_login_mints_tenant_scoped_jwt(client, multi_tenant_env):
@@ -80,6 +83,92 @@ def test_04_admin_account_unlock_resets_attempts(client, superuser_headers):
     assert success_res.status_code == 200
 
 
+def test_password_lockout_expires_and_uses_hospital_policy(client, multi_tenant_env):
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy.orm import Session
+    from backend.domains.identity.models import User, UserStatusEnum
+
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    with Session(engine) as db:
+        user = db.query(User).filter_by(email="doctor@default.com").one()
+        user.status = UserStatusEnum.LOCKED
+        user.failed_login_attempts = 5
+        user.locked_until = datetime.now(timezone.utc) - timedelta(minutes=1)
+        db.commit()
+
+    response = client.post(
+        "/v1/api/auth/login",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={"email": "doctor@default.com", "password": "StaffPass123!"},
+    )
+    assert response.status_code == 200, response.text
+
+
+def test_password_lock_threshold_uses_hospital_policy(client, multi_tenant_env):
+    from sqlalchemy.orm import Session
+    from backend.domains.policies.models import HospitalPolicySetting
+    from backend.domains.identity.models import User, UserStatusEnum
+
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    with Session(engine) as db:
+        policy = db.query(HospitalPolicySetting).first()
+        if policy is None:
+            policy = HospitalPolicySetting()
+            db.add(policy)
+        policy.max_failed_login_attempts = 3
+        db.commit()
+
+    for _ in range(3):
+        response = client.post(
+            "/v1/api/auth/login",
+            headers={"X-Hospital-Subdomain": "default"},
+            json={"email": "doctor@default.com", "password": "WrongPassword!"},
+        )
+        assert response.status_code == 401
+
+    with Session(engine) as db:
+        user = db.query(User).filter_by(email="doctor@default.com").one()
+        assert user.status == UserStatusEnum.LOCKED
+        assert user.locked_until is not None
+
+
+def test_maintenance_mode_allows_login(client, multi_tenant_env):
+    from backend.control_plane.models import TenantRegistry
+
+    factory = multi_tenant_env["control_session_factory"]
+    with factory() as db:
+        tenant = db.query(TenantRegistry).filter_by(subdomain_slug="default").one()
+        tenant.maintenance_mode = True
+        db.commit()
+
+    response = client.post(
+        "/v1/api/auth/login",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={"email": "admin@default.com", "password": "AdminPassword123!"},
+    )
+    assert response.status_code == 200, response.text
+
+
+def test_user_creation_requires_long_password():
+    with pytest.raises(ValidationError):
+        UserCreate(
+            login_id="short-password",
+            email="short-password@example.com",
+            password="Short123!",
+            full_name="Short Password",
+            role_ids=[1],
+        )
+
+    with pytest.raises(ValidationError, match="three character classes"):
+        UserCreate(
+            login_id="weak-password",
+            email="weak-password@example.com",
+            password="onlylowercase",
+            full_name="Weak Password",
+            role_ids=[1],
+        )
+
+
 def test_05_read_only_auditor_allowed_on_gets_blocked_on_writes(client, auditor_headers):
     """Scenario 5: ROLE_AUDITOR_READONLY succeeds on GET routes and gets 403 on POST/PUT/DELETE."""
     assert client.get("/v1/api/auth/users", headers=auditor_headers).status_code == 200
@@ -105,13 +194,15 @@ def test_05_read_only_auditor_allowed_on_gets_blocked_on_writes(client, auditor_
     ).status_code == 403
 
 
-def test_06_permissions_matrix_categorizes_30_permissions(client, superuser_headers):
-    """Scenario 6: GET /api/auth/permissions/matrix returns all 10 modules grouped by read/write/destructive."""
+def test_06_permissions_matrix_categorizes_permissions(client, superuser_headers):
+    """Scenario 6: permission matrix groups all seeded modules by read/write/destructive."""
     matrix_res = client.get("/v1/api/auth/permissions/matrix", headers=superuser_headers)
     assert matrix_res.status_code == 200
     modules = matrix_res.json()["modules"]
     assert set(modules.keys()) == {
-        "ADT", "Billing", "ClinicalMDM", "Diagnostics", "IAM", "OPD", "Patients", "Pharmacy", "WardManagement","Procurement",
+        "ADT", "Ambulance", "Billing", "ClinicalMDM", "CSSD", "Diagnostics",
+        "Dietary", "IAM", "Mortuary", "OPD", "Patients", "Pharmacy", "Privacy",
+        "WardManagement", "Procurement", "Workforce", "Payroll",
     }
     assert any(p["code"] == "billing:reverse" for p in modules["Billing"]["destructive"])
 
