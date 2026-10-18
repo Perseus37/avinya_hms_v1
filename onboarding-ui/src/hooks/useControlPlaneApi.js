@@ -25,7 +25,7 @@ export function normalizeApiError(detail, fallback) {
   return fallback;
 }
 
-export default function useControlPlaneApi(masterKey, controlPlaneKey) {
+export default function useControlPlaneApi(operatorToken, onUnauthorized) {
   const [busyKey, setBusyKey] = useState(null);
   const [apiLogs, setApiLogs] = useState([]);
 
@@ -33,40 +33,30 @@ export default function useControlPlaneApi(masterKey, controlPlaneKey) {
     if (tag) setBusyKey(tag);
     const startedAt = performance.now();
     const isFormData = options.body instanceof FormData;
-    let body = isFormData ? new FormData() : options.body;
-    if (isFormData) {
-      for (const [key, value] of options.body.entries()) {
-        body.append(key, value);
-      }
-    }
-    if (isFormData) body.set("master_setup_key", masterKey.trim());
-    if (!isFormData && masterKey.trim() && body !== undefined) {
-      if (typeof body === "string") {
-        try {
-          const parsedBody = JSON.parse(body);
-          if (parsedBody && typeof parsedBody === "object" && !Array.isArray(parsedBody)) {
-            body = JSON.stringify({
-              ...parsedBody,
-              master_setup_key: parsedBody.master_setup_key || masterKey.trim(),
-            });
-          }
-        } catch {
-          // Leave non-JSON bodies unchanged; the endpoint will validate its own payload.
+    let body = options.body;
+    if (isFormData && operatorToken) {
+      body = new FormData();
+      for (const [key, value] of options.body.entries()) body.append(key, value);
+      body.set("master_setup_key", "");
+    } else if (operatorToken && body !== undefined && typeof body === "string") {
+      try {
+        const parsedBody = JSON.parse(body);
+        if (parsedBody && typeof parsedBody === "object" && !Array.isArray(parsedBody)) {
+          body = JSON.stringify({ ...parsedBody, master_setup_key: "" });
         }
+      } catch {
+        // Non-JSON request bodies are passed through for endpoint validation.
       }
     } else if (
-      !isFormData &&
-      masterKey.trim() &&
-      options.body === undefined &&
+      operatorToken &&
+      body === undefined &&
       (options.method || "GET").toUpperCase() !== "GET"
     ) {
-      body = JSON.stringify({ master_setup_key: masterKey.trim() });
+      body = JSON.stringify({ master_setup_key: "" });
     }
+
     const headers = new Headers(options.headers);
-    headers.set("X-Master-Setup-Key", masterKey.trim());
-    if (controlPlaneKey.trim()) {
-      headers.set("X-Control-Plane-Secret", controlPlaneKey.trim());
-    }
+    if (operatorToken) headers.set("Authorization", `Bearer ${operatorToken}`);
     if (body && !isFormData && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
     }
@@ -75,6 +65,7 @@ export default function useControlPlaneApi(masterKey, controlPlaneKey) {
       const response = await fetch(path, { ...options, body, headers });
       const duration = Math.round(performance.now() - startedAt);
       const responseBody = await response.json().catch(() => ({}));
+      const sensitiveAuthResponse = path.startsWith("/api/auth/");
 
       setApiLogs((previous) => [
         {
@@ -85,12 +76,20 @@ export default function useControlPlaneApi(masterKey, controlPlaneKey) {
           status: response.status,
           ok: response.ok,
           ms: duration,
-          body: responseBody,
+          body: sensitiveAuthResponse ? { redacted: true } : responseBody,
         },
         ...previous.slice(0, 49),
       ]);
 
       if (!response.ok) {
+        if (
+          response.status === 401 &&
+          operatorToken &&
+          !sensitiveAuthResponse &&
+          onUnauthorized
+        ) {
+          onUnauthorized();
+        }
         throw new Error(normalizeApiError(
           responseBody?.detail ?? responseBody?.message,
           `HTTP ${response.status}`,
@@ -100,7 +99,7 @@ export default function useControlPlaneApi(masterKey, controlPlaneKey) {
     } finally {
       if (tag) setBusyKey(null);
     }
-  }, [controlPlaneKey, masterKey]);
+  }, [onUnauthorized, operatorToken]);
 
   return { request, busyKey, apiLogs };
 }

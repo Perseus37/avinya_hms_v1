@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FLEET_REFRESH_INTERVAL_MS } from "../lib/constants";
 
-export default function useFleetData({ masterKey, request, notify, autoSync }) {
+export default function useFleetData({ operatorToken, request, notify }) {
   const [loading, setLoading] = useState(false);
   const [tenants, setTenants] = useState([]);
   const [overview, setOverview] = useState(null);
@@ -17,21 +17,19 @@ export default function useFleetData({ masterKey, request, notify, autoSync }) {
   });
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [lastSyncError, setLastSyncError] = useState(null);
-  const autoSyncStarted = useRef(false);
-  const previousMasterKey = useRef(masterKey.trim());
+  const previousOperatorToken = useRef(Boolean(operatorToken));
   const syncing = useRef(false);
   const mounted = useRef(false);
 
   const syncAll = useCallback(async (silent = false) => {
-    if (!masterKey.trim()) {
-      if (!silent) notify("Enter the Master Vendor Key before syncing.", "err");
+    if (!operatorToken) {
+      if (!silent) notify("Sign in as a named operator before syncing.", "err");
       return;
     }
     if (syncing.current) return;
     syncing.current = true;
     if (!silent) setLoading(true);
     try {
-      localStorage.setItem("avinya_master_key", masterKey.trim());
       const results = await Promise.allSettled([
         request("/api/tenants"),
         request("/api/fleet/overview"),
@@ -106,7 +104,7 @@ export default function useFleetData({ masterKey, request, notify, autoSync }) {
       syncing.current = false;
       if (mounted.current && !silent) setLoading(false);
     }
-  }, [masterKey, notify, request]);
+  }, [operatorToken, notify, request]);
 
   useEffect(() => {
     mounted.current = true;
@@ -116,22 +114,15 @@ export default function useFleetData({ masterKey, request, notify, autoSync }) {
   }, []);
 
   useEffect(() => {
-    if (autoSync && !autoSyncStarted.current) {
-      autoSyncStarted.current = true;
+    const currentOperatorToken = Boolean(operatorToken);
+    if (!previousOperatorToken.current && currentOperatorToken) {
       syncAll(true);
     }
-  }, [autoSync, syncAll]);
+    previousOperatorToken.current = currentOperatorToken;
+  }, [operatorToken, syncAll]);
 
   useEffect(() => {
-    const currentMasterKey = masterKey.trim();
-    if (!previousMasterKey.current && currentMasterKey) {
-      syncAll(true);
-    }
-    previousMasterKey.current = currentMasterKey;
-  }, [masterKey, syncAll]);
-
-  useEffect(() => {
-    if (!masterKey.trim()) return undefined;
+    if (!operatorToken) return undefined;
 
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") syncAll(true);
@@ -146,7 +137,7 @@ export default function useFleetData({ masterKey, request, notify, autoSync }) {
       document.removeEventListener("visibilitychange", refreshWhenVisible);
       window.removeEventListener("focus", refreshWhenVisible);
     };
-  }, [masterKey, syncAll]);
+  }, [operatorToken, syncAll]);
 
   return {
     loading,

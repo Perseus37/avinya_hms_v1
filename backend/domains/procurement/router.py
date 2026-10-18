@@ -21,7 +21,8 @@ from backend.domains.procurement.schemas import (
 )
 from backend.domains.procurement.services import (
     process_grn_acceptance, trigger_donut_invoice_extraction,
-    execute_3_way_match, post_invoice_to_accounts_payable,return_patient_indent_stock, issue_patient_indent
+    execute_3_way_match, post_invoice_to_accounts_payable, process_purchase_return,
+    return_patient_indent_stock, issue_patient_indent,
 )
 from backend.domains.procurement.documents import (
     resolve_vendor_invoice_document,

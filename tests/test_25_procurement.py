@@ -1,5 +1,26 @@
 from datetime import datetime, timedelta, timezone
 
+def test_purchase_return_endpoint_reaches_service_validation(client, superuser_headers):
+    response = client.post(
+        "/v1/api/procurement/returns",
+        headers=superuser_headers,
+        json={
+            "grn_id": 9999,
+            "vendor_id": 9999,
+            "items": [
+                {
+                    "grn_item_id": 9999,
+                    "return_quantity": 1,
+                    "return_reason": "Damaged item",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Invalid GRN item" in response.json()["message"]
+
+
 def test_01_vendor_and_purchase_order_lifecycle(client, superuser_headers, pharmacist_headers):
     """Scenario 1: Register a vendor, draft a PO, and approve it via Maker-Checker."""
 

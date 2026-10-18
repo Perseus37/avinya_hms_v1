@@ -1,8 +1,8 @@
 import React from 'react';
-import { BarChart4, Building2, Sparkles, Database, GitBranch, Network, Shield, Palette, KeyRound, Loader2, RefreshCw, Terminal, ChevronRight } from 'lucide-react';
+import { BarChart4, Building2, Sparkles, Database, GitBranch, Network, Shield, Palette, Loader2, RefreshCw, Terminal, ChevronRight, LogOut } from 'lucide-react';
 import { THEMES } from '../lib/constants';
 
-export default function Sidebar({ theme, setTheme, activeView, setActiveView, masterKey, setMasterKey, controlPlaneKey, setControlPlaneKey, syncAll, loading, apiLogs, setDevtoolsOpen }) {
+export default function Sidebar({ theme, setTheme, activeView, setActiveView, operatorEmail, onSignOut, syncAll, loading, apiLogs, setDevtoolsOpen }) {
   return (
     <aside className="w-full md:w-72 md:h-screen md:sticky md:top-0 theme-panel border-r flex flex-col justify-between p-4 shrink-0 md:overflow-y-auto select-none no-scrollbar">
       <div className="space-y-4">
@@ -67,23 +67,9 @@ export default function Sidebar({ theme, setTheme, activeView, setActiveView, ma
       </div>
 
       <div className="space-y-3 pt-4 border-t border-slate-500/20">
-        <div className="space-y-1.5">
-          <label className="text-[10px] font-bold uppercase font-mono theme-text-muted flex items-center gap-1">
-            <KeyRound className="w-3 h-3" /> Master Vendor Key
-          </label>
-          <input
-            type="password" value={masterKey} onChange={(e) => setMasterKey(e.target.value)}
-            className="w-full theme-input rounded-xl px-3 py-2 text-xs font-mono"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <label className="text-[10px] font-bold uppercase font-mono theme-text-muted flex items-center gap-1">
-            <KeyRound className="w-3 h-3" /> Control Plane Secret (if configured)
-          </label>
-          <input
-            type="password" value={controlPlaneKey} onChange={(e) => setControlPlaneKey(e.target.value)}
-            className="w-full theme-input rounded-xl px-3 py-2 text-xs font-mono"
-          />
+        <div className="min-w-0">
+          <div className="text-[10px] font-bold uppercase tracking-wider theme-text-muted">Signed in operator</div>
+          <div className="truncate text-xs font-mono mt-1" title={operatorEmail}>{operatorEmail}</div>
         </div>
         <div className="flex gap-2">
           <button onClick={() => syncAll(false)} disabled={loading} className="flex-1 theme-accent-bg font-bold py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md transition-opacity disabled:opacity-70">
@@ -93,6 +79,10 @@ export default function Sidebar({ theme, setTheme, activeView, setActiveView, ma
           <button onClick={() => setDevtoolsOpen((v) => !v)} title="Toggle API Latency & Payload Console" className="px-3 py-2 rounded-xl theme-elevated text-xs font-mono flex items-center gap-1 transition-colors hover:text-cyan-400">
             <Terminal className="w-3.5 h-3.5" />
             <span>{apiLogs?.length || 0}</span>
+          </button>
+          <button onClick={onSignOut} title="Sign out and revoke sessions" className="px-3 py-2 rounded-xl theme-elevated text-xs flex items-center gap-1 transition-colors hover:text-rose-500">
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Sign out</span>
           </button>
         </div>
       </div>

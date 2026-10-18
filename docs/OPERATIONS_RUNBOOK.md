@@ -90,6 +90,140 @@ tools. Compose does not provide a complete alerting, log-retention, uptime, or
 off-host monitoring system. The browser API inspector is session-local and
 does not substitute for server-side audit records.
 
+## 3.1 Identity, operator access, and recovery
+
+Apply the tenant and control-plane Alembic migrations before deploying the
+identity lifecycle changes. Privileged tenant users must enroll an
+authenticator when `MFA_REQUIRED_FOR_PRIVILEGED=true`; tenant users can enroll
+optionally through `/api/auth/mfa/enroll`. Save the one-time MFA recovery codes
+shown by `/api/auth/mfa/confirm` outside the browser. Tenant access tokens are
+short-lived and server-tracked; `/api/auth/logout`, password change, and
+password reset revoke all of that user's active sessions. Password reset
+delivery requires a working configured mail provider.
+
+Create a named control-plane operator only after the control-plane migration
+has run:
+
+```powershell
+docker compose exec api python -m backend.scripts.create_control_plane_operator --email operator@example.org --name "Hospital Operations"
+```
+
+The command prompts for a strong password without echoing it. First sign-in
+requires TOTP enrollment; subsequent sign-ins require a fresh TOTP code.
+Control-plane access tokens expire after 15 minutes and are revocable at
+`POST /api/auth/logout`. The React onboarding UI signs in with a named operator,
+requires MFA enrollment at first sign-in and a fresh TOTP code on each login,
+keeps the access token in memory only, and returns to sign-in when an operator
+request receives 401. Refreshing the page requires signing in again. The older
+`/console` fallback and static setup-key API clients remain accepted during
+migration; rotate/restrict these keys and remove the fallback only after every
+approved operator client has migrated and has been verified.
+
+Tenant reset links are single-use and expire after 30 minutes. If a reset email
+is not delivered, check the mail-provider configuration and server-side mail
+logs without exposing the token. Never request or forward reset tokens through
+support tickets or chat.
+
+## 3.2 FHIR API scope
+
+The backend exposes read-only FHIR R4 Patient search and read endpoints at
+`/api/fhir/R4/Patient` and `/api/fhir/R4/Patient/{id}`. Calls require a tenant
+access token with `patients:read`; patient lookup remains within the resolved
+tenant database. Supported search parameters are `_id`, `identifier`, `name`,
+`birthdate`, `gender`, `_count`, and the implementation's `_offset` paging
+parameter. MRN and ABHA values use the custom identifier systems
+`urn:avinya:hms:mrn` and `urn:avinya:hms:abha`.
+
+This is not an ABDM integration. It does not implement ABDM consent/auth
+workflows, registered profiles, Encounter or Observation resources, or FHIR
+write operations. Obtain partner-profile and sandbox approval before
+advertising or enabling an ABDM connection.
+
+## 3.3 Emergency patient access
+
+Authenticated staff may request a reasoned emergency grant with
+`POST /api/break-glass/patients/{patient_id}/grants`. The grant lasts 30 minutes
+and only the requesting account can use
+`GET /api/break-glass/grants/{grant_id}/patient`; it exposes a limited patient
+demographic and active-allergy view, not general clinical chart access. Each
+use is durably recorded. A `break_glass` WebSocket stream is restricted to
+users with `iam:read` and receives the grant ID alert. Do not send PHI in the
+alert payload.
+
+Independent reviewers with `iam:read` use
+`GET /api/break-glass/reviews/pending` and
+`POST /api/break-glass/reviews/{grant_id}`. Self-review is rejected. Reviews
+are due within 24 hours; overdue records are flagged in the pending list, but
+the current MVP does not send an automatic reminder or escalation. Hospitals
+must assign review ownership and monitor the queue until an alerting worker is
+implemented.
+
+## 3.4 Hospital support service workflows
+
+The licensed tenant APIs provide ambulance vehicle/dispatch tracking
+(`/api/ambulance`), patient dietary orders (`/api/dietary`), instrument-set and
+sterilization-batch tracking (`/api/cssd`), and mortuary custody/release
+(`/api/mortuary`). Access requires each module's corresponding license and
+`<module>:read` or `<module>:write` permission. Status changes are recorded in
+workflow history endpoints where provided.
+
+These are workflow MVPs, not dispatch-center integrations, dietary/allergy
+decision support, a validated sterilizer/traceability system, or a complete
+medico-legal mortuary register. In particular, CSSD release depends on staff
+recording both indicator results accurately; failed indicators quarantine the
+batch and this MVP does not support reprocessing. Hospitals must validate
+local SOPs, role assignments, device/dispatch integrations, and required
+records before operational use.
+
+## 3.5 Privacy governance
+
+Users with `privacy:write` can append patient consent decisions at
+`POST /api/privacy/patients/{patient_id}/consents`; `privacy:read` can inspect
+the history. A withdrawal is accepted only when a matching grant is current.
+Consent entries capture the decision, stated purpose, source, optional expiry,
+evidence reference, actor, and timestamp. The consent API is an auditable
+ledger, not a universal authorization gate: workflows must not assume that
+recording a decision automatically changes data-sharing, treatment, research,
+or communication behavior.
+
+Retention schedules are appended through
+`POST /api/privacy/retention-policies`. Every entry requires a legal basis,
+hospital approval reference, effective date, and positive retention period.
+Later entries preserve earlier policy history. No records are automatically
+deleted or anonymised based on these schedules. Do not configure a schedule
+without the hospital's legal/privacy owner approval. Anonymisation remains
+unimplemented pending an approved policy and complete review of tenant data,
+central indexes, backups, exports, and integrations; deactivation is not
+anonymisation.
+
+## 3.6 Workforce and payroll MVP
+
+The licensed `/api/workforce` API covers attendance entries, leave requests
+with manager approval, effective-dated monthly fixed-salary profiles, payroll
+periods, calculation history, and period finalization. Staff access is
+permission-controlled with `hr:read`, `hr:write`, `hr:approve`, and
+`hr:payroll`; salary and payroll reads additionally require the separately
+granted `payroll:read` permission. The `workforce` module must also be licensed. Leave decisions
+cannot be self-approved, and a finalized payroll period cannot be changed.
+
+Payroll calculations use INR paise and the explicit formula
+`monthly_fixed_paise * paid_days / working_days`, rounded to the nearest paise
+(half up), then add manually entered earnings and subtract manually entered
+deductions. The salary profile effective on the first day of the period is
+used. Every calculation records its inputs, outputs, and actor, including
+recalculations before finalization. Attendance and leave are not automatically
+converted into paid days; payroll operators must verify paid days,
+working-day counts, adjustments, and the calculation note against approved
+source records.
+
+This is not a statutory payroll engine or a legal/accounting determination.
+It does not calculate income-tax/TDS, provident fund, ESI, gratuity, overtime,
+bonus, statutory leave accruals, or other jurisdiction-specific obligations;
+nor does it produce payslips, make bank payments, or integrate with a roster
+or attendance device. HR and payroll owners must validate inputs, rounding,
+period close, authorizations, and all statutory calculations with a qualified
+India payroll/accounting advisor before relying on outputs for payment.
+
 ## 4. Stop, restart, update
 
 Safe restart without deleting data:
@@ -694,8 +828,48 @@ Important operational constraints:
 - Work runs in an in-process background task, not a durable queue. Avoid
   restarts during import. Check the control-plane forensic audit ledger for
   final counts and bounded row errors.
-- Protect setup/control-plane keys and use a trusted browser profile; the UI
-  stores keys in local storage.
+- Protect setup/control-plane keys and use a trusted browser profile. The UI
+  keeps entered keys in memory only; re-enter them after a page reload.
+- Set `TRUSTED_PROXY_IPS` to the exact ingress proxy address/CIDR values if
+  the service sits behind a reverse proxy. Forwarded client IPs are ignored
+  unless the direct peer is trusted; leaving this unset may group clients by
+  the proxy address for rate limiting.
+- `WS_MAX_CONNECTIONS` caps active WebSocket connections per API worker.
+
+### HL7/MLLP listener
+
+The optional listener refuses to start unless `HL7_SHARED_SECRET`,
+`HL7_TLS_CERT_FILE`, and `HL7_TLS_KEY_FILE` are configured. Install the TLS
+certificate/key on the listener host, configure the equipment to connect over
+TLS and send the same shared secret in HL7 `MSH-8`, and restrict network access
+to the equipment VLAN or an approved VPN. Do not expose the listener directly
+to the public internet. The listener bounds incomplete frames and rejects
+updates to verified or cancelled results. Keep diagnostic-equipment credentials
+out of source control and rotate them with the equipment administrator.
+
+For invoice AI extraction, the default API/Docker install deliberately omits
+the large ML runtime. Install `requirements-ai.txt` with the CPU PyTorch index
+only on a worker intended to process invoices:
+
+```powershell
+python -m pip install --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple -r requirements-ai.txt
+```
+
+Without those optional packages, source documents remain available for manual
+review; extraction failures are not treated as successful results. The model
+repository is pinned to an immutable revision.
+
+### Envelope-encryption key rotation
+
+Back up the control-plane database before rotating tenant secrets. Stop API and
+backup writers, set the new `SECRET_KEY` and `ENVELOPE_ENCRYPTION_SALT`, and
+temporarily set `ENVELOPE_ENCRYPTION_PREVIOUS_SECRET_KEY` and
+`ENVELOPE_ENCRYPTION_PREVIOUS_SALT` to the old pair. Run
+`python -m backend.scripts.rotate_envelope_keys`; it re-encrypts the tenant JWT
+and backup keys without printing them. Verify tenant login and a backup-key
+read, then remove both previous-key settings and restart the services. Never
+rotate the encryption key without retaining the old pair until the conversion
+has completed and verification succeeds.
 
 ## 10. Troubleshooting decision table
 
