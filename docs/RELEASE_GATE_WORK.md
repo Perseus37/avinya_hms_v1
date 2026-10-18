@@ -183,22 +183,24 @@ repeating completed investigation.
 
 ## Next steps
 
-1. Review PR #1 and merge it through the repository's normal review process.
-   Its latest release-gate run is green; the base branch still has legacy
-   workflows until the PR is merged.
-2. In repository settings, protect release branches and require the Python/
-   PostgreSQL, UI, Compose, and production-image jobs. Current GitHub API
-   protection lookup returned 404, and rulesets are unavailable on the
-   repository's current plan/visibility.
-3. Hosted Trivy passed on the PR image under the workflow's fixable
-   HIGH/CRITICAL threshold. Continue periodic image and dependency review.
-4. Continue P0 operational verification in `docs/PRODUCTION_READINESS_ROADMAP.md`:
-   test attached/off-host backups and restores, confirm least-privilege
-   database roles and tenant isolation, and exercise production secrets,
-   identity controls, DNS/TLS, and privacy/clinical sign-off.
-5. Only after gates and operational controls pass, stage a production-like
-   load run and monitoring/alerting exercise; no live patient-data readiness
-   is implied by dependency cleanup or passing tests.
+1. Run the repository's opt-in PostgreSQL 17 migration and encrypted dump/
+   restore tests against a newly created disposable PostgreSQL 17 container.
+   **Done 2026-10-18:** both tests passed (2 passed in 44.76 seconds); the
+   generated test databases and named container were removed. This is not host
+   backup, off-host copy, attachment restore, or staging evidence.
+2. Arrange an isolated staging environment with synthetic data and rehearse
+   fresh bootstrap, retained-volume restart, tenant provisioning, canary
+   migration, schema parity, and application smoke checks.
+3. On the intended Linux host, run the encrypted host backup script using the
+   protected GPG passphrase file and an independent remote destination. Verify
+   remote checksums, restore to a new isolated database, and verify attachment
+   restoration if attachments are configured. Record measured RPO/RTO.
+4. Complete production secret/key recovery, least-privilege database role and
+   tenant-isolation review, monitoring/alerting, DNS/TLS/firewall exercise,
+   and clinical/privacy approval before any live patient data.
+5. Only after these operational gates pass, run representative synthetic load
+   and incident/monitoring exercises. Green CI and aligned branches do not
+   establish staging or production readiness.
 
 ## Repository publication checkpoint (Oct 18, 2026)
 
@@ -215,7 +217,7 @@ repeating completed investigation.
 - Branch-protection API returned 404; repository rulesets API returned 403 on
   the current plan/visibility.
 
-## Current continuation
+## Historical continuation — initial release-gate publication
 
 The complete approved worktree was committed on
 `feature/release-gates-and-security`, pushed to origin, and opened as PR #1
@@ -238,17 +240,39 @@ version tags existed only in the local clone and were not published. Remote
 branches/tags were force-updated and verified clean. GitHub still exposes the
 old PR #1 head through its read-only `refs/pull/1/head` reference; only GitHub
 Support can purge retained PR/cached commit objects if desired. A local backup
-mirror of the pre-rewrite refs is retained in the session files temporarily.
-Opened PR #2 to promote `dev` to `main`:
+mirror of the pre-rewrite refs was retained temporarily, then removed after
+remote refs and checks were verified. PR #2 promoted `dev` to `main`:
 https://github.com/sai1-crypto/avinya_hms/pull/2
-Both push-triggered and PR-triggered gates passed on its initial head
-`7957c2f`. The continuation-doc update itself will trigger another run; check
-that run before merging. Remove the temporary mirror and expire local
-unreachable objects after confirming the remote refs and final PR checks.
+Both push-triggered and PR-triggered gates passed on its final head before it
+was merged.
 
 ## Resume instructions
 
-Start by inspecting this file and `docs/PRODUCTION_READINESS_ROADMAP.md`, then
-inspect the current `.github/workflows` status and manifests. Do not assume the
-workflow deletions are accidental. Continue at the first unchecked progress
-item, updating this log as meaningful phases complete.
+Start with the current `Next steps` above and the `Current repository status`
+below. Keep environment-specific staging and production work explicitly
+blocked until the operator provides access; never infer successful backup,
+restore, or privacy controls from CI.
+
+## Current repository status — Oct 18, 2026
+
+- PR #13 merged the coordinated Vite 8.3.4 / `@vitejs/plugin-react` 6.1.2
+  update after all four release-gate jobs passed. Local validation also passed
+  `npm ci`, `npm audit --audit-level=moderate` (zero findings), `npm test`
+  (3 passing), `npm run build`, and a production Docker image build.
+- PRs #7 and #10 were superseded by PR #13; incompatible React 19 type update
+  PR #11 was closed without merging. Dependabot PRs #3–#12 were otherwise
+  resolved. There are no open PRs.
+- PR #14 merged `main` back into `dev` after all four checks passed. Remote
+  `main` is `04ca39c`; remote and local `dev` are at merge commit `458585f`.
+  Local worktree is clean.
+- Latest `dev` push release-gate run `39117911486` passed. No live staging
+  host, protected production key, or off-host backup destination was accessed
+  or tested.
+- On a fresh disposable Docker PostgreSQL 17 container, ran
+  `RUN_POSTGRES17_INTEGRATION=1` with both `POSTGRES17_TEST_URL` and
+  `POSTGRES17_DOCKER_CONTAINER` set. `tests/test_postgres17_integration.py`
+  passed **2 tests** in 44.76 seconds, covering both migration/schema parity
+  and encrypted custom-format dump/restore. The exact named container was
+  removed by the test command's cleanup.
+- The outdated repository and branch details elsewhere in this log describe
+  historical checkpoints, not current branch state.

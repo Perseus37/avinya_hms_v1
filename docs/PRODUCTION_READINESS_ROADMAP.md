@@ -15,8 +15,8 @@ availability.
 | Environment configuration | `.env.example` and `.env.production.example` document runtime settings. Real env files are ignored by Git. Ports, workers, timezone, tenant DB prefix, limits, and deployment-specific DNS settings are environment-configurable. |
 | Production secret preflight | A local validator rejects missing/empty required secrets, template/example values, reused secret values, short JWT signing keys, and overly broad Unix env-file permissions without printing values. It does not prove secret provenance, access control on Windows, rotation, or recovery. |
 | Credential history cleanup | The user confirmed the historical `deployments/apollo.env` values were dummy values. The file was removed from all current remote branch histories (`main`, `dev`, feature branch) and all reachable version tags by a coordinated history rewrite; only `v4.5.0` was published remotely and that tag was retargeted. GitHub's read-only merged PR #1 head still points to the old commit; request GitHub Support to purge cached PR objects if a full platform-level purge is desired. |
-| Local checks | Latest full local Python run: 228 passed, 2 skipped. Python audits report no known vulnerabilities. The onboarding UI utility tests (3), production build, and development/production Compose config checks pass locally. The production image built and local Trivy scan reported 0 fixable HIGH/CRITICAL findings after pinning setuptools 84.0.0. Hosted run `39098168408` on PR #1 head `fd4e699` passed all four jobs: Python tests plus PostgreSQL 17 migration parity and dependency audits, UI audit/tests/build, Compose config validation, and production image build plus Trivy. The history rewrite changed commit IDs without changing branch tips' file contents except removing the obsolete file from history. |
-| PostgreSQL 17 / backup / load-test preparation | The opt-in disposable PostgreSQL test now applies both migration histories and runs an encrypted custom-format `pg_dump` → GPG → `pg_restore` round-trip into a new DB. Both passed against a disposable PostgreSQL 17 container. Host cron, attached volumes, remote rsync copy, and capacity run remain unverified. |
+| Local checks | The onboarding UI installs cleanly, reports zero npm audit vulnerabilities, passes its 3 utility tests, and builds with Vite 8.3.4 and `@vitejs/plugin-react` 6.1.2. The production Docker image also builds with this dependency pair. Hosted PR #13 passed all four release-gate jobs (Python/PostgreSQL 17, UI install/audit/tests/build, Compose validation, production image/Trivy). |
+| PostgreSQL 17 / backup / load-test preparation | On 2026-10-18, both opt-in tests passed against a newly created disposable PostgreSQL 17 container: control-plane/tenant migration parity and encrypted custom-format `pg_dump` → GPG → `pg_restore` into an isolated DB with a sample-row check. The container and generated databases were removed. This does not validate the host backup script, attached storage, remote rsync copy, attachments, or a production restore. |
 | Live infrastructure verification | Not completed: disposable PostgreSQL 17 and hosted migration-parity checks pass, and hosted Trivy passes its configured threshold. Host backup/restore script on an attached disk, off-host rsync copy, 200-user load run, DNS/TLS exercise, and production/privacy sign-off remain unverified. |
 | Production deployment status | The Compose deployment is a single-host starting point, not a high-availability or regulatory-compliance certification. Do not infer approval to handle patient data from builds/tests. |
 
@@ -31,7 +31,7 @@ availability.
 | Prove restore and recovery objectives | A successful dump is not proof that a hospital can be restored. | A disposable PostgreSQL 17 DB round-trip using custom-format `pg_dump`, GPG AES-256, and `pg_restore` passed and verified a sample row. Still run the host scripts from the attached backup mount and remote copy; restore control-plane and tenant snapshots and verify revisions, records, authentication and tenant isolation. Record measured RPO/RTO and owner sign-off. |
 | Review production identity and privileged endpoints | The onboarding console uses high-privilege shared setup keys and currently stores entered keys in browser local storage. Confirm exposure boundaries and emergency access. | Production access uses named operator accounts or an approved access proxy, MFA, least privilege, key rotation, rate limiting, audit review, secure browser controls, and a tested revocation process. If shared keys remain, document compensating controls and restrict network/browser access. |
 | Verify database privilege and isolation | Bootstrap creates databases and tenant services connect using the configured PostgreSQL role. Over-privileged runtime access increases blast radius; insufficient privileges break onboarding. | Separate bootstrap/migration and runtime roles where feasible. Test that runtime cannot create/drop databases or read another tenant database, while approved provisioning can create one. Never expose PostgreSQL publicly. |
-| Rebuild reliable release gates | `.github/workflows/release-gates.yml` runs Python tests plus PostgreSQL 17 migration parity, pip-audit against both Python manifests, npm audit, UI utility tests and production build, development/production Compose config checks, production image build, and Trivy image scan on pushes and pull requests targeting `main`, `dev`, or `release/**`. Hosted run `39098168408` on PR #1 head `fd4e699` passed all four jobs. Branch protection returned 404 and repository rulesets returned 403 (plan/visibility restriction). `.github/dependabot.yml` configures weekly pip, npm, and GitHub Actions update PRs. | Merge through review and configure required branch-protection checks where available. Continue periodic dependency/image review and operational readiness work. |
+| Release gates and branch alignment | `.github/workflows/release-gates.yml` runs Python tests plus PostgreSQL 17 migration parity and dependency audits, UI install/audit/tests/build, Compose validation, production image build, and Trivy image scan. PR #13's coordinated Vite/plugin upgrade passed all four jobs and was merged to `main`; PR #14 synchronized `main` back into `dev` and passed all four jobs. `main` is an ancestor of `dev`; local `dev` was fast-forwarded to the merged sync commit. Dependabot PRs #3–#12 were resolved; tooling PR #13 was merged; no PRs are currently open. Branch-protection enforcement remains a repository-settings responsibility. | Continue periodic dependency/image review and operational readiness work. Do not infer staging or production readiness from branch alignment or passing CI. |
 | Validate privacy and clinical workflows in India | Feature tests are not clinical validation or a legal assessment, and deployment geography alone does not establish compliance. | Indian hospital clinical, privacy/security, and legal owners review applicable data-protection, cybersecurity, medical-record retention, consent, access, breach response, and ABDM obligations if applicable; sign off tested workflows and operational controls before live use. |
 
 ## P1 — Required for a supported first cohort (1–10 hospitals)
@@ -108,3 +108,32 @@ current quotes before selecting a production host.
 Update this document as items are completed, blocked, or superseded. Completion
 must reference test/restore evidence or an accountable owner and due date; do
 not mark an item complete based only on implementation code existing.
+
+## Current continuation — 2026-10-18
+
+- Repository branches are synchronized: `main` is at `04ca39c`; `dev` is at
+  merge commit `458585f`, which includes `main`. The local checkout is on `dev`
+  at that commit with a clean worktree. PR #14 performed the synchronization;
+  its Python/PostgreSQL, UI, Compose, and production-image checks passed.
+- Latest code release work is merged. No pull requests are open. This does
+  **not** mean the product is ready for live hospital data.
+- Next gate is an isolated staging rehearsal, not a production deployment:
+  use synthetic data and PostgreSQL 17; exercise fresh bootstrap, retained
+  volume restart, tenant provisioning, canary migration, schema parity, and
+  application smoke checks. Record the staging environment, commit, migration
+  heads, outcomes, and operator.
+- The opt-in repository tests were rerun locally against a fresh disposable
+  PostgreSQL 17 container: **2 passed** in 44.76 seconds (migration/schema
+  parity and encrypted dump/GPG/restore sample-row round-trip). The test
+  container and generated databases were removed afterward.
+- Before any live-data decision, an operator must run the encrypted host backup
+  script with the real protected passphrase file and independent remote
+  destination, verify remote checksums, restore into a new isolated PostgreSQL
+  database, and verify application records and attachment files. Record
+  measured recovery time and an agreed recovery-point objective. No production
+  host, remote destination, or protected key was available in this session, so
+  this operational drill remains **not run**.
+- Also outstanding: production secret/key recovery, database least-privilege
+  and tenant-isolation review, monitoring/alerting, DNS/TLS/firewall exercise,
+  and clinical/privacy owner sign-off. Do not use patient data until required
+  owners approve these controls.
