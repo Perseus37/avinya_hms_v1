@@ -20,7 +20,8 @@ services:
       test: ["CMD-SHELL", "pg_isready -p $$POSTGRES_PORT -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 3s
       timeout: 3s
-      retries: 5
+      retries: 10
+      start_period: 10s
 
   db-init:
     build: .
@@ -101,6 +102,12 @@ services:
       - "127.0.0.1:${CONTROL_PLANE_PUBLISHED_PORT:?CONTROL_PLANE_PUBLISHED_PORT is required}:${CONTROL_PLANE_PORT:?CONTROL_PLANE_PORT is required}"
     volumes:
       - hms_backups:/app/backups
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f \"http://localhost:$$CONTROL_PLANE_PORT/\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     depends_on:
       db:
         condition: service_healthy
@@ -124,9 +131,13 @@ services:
       - "${BACKUP_OUTPUT_DIR:?BACKUP_OUTPUT_DIR is required}"
     volumes:
       - hms_backups:/app/backups
+    healthcheck:
+      disable: true
     depends_on:
       db:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
 
   backup-vault:
     image: avinya-hms-api:latest
@@ -144,6 +155,8 @@ services:
     volumes:
       - hms_backups:/source:ro
       - hms_vault_storage:/vault
+    healthcheck:
+      disable: true
 
   test-runner:
     build:

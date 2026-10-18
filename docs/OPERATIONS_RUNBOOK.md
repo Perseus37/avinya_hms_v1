@@ -78,6 +78,13 @@ tenant database and Redis; Redis may be reported degraded while the DB check
 still passes, so read the JSON response. The app logs include request IDs;
 capture that ID when investigating an HTTP error.
 
+The API container's healthcheck calls `/health/ready`; the onboarding portal
+checks its own listener on `CONTROL_PLANE_PORT`. The backup sidecar and vault
+do not serve HTTP, so they intentionally have no inherited API healthcheck.
+Check their logs and backup freshness instead. On first startup, the backup
+sidecar waits for `db-init` to finish; transient PostgreSQL connection errors
+are logged and retried with backoff.
+
 Check database/storage pressure and host monitoring using the VM/provider
 tools. Compose does not provide a complete alerting, log-retention, uptime, or
 off-host monitoring system. The browser API inspector is session-local and
@@ -629,16 +636,24 @@ tenant identity, timestamp and access to the correct backup key through the
 approved secret-management process. Do not print or commit the decrypted dump
 or key.
 
-The current restore script runs `pg_restore --clean --if-exists` against the
-named target database, so an existing target may be overwritten. Its CLI
-accepts the backup key as an argument; process arguments may be visible to
-other privileged processes and shell history may retain them. Use a controlled
-maintenance host/session, restrict operator access and clear temporary
-artifacts. A safer secret-input mechanism should be implemented before
-routine production restore use.
+For PostgreSQL 17 host backups described in section 6, use
+`deployments/restore-postgres.sh`. It reads the protected passphrase file from
+`GPG_PASSPHRASE_FILE`, checks the snapshot checksum manifest when present and
+validates the encrypted archive, requires a new database name beginning with
+`restore_`, and refuses to overwrite an existing database. It restores one
+database; global role definitions and attachment archives require separate,
+reviewed handling.
 
-Example shape only—replace all placeholders using the protected operator
-procedure; never paste real keys into a shared terminal transcript:
+Do not confuse that deployment script with the legacy tenant helper
+`backend/scripts/restore_tenant.py` shown below. The legacy helper accepts its
+encryption key on the command line, which may expose it through process
+arguments or shell history, and it has different overwrite behavior. Do not
+use it for routine production recovery until its secret-input and target
+database safeguards have been reviewed and improved.
+
+Legacy helper example only—not the recommended PostgreSQL 17 host-backup
+restore path. Replace placeholders using the protected operator procedure;
+never paste real keys into a shared terminal transcript:
 
 ```powershell
 docker compose exec api python backend/scripts/restore_tenant.py `

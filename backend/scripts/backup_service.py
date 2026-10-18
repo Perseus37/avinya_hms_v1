@@ -16,6 +16,7 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
 # Ensure core modules are importable when executed as a standalone script
 _BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -33,6 +34,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("avinya.backup")
 
 _running = True
+INITIAL_RETRY_SECONDS = 5
+MAX_RETRY_SECONDS = 60
 
 
 def _handle_signal(signum, frame):
@@ -115,6 +118,31 @@ def run_backup_cycle(output_dir: Path) -> int:
     return count
 
 
+def _wait(seconds: int) -> None:
+    for _ in range(seconds):
+        if not _running:
+            break
+        time.sleep(1)
+
+
+def run_backup_daemon(output_dir: Path, interval: int) -> None:
+    retry_delay = INITIAL_RETRY_SECONDS
+    while _running:
+        try:
+            run_backup_cycle(output_dir)
+        except OperationalError as exc:
+            logger.warning(
+                "Backup cycle could not connect to PostgreSQL (%s); retrying in %d seconds.",
+                exc,
+                retry_delay,
+            )
+            _wait(retry_delay)
+            retry_delay = min(retry_delay * 2, MAX_RETRY_SECONDS)
+        else:
+            retry_delay = INITIAL_RETRY_SECONDS
+            _wait(interval)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Avinya HMS Encrypted Backup Service")
     parser.add_argument("--daemon", action="store_true", help="Run continuously as a background sidecar")
@@ -172,12 +200,7 @@ def main():
         return
 
     logger.info("Starting encrypted backup daemon (interval=%ds)...", args.interval)
-    while _running:
-        run_backup_cycle(out_dir)
-        for _ in range(args.interval):
-            if not _running:
-                break
-            time.sleep(1)
+    run_backup_daemon(out_dir, args.interval)
 
 
 if __name__ == "__main__":
