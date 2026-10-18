@@ -9,11 +9,14 @@ from backend.control_plane.app import app as control_plane_app
 def _get_cp_client(client: TestClient) -> TestClient:
     if get_control_db in client.app.dependency_overrides:
         control_plane_app.dependency_overrides[get_control_db] = client.app.dependency_overrides[get_control_db]
-    return TestClient(control_plane_app)
+    return TestClient(
+        control_plane_app,
+        headers={"X-Control-Plane-Secret": settings.CONTROL_PLANE_MASTER_KEY},
+    )
 
 
 def test_01_control_plane_blueprints_pricing_catalog_and_fleet_overview(client):
-    """Scenario 1: Verify /api/blueprints, /api/pricing/catalog (12 modules + 4 bundles), and /api/fleet/overview."""
+    """Scenario 1: Verify /api/blueprints, /api/pricing/catalog, and /api/fleet/overview."""
     cp = _get_cp_client(client)
     bp_res = cp.get("/api/blueprints")
     assert bp_res.status_code == 200
@@ -23,7 +26,7 @@ def test_01_control_plane_blueprints_pricing_catalog_and_fleet_overview(client):
 
     prc_res = cp.get("/api/pricing/catalog")
     assert prc_res.status_code == 200
-    assert len(prc_res.json()["modules"]) == 12
+    assert len(prc_res.json()["modules"]) == 17
     bundle_codes = {b["code"] for b in prc_res.json()["bundles"]}
     assert "BUNDLE_SURGICAL_SUITE" in bundle_codes
     assert "BUNDLE_TOTAL_HOSPITAL" in bundle_codes

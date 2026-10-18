@@ -8,7 +8,7 @@ import {
   formatRupeesInput,
 } from "../lib/constants";
 
-export default function HospitalDrawer({ tenant, onClose, request, notify, masterKey, busyKey, refreshHospital, catalogs }) {
+export default function HospitalDrawer({ tenant, onClose, request, notify, busyKey, refreshHospital, catalogs }) {
   const { modules = [], bundles = [] } = catalogs || {};
   const [drawerOutput, setDrawerOutput] = useState(null);
   const [snapshots, setSnapshots] = useState(tenant.snapshots || []);
@@ -256,7 +256,7 @@ export default function HospitalDrawer({ tenant, onClose, request, notify, maste
             autoFeeInr={drawerQuote.autoCycleFee} suffix={drawerQuote.suffix}
             isUnlocked={drwForm.customFeeUnlocked} onUnlockChange={(v) => setDrwForm((p) => ({ ...p, customFeeUnlocked: v }))}
             customFeeInr={drwForm.custom_fee_inr} onCustomFeeChange={(val) => setDrwForm((p) => ({ ...p, custom_fee_inr: val }))}
-            masterKey={masterKey} notify={notify}
+            notify={notify}
           />
 
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2">

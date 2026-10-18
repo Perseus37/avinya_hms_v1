@@ -16,7 +16,10 @@ def test_01_websocket_waiting_room_public_connection_and_heartbeat(client):
 def test_02_websocket_authenticated_streams_reject_unauthorized_tokens(client):
     """Scenario 2: Protected streams (panic_labs, er_trauma) close unauthorized connections with code 1008."""
     with pytest.raises(WebSocketDisconnect):
-        with client.websocket_connect("/v1/ws/panic_labs?token=invalid_token&tenant_slug=default") as ws:
+        with client.websocket_connect(
+            "/v1/ws/panic_labs?tenant_slug=default",
+            subprotocols=["bearer", "invalid_token"],
+        ) as ws:
             ws.receive_text()
 
 
@@ -41,8 +44,15 @@ def test_websocket_authorizes_requested_stream_and_rejects_wildcard_for_staff(
     assert doctor_login.status_code == 200
     doctor_token = doctor_login.json()["access_token"]
 
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(
+            f"/v1/ws/panic_labs?token={doctor_token}&tenant_slug=default"
+        ):
+            pass
+
     with client.websocket_connect(
-        f"/v1/ws/panic_labs?token={doctor_token}&tenant_slug=default"
+        "/v1/ws/panic_labs?tenant_slug=default",
+        subprotocols=["bearer", doctor_token],
     ) as ws:
         ws.send_text("ping")
         assert json.loads(ws.receive_text())["type"] == "pong"
@@ -56,14 +66,16 @@ def test_websocket_authorizes_requested_stream_and_rejects_wildcard_for_staff(
     billing_token = billing_login.json()["access_token"]
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect(
-            f"/v1/ws/panic_labs?token={billing_token}&tenant_slug=default"
+            "/v1/ws/panic_labs?tenant_slug=default",
+            subprotocols=["bearer", billing_token],
         ):
             pass
 
     for stream in ("all", "unknown_stream"):
         with pytest.raises(WebSocketDisconnect):
             with client.websocket_connect(
-                f"/v1/ws/{stream}?token={doctor_token}&tenant_slug=default"
+                f"/v1/ws/{stream}?tenant_slug=default",
+                subprotocols=["bearer", doctor_token],
             ):
                 pass
 
@@ -101,7 +113,8 @@ def test_websocket_rejects_missing_users_even_with_valid_jwt(
     )
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect(
-            f"/v1/ws/panic_labs?token={token}&tenant_slug=default"
+            "/v1/ws/panic_labs?tenant_slug=default",
+            subprotocols=["bearer", token],
         ):
             pass
 

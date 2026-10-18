@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from backend.domains.identity.models import GenderEnum, UserStatusEnum
 
@@ -53,12 +53,25 @@ class DoctorProfileCreate(BaseModel):
 class UserCreate(BaseModel):
     login_id: str
     email: EmailStr
-    password: str
+    password: str = Field(min_length=12, max_length=128)
     full_name: str
     phone_number: Optional[str] = None
     gender: GenderEnum = GenderEnum.OTHER
     role_ids: List[int]
     doctor_profile: Optional[DoctorProfileCreate] = None
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, value: str) -> str:
+        character_classes = (
+            any(char.islower() for char in value),
+            any(char.isupper() for char in value),
+            any(char.isdigit() for char in value),
+            any(not char.isalnum() for char in value),
+        )
+        if sum(character_classes) < 3:
+            raise ValueError("Password must use at least three character classes.")
+        return value
 
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None

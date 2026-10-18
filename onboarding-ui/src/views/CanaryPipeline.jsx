@@ -1,13 +1,13 @@
 import React from 'react';
 import { Loader2, GitBranch } from 'lucide-react';
 
-export default function CanaryPipeline({ schemaParity, request, notify, syncAll, masterKey, busyKey }) {
+export default function CanaryPipeline({ schemaParity, request, notify, syncAll, busyKey }) {
   const executeFleetSync = async () => {
     if (!window.confirm("WARNING: This will apply the current Alembic head migration to ALL active cloud hospitals. Proceed?")) return;
     try {
       const d = await request("/api/tenants/sync-fleet", {
         method: "POST",
-        body: JSON.stringify({ master_setup_key: masterKey.trim() }),
+        body: JSON.stringify({}),
       }, "sync-all-fleet");
       notify(`Stage 2 Complete: Synced ${d.synced_tenants_count} hospitals.`);
       await syncAll(true);
@@ -20,7 +20,7 @@ export default function CanaryPipeline({ schemaParity, request, notify, syncAll,
     try {
       const d = await request(`/api/tenants/${slug}/sync`, {
         method: "POST",
-        body: JSON.stringify({ master_setup_key: masterKey.trim() }),
+        body: JSON.stringify({}),
       }, `sync-${slug}`);
       notify(d.message);
       await syncAll(true);

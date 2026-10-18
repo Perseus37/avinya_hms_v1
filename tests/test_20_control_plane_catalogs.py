@@ -45,7 +45,8 @@ def test_control_plane_catalog_seed_is_idempotent_and_preserves_edits(multi_tena
 
         seed_control_plane(db)
 
-        assert len(get_module_catalog(db)) == 12
+        assert len(get_module_catalog(db)) == 17
+        assert {"ambulance", "dietary", "cssd", "mortuary", "workforce"} <= set(get_module_catalog(db))
         assert get_module_catalog(db)["opd"]["base_annual_price_paise"] == 123
         assert len(get_bundle_catalog(db)) == 6
         assert len(get_blueprint_catalog(db)) == 5
@@ -389,7 +390,7 @@ def test_onboarding_catalog_api_returns_seeded_catalogs_and_migration_schemas(
         blueprints = client.get("/api/blueprints", headers=headers)
 
     assert pricing.status_code == 200
-    assert len(pricing.json()["modules"]) == 12
+    assert len(pricing.json()["modules"]) == 17
     assert len(pricing.json()["bundles"]) == 6
     migration_schemas = pricing.json()["migrationSchemas"]
     assert set(migration_schemas) == set(get_migration_models())
@@ -419,6 +420,49 @@ def test_onboarding_catalog_api_rejects_invalid_control_plane_secret(monkeypatch
         )
 
     assert response.status_code == 401
+
+
+def test_migration_preview_resolves_tenant_for_default_skip_policy(
+    multi_tenant_env, monkeypatch
+):
+    control_session_factory = multi_tenant_env["control_session_factory"]
+
+    def override_control_db():
+        with control_session_factory() as db:
+            yield db
+
+    monkeypatch.setitem(
+        control_plane_app.dependency_overrides, get_control_db, override_control_db
+    )
+    monkeypatch.setattr(settings, "CONTROL_PLANE_MASTER_KEY", "test-control-plane-key")
+    mapping = {
+        "mrn": {"source_column": "mrn"},
+        "full_name": {"source_column": "full_name"},
+        "date_of_birth": {"source_column": "date_of_birth"},
+        "gender": {"source_column": "gender"},
+    }
+    with TestClient(control_plane_app) as client:
+        response = client.post(
+            "/api/migration/default/preview-mapping",
+            headers={"X-Control-Plane-Secret": "test-control-plane-key"},
+            data={
+                "master_setup_key": settings.MASTER_ONBOARDING_KEY,
+                "entity_type": "PATIENTS",
+                "node_mapping_json": json.dumps(mapping),
+                "duplicate_field": "mrn",
+            },
+            files={
+                "file": (
+                    "patients.csv",
+                    b"mrn,full_name,date_of_birth,gender\nMRN-1,Test Patient,1980-01-02,FEMALE\n",
+                    "text/csv",
+                )
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["duplicate_policy"] == "skip"
+    assert response.json()["previews"][0]["data"]["mrn"] == "MRN-1"
 
 
 def test_tenant_url_uses_environment_template(monkeypatch):

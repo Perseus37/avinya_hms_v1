@@ -3,7 +3,7 @@ import { Layers, Loader2, Zap } from 'lucide-react';
 import KeyGatedFeeOverride from '../components/KeyGatedFeeOverride';
 import { INR, calculateDynamicPrice, fmtInr, formatRupees } from '../lib/constants';
 
-export default function ProvisioningStudio({ request, notify, syncAll, masterKey, busyKey, catalogs }) {
+export default function ProvisioningStudio({ request, notify, syncAll, busyKey, catalogs }) {
   const { modules = [], bundles = [], blueprints = [] } = catalogs || {};
   const [wizardStep, setWizardStep] = useState(1);
   const [provResult, setProvResult] = useState(null);
@@ -60,7 +60,6 @@ export default function ProvisioningStudio({ request, notify, syncAll, masterKey
       const data = await request("/api/provision", {
         method: "POST",
         body: JSON.stringify({
-          master_setup_key: masterKey.trim(),
           hospital_name: provForm.hospital_name.trim(),
           subdomain_slug: provForm.subdomain_slug.trim().toLowerCase(),
           branch_code: provForm.branch_code.trim().toUpperCase(),
@@ -175,7 +174,7 @@ export default function ProvisioningStudio({ request, notify, syncAll, masterKey
                   <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs">
                     <div className="font-bold text-amber-500">Blueprint catalog is not loaded.</div>
                     <p className="theme-text-muted mt-1">
-                      Enter the Master Vendor Key and click Sync Cluster in the sidebar. Catalogs are seeded by the API migration startup; no separate seed command is normally needed.
+                      Sign in with a named operator, then click Sync Cluster in the sidebar. Catalogs are seeded by API migration startup; no separate seed command is normally needed.
                     </p>
                   </div>
                 )}
@@ -255,7 +254,7 @@ export default function ProvisioningStudio({ request, notify, syncAll, masterKey
                 autoFeeInr={quote.autoCycleFee} suffix={quote.suffix}
                 isUnlocked={provForm.customFeeUnlocked} onUnlockChange={(v) => setProvForm(p => ({ ...p, customFeeUnlocked: v }))}
                 customFeeInr={provForm.custom_fee_inr} onCustomFeeChange={(val) => setProvForm(p => ({ ...p, custom_fee_inr: val }))}
-                masterKey={masterKey} notify={notify}
+                notify={notify}
               />
 
               <div className="flex justify-between pt-3">

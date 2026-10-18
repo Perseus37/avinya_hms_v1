@@ -1,4 +1,5 @@
 import hashlib
+import ipaddress
 import json
 from datetime import datetime, timezone
 from fastapi import Depends, Header, HTTPException, Request, status
@@ -11,7 +12,7 @@ from backend.core.config import settings
 from backend.control_plane.models import FederatedNode
 from backend.core.database import TenantContext, get_control_db, get_db, get_redis, resolve_tenant_context
 from backend.domains.facility.models import Bed
-from backend.domains.identity.models import Permission, Role, User, UserStatusEnum
+from backend.domains.identity.models import AuthSession, Permission, Role, User, UserStatusEnum
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/api/auth/login")
 
@@ -46,12 +47,26 @@ def get_current_user(
         token_tenant: str = payload.get("tenant_slug")
         if user_id is None or token_tenant != tenant.subdomain_slug:
             raise credentials_exception
+        token_id = payload.get("jti")
     except jwt.InvalidTokenError:
         raise credentials_exception
 
     user = db.get(User, int(user_id))
     if not user or user.status != UserStatusEnum.ACTIVE:
         raise credentials_exception
+    if token_id is not None:
+        auth_session = db.get(AuthSession, token_id)
+        if (
+            not auth_session
+            or auth_session.user_id != user.id
+            or auth_session.revoked_at is not None
+        ):
+            raise credentials_exception
+        expires_at = auth_session.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= datetime.now(timezone.utc):
+            raise credentials_exception
 
     # Populate audit actor ID for the SQLAlchemy before_flush listener in models.py
     db.info["audit_user_id"] = user.id
@@ -114,13 +129,21 @@ class RequireLicensedModule:
                 if tenant_ctx.enabled_modules_json
                 else {"all": True}
             )
-        except Exception:
-            enabled_modules = {"all": True}
+        except (TypeError, json.JSONDecodeError):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Hospital module licensing configuration is invalid.",
+            )
+        if not isinstance(enabled_modules, dict):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Hospital module licensing configuration is invalid.",
+            )
 
         if enabled_modules.get("all") is True:
             return
 
-        if not enabled_modules.get(self.module_key, True):
+        if not enabled_modules.get(self.module_key, False):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Module '{self.module_key}' is not enabled under your hospital's current license package.",
@@ -165,11 +188,34 @@ class RateLimiter:
         if not redis_client:
             return
 
-        # INFRA-001: Extract true client IP through Traefik reverse proxy
-        forwarded_for = request.headers.get("X-Forwarded-For")
-        client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else request.client.host if request.client else "unknown"
-        fed_prefix = request.headers.get("X-Federation-API-Key", "")[:14]
-        actor = fed_prefix if fed_prefix else client_ip
+        client_ip = request.client.host if request.client else "unknown"
+        try:
+            trusted_proxies = [
+                ipaddress.ip_network(cidr.strip(), strict=False)
+                for cidr in settings.TRUSTED_PROXY_IPS.split(",")
+                if cidr.strip()
+            ]
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Trusted proxy configuration is invalid.",
+            ) from exc
+        try:
+            peer_ip = ipaddress.ip_address(client_ip)
+        except ValueError:
+            peer_ip = None
+        if peer_ip and any(peer_ip in network for network in trusted_proxies):
+            forwarded_ips = []
+            for value in request.headers.get("X-Forwarded-For", "").split(","):
+                try:
+                    forwarded_ips.append(ipaddress.ip_address(value.strip()))
+                except ValueError:
+                    continue
+            for candidate in reversed([*forwarded_ips, peer_ip]):
+                if not any(candidate in network for network in trusted_proxies):
+                    client_ip = str(candidate)
+                    break
+        actor = client_ip
         hostname = (request.url.hostname or "").lower().rstrip(".")
         base_domain = settings.BASE_DOMAIN.strip(".").lower()
         tenant_slug = settings.DEFAULT_TENANT_SLUG

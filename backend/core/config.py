@@ -9,6 +9,14 @@ class Settings(BaseSettings):
     ENVIRONMENT: str
     DEVELOPMENT_AUTO_CREATE_SCHEMA: bool
     CONTROL_PLANE_MASTER_KEY: Optional[str] = None
+    CONTROL_PLANE_ACCESS_TOKEN_MINUTES: int = Field(default=15, ge=5, le=60)
+    LOGIN_LOCKOUT_MINUTES: int = Field(default=15, ge=1, le=1440)
+    MFA_REQUIRED_FOR_PRIVILEGED: bool = True
+    TRUSTED_PROXY_IPS: str = ""
+    WS_MAX_CONNECTIONS: int = Field(default=100, ge=1, le=10000)
+    HL7_SHARED_SECRET: Optional[str] = None
+    HL7_TLS_CERT_FILE: Optional[str] = None
+    HL7_TLS_KEY_FILE: Optional[str] = None
     TENANT_URL_TEMPLATE: Optional[str] = None
     API_PORT: int = Field(gt=0, le=65535)
     API_SERVICE_HOST: str
@@ -54,6 +62,8 @@ class Settings(BaseSettings):
 
     # 4. Security & Initial Seed
     SECRET_KEY: str = Field(min_length=32)
+    ENVELOPE_ENCRYPTION_PREVIOUS_SECRET_KEY: Optional[str] = None
+    ENVELOPE_ENCRYPTION_PREVIOUS_SALT: Optional[str] = None
     MASTER_ONBOARDING_KEY: str = Field(min_length=16)
     ALGORITHM: str
     ACCESS_TOKEN_EXPIRE_MINUTES: int

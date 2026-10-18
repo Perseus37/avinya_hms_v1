@@ -150,7 +150,15 @@ def resolve_tenant_context(request: Request) -> TenantContext:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="This hospital runs On-Premise. Route requests to its local server endpoint.",
             )
-        if getattr(tenant, "maintenance_mode", False) and request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        is_login_request = request.url.path.rstrip("/") in {
+            "/api/auth/login",
+            "/v1/api/auth/login",
+        }
+        if (
+            getattr(tenant, "maintenance_mode", False)
+            and request.method in ("POST", "PUT", "PATCH", "DELETE")
+            and not is_login_request
+        ):
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=tenant.maintenance_notice

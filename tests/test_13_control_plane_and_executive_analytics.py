@@ -13,7 +13,10 @@ def _get_onboarding_client(client: TestClient) -> TestClient:
     """Wires the control-plane app to the main test suite's control DB override."""
     if get_control_db in client.app.dependency_overrides:
         control_plane_app.dependency_overrides[get_control_db] = client.app.dependency_overrides[get_control_db]
-    return TestClient(control_plane_app)
+    return TestClient(
+        control_plane_app,
+        headers={"X-Control-Plane-Secret": settings.CONTROL_PLANE_MASTER_KEY},
+    )
 
 
 def test_01_control_plane_list_tenants_and_operational_telemetry(client):

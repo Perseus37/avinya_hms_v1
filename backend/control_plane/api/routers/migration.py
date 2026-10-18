@@ -19,7 +19,10 @@ from backend.control_plane.services.migration_catalog import (
     get_migration_models,
 )
 from backend.core.database import ControlSessionLocal, get_control_db, tenant_engine_pool
-from backend.control_plane.services.auth import _verify_vendor_key
+from backend.control_plane.services.auth import (
+    _verify_vendor_key,
+    verify_control_plane_secret,
+)
 from backend.core.config import settings
 from backend.domains.billing.models import Invoice
 from backend.domains.identity.models import User
@@ -27,7 +30,11 @@ from backend.domains.identity.passwords import pwd_context
 from backend.domains.patients.models import Patient
 
 logger = logging.getLogger("avinya.migration")
-router = APIRouter(prefix="/api/migration", tags=["Control Plane Visual ETL Studio"])
+router = APIRouter(
+    prefix="/api/migration",
+    tags=["Control Plane Visual ETL Studio"],
+    dependencies=[Depends(verify_control_plane_secret)],
+)
 
 ENTITY_MODEL_MAP = get_migration_models()
 SYSTEM_FIELDS = {"created_at", "updated_at", "created_by_id", "updated_by_id"}
@@ -441,6 +448,11 @@ async def preview_visual_node_mapping(
     control_db: Session = Depends(get_control_db),
 ):
     _verify_vendor_key(master_setup_key)
+    tenant = control_db.execute(
+        select(TenantRegistry).where(TenantRegistry.subdomain_slug == slug)
+    ).scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found.")
     try:
         mapping = json.loads(node_mapping_json)
     except json.JSONDecodeError as exc:

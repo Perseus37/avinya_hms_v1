@@ -11,6 +11,7 @@ import MigrationStudio from "./views/MigrationStudio";
 import CanaryPipeline from "./views/CanaryPipeline";
 import FederationMesh from "./views/FederationMesh";
 import AuditVault from "./views/AuditVault";
+import OperatorLogin from "./components/OperatorLogin";
 import useControlPlaneApi from "./hooks/useControlPlaneApi";
 import useFleetData from "./hooks/useFleetData";
 
@@ -26,15 +27,21 @@ function formatNotificationMessage(message) {
 
 export default function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem("avinya_cp_theme") || "obsidian-gold");
-  const [masterKey, setMasterKey] = useState(() => localStorage.getItem("avinya_master_key") || "");
-  const [controlPlaneKey, setControlPlaneKey] = useState(() => localStorage.getItem("avinya_control_plane_key") || "");
-  const [autoSyncOnMount] = useState(() => Boolean(localStorage.getItem("avinya_master_key")?.trim()));
+  const [operatorSession, setOperatorSession] = useState(null);
   const [activeView, setActiveView] = useState("command-center");
 
   // Global State
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
-  const { request, busyKey, apiLogs } = useControlPlaneApi(masterKey, controlPlaneKey);
+  const clearOperatorSession = useCallback(() => setOperatorSession(null), []);
+  const { request, busyKey, apiLogs } = useControlPlaneApi(
+    operatorSession?.token,
+    clearOperatorSession,
+  );
+  useEffect(() => {
+    localStorage.removeItem("avinya_master_key");
+    localStorage.removeItem("avinya_control_plane_key");
+  }, []);
   const notify = useCallback((msg, type = "ok") => {
     const id = Date.now() + Math.random();
     setToast({ id, msg: formatNotificationMessage(msg), type });
@@ -57,21 +64,10 @@ export default function App() {
     lastSyncedAt,
     lastSyncError,
   } = useFleetData({
-    masterKey,
+    operatorToken: operatorSession?.token,
     request,
     notify,
-    autoSync: autoSyncOnMount,
   });
-
-  useEffect(() => {
-    const savedControlPlaneKey = localStorage.getItem("avinya_control_plane_key") || "";
-    if (controlPlaneKey.trim() === savedControlPlaneKey.trim()) return;
-    if (controlPlaneKey.trim()) {
-      localStorage.setItem("avinya_control_plane_key", controlPlaneKey.trim());
-    } else {
-      localStorage.removeItem("avinya_control_plane_key");
-    }
-  }, [controlPlaneKey]);
 
   // Telemetry & UI State
   const [devtoolsOpen, setDevtoolsOpen] = useState(false);
@@ -112,19 +108,39 @@ export default function App() {
     if (result) setSelectedTenant(result);
   };
 
+  const signOut = async () => {
+    try {
+      await request("/api/auth/logout", { method: "POST" }, "operator-logout");
+    } catch (err) {
+      notify(err.message, "err");
+    } finally {
+      clearOperatorSession();
+      setSelectedTenant(null);
+    }
+  };
+
   const viewProps = {
     tenants, overview, analytics, schemaParity, topology, auditLogs,
-    catalogs, request, notify, syncAll, masterKey, busyKey, inspectHospital, refreshHospital,
+    catalogs, request, notify, syncAll, busyKey, inspectHospital, refreshHospital,
     loading, lastSyncedAt, lastSyncError
   };
+
+  if (!operatorSession?.token) {
+    return (
+      <OperatorLogin
+        request={request}
+        onAuthenticated={setOperatorSession}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col md:h-screen md:min-h-0 md:overflow-hidden md:flex-row">
       <Sidebar
         theme={theme} setTheme={setTheme}
         activeView={activeView} setActiveView={setActiveView}
-        masterKey={masterKey} setMasterKey={setMasterKey}
-        controlPlaneKey={controlPlaneKey} setControlPlaneKey={setControlPlaneKey}
+        operatorEmail={operatorSession.email}
+        onSignOut={signOut}
         syncAll={syncAll} loading={loading}
         apiLogs={apiLogs} setDevtoolsOpen={setDevtoolsOpen}
       />
@@ -156,7 +172,7 @@ export default function App() {
 
         {/* DOM-Persisted Canvas View */}
         <div className={activeView === "migration-studio" ? "h-full w-full block" : "hidden"}>
-          <MigrationStudio tenants={tenants} request={request} masterKey={masterKey} catalogs={catalogs} notify={notify} />
+          <MigrationStudio tenants={tenants} request={request} catalogs={catalogs} notify={notify} />
         </div>
 
         {activeView === "canary-migrations" && <CanaryPipeline {...viewProps} />}

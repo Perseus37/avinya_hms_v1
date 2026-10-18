@@ -15,6 +15,7 @@ from backend.domains.procurement.models import (
     GoodsReceiptItem,
     PurchaseOrder,
     POStatusEnum,
+    GRNStatusEnum,
     VendorInvoice,
     VendorInvoiceItem,
     VendorInvoiceStatusEnum,

@@ -1,3 +1,9 @@
+from sqlalchemy.orm import Session
+
+from backend.domains.diagnostics.models import DiagnosticTask
+from backend.domains.integrations import listener
+
+
 def _setup_cbc_bundle(client, superuser_headers):
     """Helper to create Lab Category, 2 atomic tests (RBC, WBC), and 1 Order Set package (CBC)."""
     cat = client.post(
@@ -191,3 +197,74 @@ def test_08_second_verifier_completes_task_and_auto_completes_order(client, supe
 
     final_order = client.get(f"/v1/api/diagnostics/orders/{order['id']}", headers=doctor_headers).json()
     assert final_order["status"] == "COMPLETED"
+
+
+def test_mllp_parser_discards_stray_end_marker_and_extracts_frames():
+    frame = b"MSH|message"
+    frames, remainder = listener.extract_mllp_frames(
+        listener.FS_CR
+        + listener.VT
+        + frame
+        + listener.FS_CR
+        + listener.VT
+        + b"partial"
+    )
+
+    assert frames == [frame]
+    assert remainder == listener.VT + b"partial"
+
+
+def test_mllp_parser_rejects_oversized_incomplete_frame():
+    import pytest
+
+    payload = listener.VT + (b"x" * (listener.MAX_MLLP_MESSAGE_BYTES + 1))
+    with pytest.raises(ValueError, match="size limit"):
+        listener.extract_mllp_frames(payload)
+
+
+def test_hl7_result_cannot_overwrite_verified_diagnostic_task(
+    client, superuser_headers, doctor_headers, multi_tenant_env, monkeypatch
+):
+    items = _setup_cbc_bundle(client, superuser_headers)
+    patient = client.post(
+        "/v1/api/patients",
+        headers=doctor_headers,
+        json={
+            "full_name": "Verified LIS Patient",
+            "date_of_birth": "1990-01-01T00:00:00Z",
+            "gender": "MALE",
+        },
+    ).json()
+    order = client.post(
+        "/v1/api/diagnostics/orders",
+        headers=doctor_headers,
+        json={"patient_id": patient["id"], "ordered_service_ids": [items["rbc"]["id"]]},
+    ).json()
+    task_id = order["tasks"][0]["id"]
+    assert client.patch(
+        f"/v1/api/diagnostics/tasks/{task_id}/result",
+        headers=doctor_headers,
+        json={"result_value": "5.1", "status": "RESULT_ENTERED"},
+    ).status_code == 200
+    assert client.patch(
+        f"/v1/api/diagnostics/tasks/{task_id}/result",
+        headers=superuser_headers,
+        json={"result_value": "5.1", "status": "VERIFIED"},
+    ).status_code == 200
+
+    monkeypatch.setattr(
+        listener, "ControlSessionLocal", multi_tenant_env["control_session_factory"]
+    )
+    raw_message = (
+        "MSH|^~\\&|DEVICE|HQ-HYD-01|AVINYA|HOSP|20261018||ORU^R01|CTL-VERIFIED|P|2.3\r"
+        f"OBX|1|NM|{task_id}^RBC||999|mg/dL\r"
+    )
+    control_id, success, message = listener.process_and_route_result(raw_message)
+
+    assert control_id == "CTL-VERIFIED"
+    assert success is False
+    assert "not eligible" in message
+    with Session(multi_tenant_env["tenant_engines"]["hms_default"]) as db:
+        task = db.get(DiagnosticTask, task_id)
+        assert task.status.value == "VERIFIED"
+        assert task.result_value == "5.1"

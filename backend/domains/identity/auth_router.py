@@ -6,19 +6,28 @@ clinical and operational modules.
 """
 
 from collections import defaultdict
+import base64
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from typing import Optional
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 import jwt
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from backend.core.config import settings
 from backend.core.database import get_db, resolve_tenant_context
 from backend.core.dependencies import RateLimiter, RequirePermission, get_current_user, validate_pagination, enforce_tenant_resource_quota
+from backend.core.mailer import send_email
 from backend.domains.identity.models import (
+    AuthSession,
     Department,
     DoctorProfile,
+    MfaRecoveryCode,
     Permission,
+    PasswordResetToken,
     Role,
     User,
     UserRole,
@@ -28,10 +37,173 @@ from backend.domains.identity.passwords import pwd_context
 from backend.schemas.common import PaginatedResponse
 from backend.domains.identity.schemas import DepartmentCreate, DepartmentResponse, DepartmentUpdate, PermissionResponse, RoleCreate, RoleResponse, RoleUpdate, TokenResponse, UserCreate, UserLogin, UserMeResponse, UserUpdate
 
-from backend.security.envelope import decrypt_tenant_secret
+from backend.security.envelope import decrypt_tenant_secret, encrypt_tenant_secret
 from backend.domains.policies.router import get_or_create_policy
+from backend.security.totp import matching_totp_counter, totp_code as _totp_code
 
 router = APIRouter(prefix="/api/auth", tags=["IAM & Auth"])
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=12, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_strength(cls, value: str) -> str:
+        return _validate_password(value)
+
+
+class PasswordResetRequest(BaseModel):
+    token: str = Field(min_length=32, max_length=128)
+    new_password: str = Field(min_length=12, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_strength(cls, value: str) -> str:
+        return _validate_password(value)
+
+
+class PasswordResetStartRequest(BaseModel):
+    email: EmailStr
+
+
+class MfaTokenRequest(BaseModel):
+    mfa_token: str = Field(min_length=32, max_length=4096)
+
+
+class MfaCodeRequest(MfaTokenRequest):
+    code: str = Field(min_length=6, max_length=32)
+
+
+class MfaDisableRequest(BaseModel):
+    password: str
+    code: str = Field(min_length=6, max_length=32)
+
+
+def _validate_password(value: str) -> str:
+    classes = (
+        any(char.islower() for char in value),
+        any(char.isupper() for char in value),
+        any(char.isdigit() for char in value),
+        any(not char.isalnum() for char in value),
+    )
+    if sum(classes) < 3:
+        raise ValueError("Password must use at least three character classes.")
+    return value
+
+
+def _requires_mfa(user: User) -> bool:
+    return user.is_superuser or any(
+        role.code in {"ROLE_ADMIN", "ROLE_HOSPITAL_ADMIN"} for role in user.roles
+    )
+
+
+def _matching_totp_counter(secret: str, code: str) -> Optional[int]:
+    return matching_totp_counter(secret, code)
+
+
+def _verify_mfa_code(db: Session, user: User, code: str) -> bool:
+    if not user.mfa_secret:
+        return False
+    secret = decrypt_tenant_secret(user.mfa_secret)
+    counter = _matching_totp_counter(secret, code)
+    if counter is not None:
+        if (
+            user.mfa_last_used_counter is not None
+            and counter <= user.mfa_last_used_counter
+        ):
+            return False
+        user.mfa_last_used_counter = counter
+        return True
+
+    recovery_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    recovery = db.execute(
+        select(MfaRecoveryCode)
+        .where(
+            MfaRecoveryCode.user_id == user.id,
+            MfaRecoveryCode.token_hash == recovery_hash,
+            MfaRecoveryCode.used_at.is_(None),
+        )
+        .with_for_update()
+    ).scalar_one_or_none()
+    if not recovery:
+        return False
+    recovery.used_at = datetime.now(timezone.utc)
+    return True
+
+
+def _issue_mfa_token(user: User, tenant, purpose: str) -> str:
+    now = datetime.now(timezone.utc)
+    return jwt.encode(
+        {
+            "sub": str(user.id),
+            "tenant_slug": tenant.subdomain_slug,
+            "branch_code": tenant.branch_code,
+            "purpose": purpose,
+            "exp": now + timedelta(minutes=5),
+        },
+        decrypt_tenant_secret(tenant.jwt_secret_key),
+        algorithm=settings.ALGORITHM,
+    )
+
+
+def _decode_mfa_token(token: str, tenant, purpose: str) -> int:
+    try:
+        payload = jwt.decode(
+            token,
+            decrypt_tenant_secret(tenant.jwt_secret_key),
+            algorithms=[settings.ALGORITHM],
+        )
+    except jwt.InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail="Invalid or expired MFA token.") from exc
+    subject = payload.get("sub")
+    if (
+        payload.get("purpose") != purpose
+        or payload.get("tenant_slug") != tenant.subdomain_slug
+        or not isinstance(subject, str)
+        or not subject.isdecimal()
+    ):
+        raise HTTPException(status_code=401, detail="Invalid or expired MFA token.")
+    return int(subject)
+
+
+def _issue_access_session(user: User, tenant, db: Session) -> str:
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    token_id = secrets.token_urlsafe(24)
+    token = jwt.encode(
+        {
+            "sub": str(user.id),
+            "tenant_slug": tenant.subdomain_slug,
+            "branch_code": tenant.branch_code,
+            "jti": token_id,
+            "iat": now,
+            "exp": expires_at,
+        },
+        decrypt_tenant_secret(tenant.jwt_secret_key),
+        algorithm=settings.ALGORITHM,
+    )
+    db.add(AuthSession(token_id=token_id, user_id=user.id, expires_at=expires_at))
+    return token
+
+
+def _complete_login(user: User, tenant, db: Session) -> dict[str, str]:
+    now = datetime.now(timezone.utc)
+    user.last_login_at = now
+    if user.first_login_at is None:
+        user.first_login_at = now
+    token = _issue_access_session(user, tenant, db)
+    db.commit()
+    return {"access_token": token, "token_type": "bearer"}
+
+
+def _revoke_user_sessions(db: Session, user_id: int) -> None:
+    db.execute(
+        update(AuthSession)
+        .where(AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(timezone.utc))
+    )
 
 
 def _require_role_delegation_authority(
@@ -59,9 +231,6 @@ def _require_role_delegation_authority(
             detail="Cannot assign roles containing permissions you do not possess.",
         )
 
-
-# MAX_FAILED_LOGIN_ATTEMPTS = get_or_create_policy(get_db).max_failed_login_attempts
-MAX_FAILED_LOGIN_ATTEMPTS = 5
 
 class CustomPermissionCreate(BaseModel):
     module: str = Field(min_length=2, max_length=50, description="Module name, e.g., Billing or Radiology")
@@ -99,11 +268,35 @@ def login(
     else:
         pwd_context.verify(payload.password, dummy_hash)
 
+    now = datetime.now(timezone.utc)
+    locked_until = user.locked_until if user else None
+    if locked_until and locked_until.tzinfo is None:
+        locked_until = locked_until.replace(tzinfo=timezone.utc)
+    if (
+        user
+        and user.status == UserStatusEnum.LOCKED
+        and locked_until is not None
+        and locked_until <= now
+    ):
+        user.status = UserStatusEnum.ACTIVE
+        user.failed_login_attempts = 0
+        user.locked_until = None
+
+    if user and user.status == UserStatusEnum.LOCKED:
+        raise HTTPException(
+            status_code=401,
+            detail="Account is locked." if is_valid_pwd else "Invalid credentials",
+        )
+
     if not user or not is_valid_pwd:
         if user:
             user.failed_login_attempts += 1
-            if user.failed_login_attempts >= MAX_FAILED_LOGIN_ATTEMPTS:
+            policy = get_or_create_policy(db)
+            if user.failed_login_attempts >= policy.max_failed_login_attempts:
                 user.status = UserStatusEnum.LOCKED
+                user.locked_until = now + timedelta(
+                    minutes=settings.LOGIN_LOCKOUT_MINUTES
+                )
             db.commit()
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
@@ -111,27 +304,231 @@ def login(
         raise HTTPException(status_code=401, detail=f"Account is {user.status.value}.")
 
     user.failed_login_attempts = 0
-    user.last_login_at = datetime.now(timezone.utc)
-    if user.first_login_at is None:
-        user.first_login_at = user.last_login_at
-    db.commit()
-
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode = {
-        "sub": str(user.id),
-        "tenant_slug": tenant.subdomain_slug,
-        "branch_code": tenant.branch_code,
-        "exp": expire,
-    }
-    signing_key = decrypt_tenant_secret(tenant.jwt_secret_key)
-    token = jwt.encode(to_encode, signing_key, algorithm=settings.ALGORITHM)
-    return {"access_token": token, "token_type": "bearer"}
+    user.locked_until = None
+    if user.mfa_enabled:
+        db.commit()
+        return {
+            "mfa_required": True,
+            "mfa_token": _issue_mfa_token(user, tenant, "mfa_login"),
+        }
+    if settings.MFA_REQUIRED_FOR_PRIVILEGED and _requires_mfa(user):
+        db.commit()
+        return {
+            "mfa_setup_required": True,
+            "mfa_token": _issue_mfa_token(user, tenant, "mfa_setup"),
+        }
+    return _complete_login(user, tenant, db)
 
 
 @router.get("/me", response_model=UserMeResponse)
 def get_logged_in_user(current_user: User = Depends(get_current_user)):
     """Return the currently authenticated user record without exposing secrets."""
     return current_user
+
+
+@router.post("/logout")
+def logout(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Revokes all active sessions for the authenticated user."""
+    _revoke_user_sessions(db, current_user.id)
+    db.commit()
+    return {"status": "success", "message": "All user sessions have been revoked."}
+
+
+@router.post("/password/change")
+def change_password(
+    payload: PasswordChangeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not pwd_context.verify(payload.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+    current_user.hashed_password = pwd_context.hash(payload.new_password)
+    current_user.password_changed_at = datetime.now(timezone.utc)
+    _revoke_user_sessions(db, current_user.id)
+    db.commit()
+    return {"status": "success", "message": "Password changed; sign in again."}
+
+
+@router.post("/password/forgot", status_code=status.HTTP_202_ACCEPTED)
+def request_password_reset(
+    payload: PasswordResetStartRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _: None = Depends(RateLimiter(scope="auth_password_reset", max_requests=5, window_seconds=300)),
+):
+    """Sends a single-use password reset token without revealing account existence."""
+    tenant = resolve_tenant_context(request)
+    user = db.execute(select(User).where(User.email == payload.email)).scalar_one_or_none()
+    if user and user.status == UserStatusEnum.ACTIVE:
+        now = datetime.now(timezone.utc)
+        db.query(PasswordResetToken).filter(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used_at.is_(None),
+        ).update({"used_at": now}, synchronize_session=False)
+        raw_token = secrets.token_urlsafe(32)
+        db.add(
+            PasswordResetToken(
+                user_id=user.id,
+                token_hash=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+                expires_at=now + timedelta(minutes=30),
+            )
+        )
+        db.commit()
+        reset_url = f"{settings.tenant_url(tenant.subdomain_slug)}/api/auth/password/reset"
+        background_tasks.add_task(
+            send_email,
+            user.email,
+            "Avinya HMS password reset",
+            f"Use this one-time token with POST {reset_url} to reset your password:\n\n{raw_token}\n\nThe token expires in 30 minutes. If you did not request this, ignore this message.",
+        )
+    return {"message": "If an active account matches that address, password reset instructions will be sent."}
+
+
+@router.post("/password/reset")
+def reset_password(
+    payload: PasswordResetRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(RateLimiter(scope="auth_password_reset_confirm", max_requests=10, window_seconds=300)),
+):
+    now = datetime.now(timezone.utc)
+    token_hash = hashlib.sha256(payload.token.encode("utf-8")).hexdigest()
+    reset = db.execute(
+        select(PasswordResetToken)
+        .where(PasswordResetToken.token_hash == token_hash)
+        .with_for_update()
+    ).scalar_one_or_none()
+    if not reset or reset.used_at is not None:
+        raise HTTPException(status_code=400, detail="Password reset token is invalid or expired.")
+    expires_at = reset.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= now:
+        raise HTTPException(status_code=400, detail="Password reset token is invalid or expired.")
+    user = db.get(User, reset.user_id)
+    if not user or user.status != UserStatusEnum.ACTIVE:
+        raise HTTPException(status_code=400, detail="Password reset token is invalid or expired.")
+    user.hashed_password = pwd_context.hash(payload.new_password)
+    user.password_changed_at = now
+    reset.used_at = now
+    _revoke_user_sessions(db, user.id)
+    db.commit()
+    return {"status": "success", "message": "Password reset; sign in with the new password."}
+
+
+@router.post("/mfa/enroll")
+def begin_mfa_enrollment(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    tenant = resolve_tenant_context(request)
+    return {
+        "mfa_token": _issue_mfa_token(current_user, tenant, "mfa_setup"),
+        "expires_in_seconds": 300,
+    }
+
+
+@router.post("/mfa/setup")
+def setup_mfa(
+    payload: MfaTokenRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    tenant = resolve_tenant_context(request)
+    user_id = _decode_mfa_token(payload.mfa_token, tenant, "mfa_setup")
+    user = db.get(User, user_id)
+    if not user or user.status != UserStatusEnum.ACTIVE:
+        raise HTTPException(status_code=401, detail="Account is not active.")
+    if user.mfa_enabled:
+        raise HTTPException(status_code=409, detail="MFA is already enabled.")
+    if user.mfa_secret:
+        secret = decrypt_tenant_secret(user.mfa_secret)
+    else:
+        secret = base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
+        user.mfa_secret = encrypt_tenant_secret(secret)
+        db.commit()
+    label = f"Avinya HMS:{user.email}"
+    uri = f"otpauth://totp/{label}?secret={secret}&issuer=Avinya%20HMS&algorithm=SHA1&digits=6&period=30"
+    return {"secret": secret, "otpauth_uri": uri}
+
+
+@router.post("/mfa/confirm")
+def confirm_mfa(
+    payload: MfaCodeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    tenant = resolve_tenant_context(request)
+    user_id = _decode_mfa_token(payload.mfa_token, tenant, "mfa_setup")
+    user = db.execute(select(User).where(User.id == user_id).with_for_update()).scalar_one_or_none()
+    if (
+        not user
+        or user.status != UserStatusEnum.ACTIVE
+        or user.mfa_enabled
+        or not user.mfa_secret
+    ):
+        raise HTTPException(status_code=400, detail="MFA enrollment has not been started.")
+    if not _verify_mfa_code(db, user, payload.code):
+        raise HTTPException(status_code=400, detail="Invalid MFA code.")
+    user.mfa_enabled = True
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    recovery_codes = [secrets.token_urlsafe(9) for _ in range(10)]
+    db.add_all(
+        MfaRecoveryCode(
+            user_id=user.id,
+            token_hash=hashlib.sha256(code.encode("utf-8")).hexdigest(),
+        )
+        for code in recovery_codes
+    )
+    result = _complete_login(user, tenant, db)
+    return {**result, "recovery_codes": recovery_codes}
+
+
+@router.post("/mfa/verify-login")
+def verify_mfa_login(
+    payload: MfaCodeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    tenant = resolve_tenant_context(request)
+    user_id = _decode_mfa_token(payload.mfa_token, tenant, "mfa_login")
+    user = db.execute(select(User).where(User.id == user_id).with_for_update()).scalar_one_or_none()
+    if (
+        not user
+        or user.status != UserStatusEnum.ACTIVE
+        or not user.mfa_enabled
+        or not user.mfa_secret
+        or not _verify_mfa_code(db, user, payload.code)
+    ):
+        raise HTTPException(status_code=401, detail="Invalid MFA challenge or code.")
+    return _complete_login(user, tenant, db)
+
+
+@router.post("/mfa/disable")
+def disable_mfa(
+    payload: MfaDisableRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user.mfa_enabled or not current_user.mfa_secret:
+        raise HTTPException(status_code=409, detail="MFA is not enabled.")
+    if not pwd_context.verify(payload.password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Password is incorrect.")
+    locked_user = db.execute(
+        select(User).where(User.id == current_user.id).with_for_update()
+    ).scalar_one()
+    if not _verify_mfa_code(db, locked_user, payload.code):
+        raise HTTPException(status_code=400, detail="Invalid MFA code.")
+    locked_user.mfa_enabled = False
+    locked_user.mfa_secret = None
+    locked_user.mfa_last_used_counter = None
+    _revoke_user_sessions(db, locked_user.id)
+    db.commit()
+    return {"status": "success", "message": "MFA disabled; sign in again."}
 
 
 # -----------------------------------------------------------------------------
@@ -217,6 +614,7 @@ def update_user_status(
     user.status = new_status
     if new_status == UserStatusEnum.ACTIVE:
         user.failed_login_attempts = 0
+        user.locked_until = None
     db.commit()
     return {"status": "success", "message": f"User {user.email} status updated to {new_status.value}"}
 
