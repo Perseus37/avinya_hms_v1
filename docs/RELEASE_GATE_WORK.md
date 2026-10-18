@@ -239,9 +239,12 @@ branches/tags were force-updated and verified clean. GitHub still exposes the
 old PR #1 head through its read-only `refs/pull/1/head` reference; only GitHub
 Support can purge retained PR/cached commit objects if desired. A local backup
 mirror of the pre-rewrite refs is retained in the session files temporarily.
-Open a `dev` -> `main` PR after updating this continuation record, then remove
-the temporary mirror and expire local unreachable objects once the new PR is
-created.
+Opened PR #2 to promote `dev` to `main`:
+https://github.com/sai1-crypto/avinya_hms/pull/2
+Both push-triggered and PR-triggered gates passed on its initial head
+`7957c2f`. The continuation-doc update itself will trigger another run; check
+that run before merging. Remove the temporary mirror and expire local
+unreachable objects after confirming the remote refs and final PR checks.
 
 ## Resume instructions
 
