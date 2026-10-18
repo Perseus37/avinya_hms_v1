@@ -228,11 +228,20 @@ PostgreSQL 17 migration parity and both dependency audits, UI audit/tests/build,
 development and production Compose validation, and production image build plus
 Trivy scan. Earlier runs found and resolved the ignored UI source directory,
 core dependencies needed by report imports, and optional mail SDKs needed by
-their integration tests. PR #1 remains open and has not been merged. The PR
-removes the tracked `deployments/apollo.env`, but its credential values remain
-in Git history. Rotate/revoke every credential that was stored there before
-deployment; do not reuse those values. History cleanup requires a separate
-coordinated plan.
+their integration tests. PR #1 has been merged into `dev`.
+
+The user confirmed that `deployments/apollo.env` contained dummy values and
+authorized rewriting history. `git-filter-repo` removed this path from all
+remote branch histories (`main`, `dev`, and the feature branch), all six local
+version tags, and the one published GitHub tag (`v4.5.0`); the five other
+version tags existed only in the local clone and were not published. Remote
+branches/tags were force-updated and verified clean. GitHub still exposes the
+old PR #1 head through its read-only `refs/pull/1/head` reference; only GitHub
+Support can purge retained PR/cached commit objects if desired. A local backup
+mirror of the pre-rewrite refs is retained in the session files temporarily.
+Open a `dev` -> `main` PR after updating this continuation record, then remove
+the temporary mirror and expire local unreachable objects once the new PR is
+created.
 
 ## Resume instructions
 
