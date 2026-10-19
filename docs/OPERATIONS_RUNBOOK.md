@@ -335,14 +335,23 @@ firewall, secret delivery and provider costs are covered in
    Verify the canary tenant, then after explicit fleet approval run:
 
    ```sh
-   docker compose -f docker-compose.prod.yml --env-file .env.production run --rm --no-deps api python backend/scripts/migrate.py --fleet
+   docker compose -f docker-compose.prod.yml --env-file .env.production run --rm --no-deps \
+     -e MIGRATION_ACTOR=release-operator -e GIT_COMMIT_SHA=abc123def456 \
+     api python backend/scripts/migrate.py --fleet
    docker compose -f docker-compose.prod.yml --env-file .env.production up -d
    ```
 
    `db-init` verifies every active production tenant is at the checked-in
    Alembic head and matches ORM metadata before allowing the API to start.
-   Inspect per-tenant migration output; do not rely only on container exit
-   code.
+   The fleet command records a durable `STARTED` event and a terminal
+   `SUCCEEDED`/`FAILED` event per tenant, grouped by run and attempt IDs. Each
+   record includes timestamps, tenant database, Alembic revision or failure,
+   release SHA when supplied, and operator attribution in the control-plane
+   audit ledger. `MIGRATION_ACTOR` is operator-supplied attribution, not
+   authenticated identity proof. A start event without a matching terminal
+   event indicates an interrupted or unrecorded attempt and requires operator
+   investigation before retry. Re-running records a new attempt; inspect the
+   ledger and per-tenant output, not only the container exit code.
 6. Verify each target revision, application workflows, readiness, logs,
    audit records and backup status. Keep rollback/forward-fix instructions
    ready. Database schema downgrade may be unsafe even if application rollback
