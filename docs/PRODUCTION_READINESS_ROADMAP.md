@@ -31,6 +31,18 @@ missing requirements do not prevent unrelated engineering work. This
 classification does not waive any applicable P0 gate or authorize live patient
 data use.
 
+### Privacy foundation boundary
+
+Policy-neutral scaffolding now supports opaque consent/retention policy drafts,
+independent approval metadata, and patient/category-scoped legal holds. Every
+policy revision is constrained to enforcement mode `OFF`; approval records a
+second user and reference but does not prove legal sign-off or activate policy.
+No existing consent or retention rows are reinterpreted. Legal holds are not
+yet consumed by a purge workflow, and no deletion/anonymisation path or
+retention dry-run exists. A dry run remains deferred until a reviewed,
+hospital-approved data-category and table/clock inventory exists; any future
+preview must be counts-only by default and must not expose patient identifiers.
+
 | Prospect | Input needed before implementation or exercise | Boundary until then |
 | --- | --- | --- |
 | Hospital-specific consent and retention enforcement | Hospital-approved consent purposes and exceptions; record categories and retention periods; legal holds; deletion/anonymisation rules; backup, export, and integration treatment; and a complete data-use map. | Current APIs are governance records only. Do not claim they gate data use or automatically delete/anonymise records. Obtain privacy/legal approval and satisfy applicable P0 sign-off before live patient data. |

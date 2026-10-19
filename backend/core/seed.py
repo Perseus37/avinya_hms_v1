@@ -79,6 +79,7 @@ GRANULAR_PERMISSIONS = [
     # Privacy governance
     ("privacy:read", "View consent records and retention policies", "Privacy"),
     ("privacy:write", "Record consent decisions and retention policies", "Privacy"),
+    ("privacy:approve", "Approve privacy policy revisions and release legal holds", "Privacy"),
     ("break_glass:request", "Request audited emergency patient access", "Privacy"),
     # Workforce and payroll
     ("hr:read", "View staff attendance, leave, salary profiles and payroll", "Workforce"),
