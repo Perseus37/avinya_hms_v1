@@ -476,7 +476,9 @@ def test_migration_cli_returns_failure_when_a_tenant_upgrade_fails(monkeypatch):
     assert migrate.main(["--fleet"]) == 1
 
 
-def test_fleet_migration_persists_per_tenant_attempts_and_outcomes(monkeypatch):
+def test_fleet_migration_persists_per_tenant_attempts_and_outcomes(
+    monkeypatch, capsys
+):
     import json
     from types import SimpleNamespace
 
@@ -529,7 +531,7 @@ def test_fleet_migration_persists_per_tenant_attempts_and_outcomes(monkeypatch):
 
     def upgrade(db_name):
         if db_name == "tenant_bad":
-            raise RuntimeError("DDL failed")
+            raise RuntimeError("DDL failed: sensitive tenant row value")
         return "head123"
 
     monkeypatch.setattr(migrate, "upgrade_single_database", upgrade)
@@ -566,7 +568,11 @@ def test_fleet_migration_persists_per_tenant_attempts_and_outcomes(monkeypatch):
     assert outcome_details["good"]["status"] == "SUCCEEDED"
     assert outcome_details["good"]["revision"] == "head123"
     assert outcome_details["bad"]["status"] == "FAILED"
-    assert outcome_details["bad"]["error"] == "DDL failed"
+    assert outcome_details["bad"]["error"] == "Migration failed (RuntimeError)."
+    assert outcome_details["bad"]["error_type"] == "RuntimeError"
+    assert "sensitive tenant row value" not in outcome_details["bad"]["error"]
+    assert "sensitive tenant row value" not in str(result["failed"])
+    assert "sensitive tenant row value" not in capsys.readouterr().out
 
 
 def test_schema_autocreate_requires_explicit_opt_in(tmp_path):
