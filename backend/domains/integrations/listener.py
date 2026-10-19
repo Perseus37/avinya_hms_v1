@@ -12,6 +12,9 @@ from backend.control_plane.models import TenantRegistry
 from backend.core.database import ControlSessionLocal, tenant_engine_pool
 from backend.domains.diagnostics.models import DiagnosticTask, TaskStatusEnum
 from backend.domains.integrations.models import HL7IntegrationLog
+from backend.domains.patients.models import Patient
+from backend.domains.diagnostics.models import DiagnosticOrder
+from backend.security.envelope import decrypt_tenant_secret
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("avinya.hl7_listener")
@@ -57,15 +60,58 @@ def extract_mllp_frames(buffer: bytes) -> tuple[list[bytes], bytes]:
         buffer = buffer[end_idx + len(FS_CR):]
 
 
-def _hl7_msh_security(raw_msg: str) -> tuple[str, str]:
+def _hl7_msh_security(raw_msg: str) -> tuple[str, str, str]:
     msh = next((segment for segment in raw_msg.split("\r") if segment.startswith("MSH|")), "")
     fields = msh.split("|")
     if len(fields) <= 9:
         raise ValueError("Invalid HL7 MSH segment.")
-    return fields[7], fields[9]
+    return fields[7], fields[3], fields[9]
 
 
-def process_and_route_result(raw_msg: str):
+def _tenant_hl7_config(branch_code: str) -> tuple[str, str | None] | None:
+    with ControlSessionLocal() as control_db:
+        tenant = control_db.execute(
+            select(TenantRegistry).where(
+                TenantRegistry.branch_code == branch_code,
+                TenantRegistry.is_active.is_(True),
+            )
+        ).scalar_one_or_none()
+        if not tenant:
+            return None
+        db_name = tenant.db_name
+        encrypted_secret = tenant.hl7_shared_secret_encrypted
+    return (
+        db_name,
+        decrypt_tenant_secret(encrypted_secret) if encrypted_secret else None,
+    )
+
+
+def authenticate_hl7_message(raw_msg: str) -> tuple[str, str | None]:
+    try:
+        supplied_secret, branch_code, message_control_id = _hl7_msh_security(raw_msg)
+    except ValueError:
+        return "UNKNOWN", None
+    tenant_config = _tenant_hl7_config(branch_code)
+    if not tenant_config or not tenant_config[1] or not hmac.compare_digest(
+        supplied_secret, tenant_config[1]
+    ):
+        return message_control_id, None
+    return message_control_id, tenant_config[0]
+
+
+def _redact_hl7_security(raw_msg: str) -> str:
+    segments = []
+    for segment in raw_msg.split("\r"):
+        if segment.startswith("MSH|"):
+            fields = segment.split("|")
+            if len(fields) > 7:
+                fields[7] = "[REDACTED]"
+            segment = "|".join(fields)
+        segments.append(segment)
+    return "\r".join(segments)
+
+
+def process_and_route_result(raw_msg: str, tenant_db_name: str | None = None):
     """Routes the HL7 result to the correct tenant database based on MSH-4."""
     try:
         parsed = parse_hl7_message(raw_msg)
@@ -78,22 +124,27 @@ def process_and_route_result(raw_msg: str):
         branch_code = msh[3]
         msg_control_id = msh[9]
         
-        # Look up the Tenant Database based on the transmitting machine's Branch Code
-        with ControlSessionLocal() as control_db:
-            tenant = control_db.execute(
-                select(TenantRegistry).where(TenantRegistry.branch_code == branch_code)
-            ).scalar_one_or_none()
-            
-        if not tenant:
+        if tenant_db_name is None:
+            tenant_config = _tenant_hl7_config(branch_code)
+            tenant_db_name = tenant_config[0] if tenant_config else None
+        if not tenant_db_name:
             logger.error(f"HL7 Routing Failed: Unknown facility branch code '{branch_code}'")
             return msg_control_id, False, "Unknown Sending Facility"
 
         # Connect to the specific Hospital's Database
-        t_engine = tenant_engine_pool.get_engine(tenant.db_name)
+        t_engine = tenant_engine_pool.get_engine(tenant_db_name)
         TSession = sessionmaker(bind=t_engine)
         
         with TSession() as t_db:
             updated_count = 0
+            pid = parsed.get("PID", [])
+            patient_identifier = (
+                pid[0][3].split("^")[0].strip()
+                if pid and len(pid[0]) > 3
+                else ""
+            )
+            if not patient_identifier:
+                return msg_control_id, False, "Missing PID patient identifier"
             # OBX-3 is the Test Code, OBX-5 is the Result Value
             for obx in parsed.get("OBX", []):
                 if len(obx) <= 5:
@@ -103,7 +154,18 @@ def process_and_route_result(raw_msg: str):
                 result_val = obx[5]
                 
                 if task_id_str.isdigit():
-                    task = t_db.get(DiagnosticTask, int(task_id_str))
+                    task = t_db.execute(
+                        select(DiagnosticTask)
+                        .join(
+                            DiagnosticOrder,
+                            DiagnosticOrder.id == DiagnosticTask.order_id,
+                        )
+                        .join(Patient, Patient.id == DiagnosticOrder.patient_id)
+                        .where(
+                            DiagnosticTask.id == int(task_id_str),
+                            Patient.mrn == patient_identifier,
+                        )
+                    ).scalar_one_or_none()
                     if task:
                         if task.status in {TaskStatusEnum.VERIFIED, TaskStatusEnum.CANCELLED}:
                             t_db.rollback()
@@ -118,7 +180,7 @@ def process_and_route_result(raw_msg: str):
             # Log the payload in the hospital's local audit trail
             t_db.add(HL7IntegrationLog(
                 message_control_id=msg_control_id,
-                raw_payload=raw_msg,
+                raw_payload=_redact_hl7_security(raw_msg),
                 status="SUCCESS"
             ))
             t_db.commit()
@@ -148,7 +210,14 @@ async def handle_mllp_client(reader: asyncio.StreamReader, writer: asyncio.Strea
     try:
         buffer = b""
         while True:
-            chunk = await reader.read(4096)
+            try:
+                chunk = await asyncio.wait_for(
+                    reader.read(4096),
+                    timeout=settings.HL7_CLIENT_IDLE_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.info("Closing idle LIS connection from %s.", addr)
+                break
             if not chunk:
                 break
             try:
@@ -161,21 +230,18 @@ async def handle_mllp_client(reader: asyncio.StreamReader, writer: asyncio.Strea
                 msg_control_id = "UNKNOWN"
                 try:
                     raw_msg = frame.decode("utf-8")
-                    supplied_secret, msg_control_id = _hl7_msh_security(raw_msg)
+                    msg_control_id, tenant_db_name = authenticate_hl7_message(raw_msg)
                 except (UnicodeDecodeError, ValueError):
                     writer.write(build_hl7_ack("UNKNOWN", False, "Invalid HL7 message"))
                     await writer.drain()
                     continue
-                configured_secret = settings.HL7_SHARED_SECRET
-                if not configured_secret or not hmac.compare_digest(
-                    supplied_secret, configured_secret
-                ):
+                if not tenant_db_name:
                     writer.write(build_hl7_ack(msg_control_id, False, "Unauthorized sender"))
                     await writer.drain()
                     continue
 
                 result_id, success, err = await asyncio.to_thread(
-                    process_and_route_result, raw_msg
+                    process_and_route_result, raw_msg, tenant_db_name
                 )
                 writer.write(build_hl7_ack(result_id, success, err))
                 await writer.drain()
@@ -188,8 +254,6 @@ async def handle_mllp_client(reader: asyncio.StreamReader, writer: asyncio.Strea
 
 
 async def start_hl7_server(host="0.0.0.0", port=2575):
-    if not settings.HL7_SHARED_SECRET:
-        raise RuntimeError("HL7_SHARED_SECRET must be configured before starting the listener.")
     if not settings.HL7_TLS_CERT_FILE or not settings.HL7_TLS_KEY_FILE:
         raise RuntimeError("HL7 TLS certificate and key must be configured before starting the listener.")
     tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

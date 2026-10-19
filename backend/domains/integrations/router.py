@@ -1,10 +1,11 @@
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+import secrets
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.core.database import get_db
+from backend.control_plane.models import TenantRegistry
+from backend.core.database import get_control_db, get_db, resolve_tenant_context
 from backend.core.dependencies import RequirePermission
 from backend.domains.identity.models import User
 from backend.domains.integrations.models import (
@@ -13,7 +14,34 @@ from backend.domains.integrations.models import (
     ProtocolEnum,
 )
 from backend.domains.integrations.schemas import EquipmentCreate
+from backend.security.envelope import encrypt_tenant_secret
+
 router = APIRouter(prefix="/api/equipment", tags=["LIS & PACS Equipment Integration"])
+
+
+@router.post("/hl7-secret/rotate")
+def rotate_hl7_secret(
+    request: Request,
+    control_db: Session = Depends(get_control_db),
+    current_user: User = Depends(RequirePermission("mdm:write")),
+):
+    """Rotate this hospital's HL7 shared secret; return the new value only once."""
+    tenant_context = resolve_tenant_context(request)
+    tenant = control_db.execute(
+        select(TenantRegistry).where(
+            TenantRegistry.subdomain_slug == tenant_context.subdomain_slug
+        )
+    ).scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Hospital tenant not found.")
+    secret = secrets.token_urlsafe(32)
+    tenant.hl7_shared_secret_encrypted = encrypt_tenant_secret(secret)
+    control_db.commit()
+    return {
+        "secret": secret,
+        "message": "Configure this value in the laboratory equipment; it will not be shown again.",
+    }
+
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def register_equipment(

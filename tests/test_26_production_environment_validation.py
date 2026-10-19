@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from backend.scripts.validate_production_env import (
     REQUIRED_PRODUCTION_SECRETS,
     main,
@@ -8,10 +10,15 @@ from backend.scripts.validate_production_env import (
 
 
 def _valid_env_values() -> dict[str, str]:
-    return {
+    values = {
         name: f"distinct-production-value-{index}-long-enough"
         for index, name in enumerate(REQUIRED_PRODUCTION_SECRETS)
     }
+    values.update(
+        CONTROL_PLANE_LEGACY_MASTER_KEY_ENABLED="false",
+        TRUSTED_PROXY_IPS="10.20.0.1/32,10.30.0.0/16",
+    )
+    return values
 
 
 def _write_env_file(path: Path, values: dict[str, str]) -> None:
@@ -37,7 +44,8 @@ def test_production_env_rejects_missing_empty_placeholder_and_reused_secrets(
     values["REDIS_PASSWORD"] = values["POSTGRES_PASSWORD"]
     values["SECRET_KEY"] = "REPLACE_WITH_SECRET"
     values["MASTER_ONBOARDING_KEY"] = ""
-    del values["CONTROL_PLANE_MASTER_KEY"]
+    values["CONTROL_PLANE_LEGACY_MASTER_KEY_ENABLED"] = "true"
+    values.pop("CONTROL_PLANE_MASTER_KEY", None)
     env_file = tmp_path / ".env.production"
     _write_env_file(env_file, values)
 
@@ -47,6 +55,7 @@ def test_production_env_rejects_missing_empty_placeholder_and_reused_secrets(
     assert any("SECRET_KEY" in error for error in errors)
     assert any("MASTER_ONBOARDING_KEY" in error for error in errors)
     assert any("CONTROL_PLANE_MASTER_KEY" in error for error in errors)
+    assert any("must be false in production" in error for error in errors)
     assert any("must be unique" in error for error in errors)
     assert "REPLACE_WITH_SECRET" not in "\n".join(errors)
 
@@ -61,6 +70,19 @@ def test_production_env_rejects_weak_secret_key(tmp_path):
         "at least 32 characters" in error
         for error in validate_production_env(env_file)
     )
+
+
+@pytest.mark.parametrize("proxy_value", ["not-a-cidr", "0.0.0.0/0", "::/0"])
+def test_production_env_requires_specific_trusted_proxy_cidrs(
+    tmp_path, proxy_value
+):
+    values = _valid_env_values()
+    values["TRUSTED_PROXY_IPS"] = proxy_value
+    env_file = tmp_path / ".env.production"
+    _write_env_file(env_file, values)
+
+    errors = validate_production_env(env_file)
+    assert any("TRUSTED_PROXY_IPS" in error for error in errors)
 
 
 def test_production_env_cli_fails_for_missing_file(tmp_path, capsys):

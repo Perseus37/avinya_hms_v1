@@ -16,8 +16,14 @@ def rotate_tenant_secrets() -> int:
     with ControlSessionLocal() as db:
         tenants = db.scalars(select(TenantRegistry)).all()
         for tenant in tenants:
-            for field in ("jwt_secret_key", "backup_encryption_key"):
+            for field in (
+                "jwt_secret_key",
+                "backup_encryption_key",
+                "hl7_shared_secret_encrypted",
+            ):
                 stored_value = getattr(tenant, field)
+                if stored_value is None:
+                    continue
                 if not needs_reencryption(stored_value):
                     continue
                 plaintext = decrypt_tenant_secret(stored_value)

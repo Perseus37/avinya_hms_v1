@@ -1,7 +1,36 @@
+import asyncio
+
 from sqlalchemy.orm import Session
 
 from backend.domains.diagnostics.models import DiagnosticTask
 from backend.domains.integrations import listener
+
+
+def test_hl7_listener_closes_idle_client_connections(monkeypatch):
+    class IdleReader:
+        async def read(self, _size):
+            await asyncio.Event().wait()
+
+    class Writer:
+        closed = False
+
+        def get_extra_info(self, _name):
+            return ("127.0.0.1", 12345)
+
+        def close(self):
+            self.closed = True
+
+        async def wait_closed(self):
+            return None
+
+    writer = Writer()
+    monkeypatch.setattr(
+        listener.settings, "HL7_CLIENT_IDLE_TIMEOUT_SECONDS", 1
+    )
+
+    asyncio.run(listener.handle_mllp_client(IdleReader(), writer))
+
+    assert writer.closed
 
 
 def _setup_cbc_bundle(client, superuser_headers):
@@ -256,7 +285,8 @@ def test_hl7_result_cannot_overwrite_verified_diagnostic_task(
         listener, "ControlSessionLocal", multi_tenant_env["control_session_factory"]
     )
     raw_message = (
-        "MSH|^~\\&|DEVICE|HQ-HYD-01|AVINYA|HOSP|20261018||ORU^R01|CTL-VERIFIED|P|2.3\r"
+        "MSH|^~\\&|DEVICE|HQ-HYD-01|AVINYA|HOSP|20261018|lis-secret|ORU^R01|CTL-VERIFIED|P|2.3\r"
+        f"PID|||{patient['mrn']}||Verified LIS Patient\r"
         f"OBX|1|NM|{task_id}^RBC||999|mg/dL\r"
     )
     control_id, success, message = listener.process_and_route_result(raw_message)
@@ -268,3 +298,81 @@ def test_hl7_result_cannot_overwrite_verified_diagnostic_task(
         task = db.get(DiagnosticTask, task_id)
         assert task.status.value == "VERIFIED"
         assert task.result_value == "5.1"
+
+
+def test_hl7_secret_is_tenant_scoped_and_redacted_from_result_logs(
+    client, superuser_headers, doctor_headers, multi_tenant_env, monkeypatch
+):
+    from backend.control_plane.models import TenantRegistry
+    from backend.domains.integrations.models import HL7IntegrationLog
+    from backend.security.envelope import decrypt_tenant_secret
+
+    monkeypatch.setattr(
+        listener, "ControlSessionLocal", multi_tenant_env["control_session_factory"]
+    )
+    rotated = client.post(
+        "/v1/api/equipment/hl7-secret/rotate", headers=superuser_headers
+    )
+    assert rotated.status_code == 200, rotated.text
+    secret = rotated.json()["secret"]
+    with multi_tenant_env["control_session_factory"]() as control_db:
+        default_tenant = control_db.query(TenantRegistry).filter_by(
+            subdomain_slug="default"
+        ).one()
+        stored_secret = default_tenant.hl7_shared_secret_encrypted
+        assert secret not in stored_secret
+        assert decrypt_tenant_secret(stored_secret) == secret
+
+    authenticated_message = (
+        "MSH|^~\\&|DEVICE|HQ-HYD-01|AVINYA|HOSP|20261018|"
+        f"{secret}|ORU^R01|CTL-SECRET|P|2.3\r"
+    )
+    control_id, tenant_db_name = listener.authenticate_hl7_message(
+        authenticated_message
+    )
+    assert (control_id, tenant_db_name) == ("CTL-SECRET", "hms_default")
+    other_tenant_message = authenticated_message.replace(
+        "HQ-HYD-01", "APOLLO-HYD-01"
+    )
+    assert listener.authenticate_hl7_message(other_tenant_message) == (
+        "CTL-SECRET",
+        None,
+    )
+
+    items = _setup_cbc_bundle(client, superuser_headers)
+    patient = client.post(
+        "/v1/api/patients",
+        headers=doctor_headers,
+        json={
+            "full_name": "HL7 Patient",
+            "date_of_birth": "1990-01-01T00:00:00Z",
+            "gender": "MALE",
+        },
+    ).json()
+    order = client.post(
+        "/v1/api/diagnostics/orders",
+        headers=doctor_headers,
+        json={"patient_id": patient["id"], "ordered_service_ids": [items["rbc"]["id"]]},
+    ).json()
+    task_id = order["tasks"][0]["id"]
+    raw_message = (
+        "MSH|^~\\&|DEVICE|HQ-HYD-01|AVINYA|HOSP|20261018|"
+        f"{secret}|ORU^R01|CTL-RESULT|P|2.3\r"
+        f"PID|||{patient['mrn']}||HL7 Patient\r"
+        f"OBX|1|NM|{task_id}^RBC||4.8|mg/dL\r"
+    )
+    control_id, success, error = listener.process_and_route_result(
+        raw_message, tenant_db_name
+    )
+    assert (control_id, success, error) == ("CTL-RESULT", True, "")
+    with Session(multi_tenant_env["tenant_engines"]["hms_default"]) as db:
+        log = db.query(HL7IntegrationLog).one()
+        assert secret not in log.raw_payload
+        assert "[REDACTED]" in log.raw_payload
+
+    mismatched_patient = raw_message.replace(patient["mrn"], "WRONG-MRN")
+    _, mismatch_success, mismatch_error = listener.process_and_route_result(
+        mismatched_patient, tenant_db_name
+    )
+    assert mismatch_success is False
+    assert "No eligible" in mismatch_error

@@ -1,11 +1,13 @@
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from backend.core.config import settings
 from backend.core.database import get_db, get_redis, resolve_tenant_context
 from backend.core.dependencies import RequirePermission, get_current_user
 from backend.domains.identity.models import User
@@ -18,6 +20,7 @@ from backend.domains.patients.models import (
 )
 
 router = APIRouter(prefix="/api/break-glass", tags=["Emergency Patient Access"])
+logger = logging.getLogger("avinya.break_glass")
 
 
 class BreakGlassRequest(BaseModel):
@@ -58,10 +61,25 @@ def request_emergency_access(
     current_user: User = Depends(get_current_user),
     redis_client=Depends(get_redis),
 ):
+    now = datetime.now(timezone.utc)
+    db.execute(
+        select(User).where(User.id == current_user.id).with_for_update()
+    ).scalar_one()
+    since = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    recent_grants = db.execute(
+        select(func.count(BreakGlassGrant.id)).where(
+            BreakGlassGrant.user_id == current_user.id,
+            BreakGlassGrant.created_at >= since,
+        )
+    ).scalar_one()
+    if recent_grants >= settings.BREAK_GLASS_MAX_REQUESTS_PER_DAY:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Emergency access request limit reached for today.",
+        )
     patient = db.get(Patient, patient_id)
     if not patient or not patient.is_active:
         raise HTTPException(status_code=404, detail="Patient not found.")
-    now = datetime.now(timezone.utc)
     grant = BreakGlassGrant(
         patient_id=patient_id,
         user_id=current_user.id,
@@ -72,11 +90,17 @@ def request_emergency_access(
     db.add(grant)
     db.flush()
     tenant = resolve_tenant_context(request)
-    redis_client.publish(
-        f"tenant:{tenant.subdomain_slug}:break_glass",
-        json.dumps({"type": "break_glass.access_requested", "grant_id": grant.id}),
-    )
     db.commit()
+    try:
+        redis_client.publish(
+            f"tenant:{tenant.subdomain_slug}:break_glass",
+            json.dumps({"type": "break_glass.access_requested", "grant_id": grant.id}),
+        )
+    except Exception:
+        logger.exception(
+            "Failed to publish break-glass grant notification for grant %s.",
+            grant.id,
+        )
     return {
         "grant_id": grant.id,
         "patient_id": grant.patient_id,
@@ -138,7 +162,7 @@ def read_emergency_patient_record(
 @router.get("/reviews/pending")
 def list_pending_reviews(
     db: Session = Depends(get_db),
-    reviewer: User = Depends(RequirePermission("iam:read")),
+    reviewer: User = Depends(RequirePermission("iam:write")),
 ):
     now = datetime.now(timezone.utc)
     grants = db.execute(
@@ -168,7 +192,7 @@ def review_emergency_access(
     grant_id: int,
     payload: BreakGlassReview,
     db: Session = Depends(get_db),
-    reviewer: User = Depends(RequirePermission("iam:read")),
+    reviewer: User = Depends(RequirePermission("iam:write")),
 ):
     grant = db.execute(
         select(BreakGlassGrant)

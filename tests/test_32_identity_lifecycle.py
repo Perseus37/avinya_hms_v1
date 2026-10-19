@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 from sqlalchemy.orm import Session
 
@@ -72,7 +73,16 @@ def test_email_password_reset_token_is_single_use(client, monkeypatch):
     )
     assert request_response.status_code == 202
     assert sent["recipient"] == "admin@default.com"
-    token = sent["body"].splitlines()[2]
+    reset_link = sent["body"].splitlines()[2]
+    parsed_link = urlsplit(reset_link)
+    assert parsed_link.path.endswith("/api/auth/password/reset")
+    assert parsed_link.query == ""
+    token = parsed_link.fragment.removeprefix("token=")
+    page = client.get(parsed_link.path + "#" + parsed_link.fragment)
+    assert page.status_code == 200
+    assert page.headers["content-type"].startswith("text/html")
+    assert "script-src 'nonce-" in page.headers["content-security-policy"]
+    assert token not in page.text
 
     payload = {"token": token, "new_password": "ResetAdminPassword456!"}
     reset = client.post("/v1/api/auth/password/reset", json=payload)
@@ -152,3 +162,58 @@ def test_privileged_login_requires_mfa_then_challenges_for_each_login(
         },
     )
     assert verified_with_totp.status_code == 200
+
+
+def test_mfa_challenge_token_cannot_access_authenticated_routes(client, monkeypatch):
+    monkeypatch.setattr(settings, "MFA_REQUIRED_FOR_PRIVILEGED", True)
+    challenge = _login(client).json()["mfa_token"]
+
+    for path in ("/v1/api/auth/me", "/v1/api/auth/users"):
+        response = client.get(path, headers={"Authorization": f"Bearer {challenge}"})
+        assert response.status_code == 401
+
+
+def test_failed_mfa_codes_lock_account_and_rate_limit_verification(
+    client, multi_tenant_env, monkeypatch
+):
+    monkeypatch.setattr(settings, "MFA_REQUIRED_FOR_PRIVILEGED", True)
+    enrollment = _login(client).json()
+    setup = client.post(
+        "/v1/api/auth/mfa/setup",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={"mfa_token": enrollment["mfa_token"]},
+    )
+    assert setup.status_code == 200
+    confirmed = client.post(
+        "/v1/api/auth/mfa/confirm",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={
+            "mfa_token": enrollment["mfa_token"],
+            "code": _totp_code(setup.json()["secret"]),
+        },
+    )
+    assert confirmed.status_code == 200
+
+    login = _login(client).json()
+    for _ in range(5):
+        response = client.post(
+            "/v1/api/auth/mfa/verify-login",
+            headers={"X-Hospital-Subdomain": "default"},
+            json={"mfa_token": login["mfa_token"], "code": "invalid"},
+        )
+        assert response.status_code == 401
+
+    tenant_engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    with Session(tenant_engine) as db:
+        from backend.domains.identity.models import User, UserStatusEnum
+
+        admin = db.query(User).filter_by(email="admin@default.com").one()
+        assert admin.status == UserStatusEnum.LOCKED
+        assert admin.failed_login_attempts == 5
+
+    limited = client.post(
+        "/v1/api/auth/mfa/verify-login",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={"mfa_token": login["mfa_token"], "code": "invalid"},
+    )
+    assert limited.status_code == 429

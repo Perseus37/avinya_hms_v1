@@ -464,10 +464,29 @@ def finalize_payroll_period(
         raise HTTPException(status_code=404, detail="Payroll period not found.")
     if period.status != "OPEN":
         raise HTTPException(status_code=409, detail="Payroll period has already been finalized.")
+    if period.created_by_user_id == actor.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Payroll must be finalized by someone other than its preparer.",
+        )
     if db.execute(
         select(PayrollLine.id).where(PayrollLine.period_id == period_id).limit(1)
     ).scalar_one_or_none() is None:
         raise HTTPException(status_code=409, detail="Cannot finalize a period with no payroll lines.")
+    prepared_by_actor = db.execute(
+        select(PayrollLine.id)
+        .where(
+            PayrollLine.period_id == period_id,
+            (PayrollLine.created_by_id == actor.id)
+            | (PayrollLine.updated_by_id == actor.id),
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    if prepared_by_actor is not None:
+        raise HTTPException(
+            status_code=403,
+            detail="Payroll must be finalized by someone other than its preparer.",
+        )
     period.status = "FINALIZED"
     period.finalized_by_user_id = actor.id
     period.finalized_at = datetime.now(timezone.utc)

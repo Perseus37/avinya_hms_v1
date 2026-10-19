@@ -41,6 +41,7 @@ os.environ.setdefault("REDIS_PASSWORD", secrets.token_urlsafe(16))
 os.environ.setdefault("SECRET_KEY", secrets.token_hex(32))
 os.environ.setdefault("MASTER_ONBOARDING_KEY", secrets.token_urlsafe(24))
 os.environ.setdefault("CONTROL_PLANE_MASTER_KEY", secrets.token_urlsafe(24))
+os.environ["CONTROL_PLANE_LEGACY_MASTER_KEY_ENABLED"] = "true"
 os.environ.setdefault("BACKUP_ENCRYPTION_SALT", secrets.token_hex(16))
 os.environ.setdefault("ENVELOPE_ENCRYPTION_SALT", secrets.token_hex(16))
 os.environ.setdefault("ALGORITHM", "HS256")
@@ -66,6 +67,7 @@ from backend.core import database
 from backend.core.database import Base, get_control_db, get_redis
 from backend.main import app, v1_app
 from backend.domains.identity.models import (
+    AuthSession,
     Department,
     DoctorProfile,
     GenderEnum,
@@ -345,16 +347,20 @@ def _mint_test_headers(
     with TSession() as db:
         user = db.query(User).filter(User.email == email).one()
         expire = datetime.now(timezone.utc) + timedelta(minutes=30)
+        token_id = secrets.token_urlsafe(24)
         token = jwt.encode(
             {
                 "sub": str(user.id),
                 "tenant_slug": subdomain_slug,
                 "branch_code": branch_code,
+                "jti": token_id,
                 "exp": expire,
             },
             jwt_secret,
             algorithm=settings.ALGORITHM,
         )
+        db.add(AuthSession(token_id=token_id, user_id=user.id, expires_at=expire))
+        db.commit()
         return {
             "Authorization": f"Bearer {token}",
             "X-Hospital-Subdomain": subdomain_slug,

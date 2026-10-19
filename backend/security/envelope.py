@@ -71,7 +71,7 @@ def needs_reencryption(value: str) -> bool:
 def decrypt_tenant_secret(value: str) -> str:
     """Decrypts a tenant secret from the DB in microseconds with zero network calls."""
     if not value:
-        return ""
+        raise ValueError("Tenant secret is missing.")
     if value.startswith(_ENC_V1_PREFIX):
         prefix = _ENC_V1_PREFIX
         keys = [_PREVIOUS_KEY, _MASTER_KEY]
