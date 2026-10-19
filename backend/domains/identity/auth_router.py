@@ -12,6 +12,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi.responses import HTMLResponse
 import jwt
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import select, update
@@ -193,9 +194,22 @@ def _complete_login(user: User, tenant, db: Session) -> dict[str, str]:
     user.last_login_at = now
     if user.first_login_at is None:
         user.first_login_at = now
+    user.failed_login_attempts = 0
+    user.locked_until = None
     token = _issue_access_session(user, tenant, db)
     db.commit()
     return {"access_token": token, "token_type": "bearer"}
+
+
+def _record_mfa_failure(db: Session, user: User) -> None:
+    user.failed_login_attempts += 1
+    policy = get_or_create_policy(db)
+    if user.failed_login_attempts >= policy.max_failed_login_attempts:
+        user.status = UserStatusEnum.LOCKED
+        user.locked_until = datetime.now(timezone.utc) + timedelta(
+            minutes=settings.LOGIN_LOCKOUT_MINUTES
+        )
+    db.commit()
 
 
 def _revoke_user_sessions(db: Session, user_id: int) -> None:
@@ -285,7 +299,7 @@ def login(
     if user and user.status == UserStatusEnum.LOCKED:
         raise HTTPException(
             status_code=401,
-            detail="Account is locked." if is_valid_pwd else "Invalid credentials",
+            detail="Invalid credentials",
         )
 
     if not user or not is_valid_pwd:
@@ -303,8 +317,6 @@ def login(
     if user.status != UserStatusEnum.ACTIVE:
         raise HTTPException(status_code=401, detail=f"Account is {user.status.value}.")
 
-    user.failed_login_attempts = 0
-    user.locked_until = None
     if user.mfa_enabled:
         db.commit()
         return {
@@ -378,14 +390,87 @@ def request_password_reset(
             )
         )
         db.commit()
-        reset_url = f"{settings.tenant_url(tenant.subdomain_slug)}/api/auth/password/reset"
+        reset_url = (
+            f"{settings.tenant_url(tenant.subdomain_slug)}"
+            f"/v1/api/auth/password/reset#token={raw_token}"
+        )
         background_tasks.add_task(
             send_email,
             user.email,
             "Avinya HMS password reset",
-            f"Use this one-time token with POST {reset_url} to reset your password:\n\n{raw_token}\n\nThe token expires in 30 minutes. If you did not request this, ignore this message.",
+            f"Reset your password using this one-time link:\n\n{reset_url}\n\nThe link expires in 30 minutes. If you did not request this, ignore this message.",
         )
     return {"message": "If an active account matches that address, password reset instructions will be sent."}
+
+
+@router.get("/password/reset", response_class=HTMLResponse)
+def password_reset_page():
+    nonce = base64.b64encode(secrets.token_bytes(18)).decode("ascii")
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reset your Avinya HMS password</title>
+</head>
+<body>
+  <main>
+    <h1>Reset your password</h1>
+    <p>Choose a new password with at least 12 characters.</p>
+    <form id="reset-form">
+      <label for="new-password">New password</label>
+      <input id="new-password" type="password" minlength="12" maxlength="128" required autocomplete="new-password">
+      <button type="submit">Reset password</button>
+    </form>
+    <p id="status" role="status" aria-live="polite"></p>
+  </main>
+  <script nonce="{nonce}">
+    const form = document.getElementById("reset-form");
+    const status = document.getElementById("status");
+    const token = new URLSearchParams(window.location.hash.slice(1)).get("token");
+    if (token) history.replaceState(null, "", window.location.pathname);
+    if (!token) {{
+      form.hidden = true;
+      status.textContent = "This reset link is invalid or expired. Request a new one.";
+    }}
+    form.addEventListener("submit", async (event) => {{
+      event.preventDefault();
+      status.textContent = "Updating password...";
+      try {{
+        const response = await fetch(window.location.pathname, {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{
+            token,
+            new_password: document.getElementById("new-password").value
+          }})
+        }});
+        const result = await response.json();
+        status.textContent = response.ok
+          ? "Password reset. You can sign in with your new password."
+          : (result.detail || "The reset link is invalid or expired.");
+        if (response.ok) form.hidden = true;
+      }} catch (_) {{
+        status.textContent = "Unable to contact the server. Try again later.";
+      }}
+    }});
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(
+        html,
+        headers={
+            "Content-Security-Policy": (
+                f"default-src 'none'; script-src 'nonce-{nonce}'; "
+                "style-src 'none'; connect-src 'self'; form-action 'self'; "
+                "base-uri 'none'; frame-ancestors 'none'"
+            ),
+            "Referrer-Policy": "no-referrer",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+        },
+    )
 
 
 @router.post("/password/reset")
@@ -455,7 +540,14 @@ def setup_mfa(
     return {"secret": secret, "otpauth_uri": uri}
 
 
-@router.post("/mfa/confirm")
+@router.post(
+    "/mfa/confirm",
+    dependencies=[
+        Depends(
+            RateLimiter(scope="auth_mfa_confirm", max_requests=5, window_seconds=300)
+        )
+    ],
+)
 def confirm_mfa(
     payload: MfaCodeRequest,
     request: Request,
@@ -472,6 +564,7 @@ def confirm_mfa(
     ):
         raise HTTPException(status_code=400, detail="MFA enrollment has not been started.")
     if not _verify_mfa_code(db, user, payload.code):
+        _record_mfa_failure(db, user)
         raise HTTPException(status_code=400, detail="Invalid MFA code.")
     user.mfa_enabled = True
     user.failed_login_attempts = 0
@@ -488,7 +581,14 @@ def confirm_mfa(
     return {**result, "recovery_codes": recovery_codes}
 
 
-@router.post("/mfa/verify-login")
+@router.post(
+    "/mfa/verify-login",
+    dependencies=[
+        Depends(
+            RateLimiter(scope="auth_mfa_verify", max_requests=5, window_seconds=300)
+        )
+    ],
+)
 def verify_mfa_login(
     payload: MfaCodeRequest,
     request: Request,
@@ -502,8 +602,10 @@ def verify_mfa_login(
         or user.status != UserStatusEnum.ACTIVE
         or not user.mfa_enabled
         or not user.mfa_secret
-        or not _verify_mfa_code(db, user, payload.code)
     ):
+        raise HTTPException(status_code=401, detail="Invalid MFA challenge or code.")
+    if not _verify_mfa_code(db, user, payload.code):
+        _record_mfa_failure(db, user)
         raise HTTPException(status_code=401, detail="Invalid MFA challenge or code.")
     return _complete_login(user, tenant, db)
 

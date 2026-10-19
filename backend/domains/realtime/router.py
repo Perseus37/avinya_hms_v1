@@ -17,6 +17,9 @@ from backend.security.envelope import decrypt_tenant_secret
 logger = logging.getLogger("avinya.websocket")
 ws_router = APIRouter(tags=["Real-Time WebSockets & Hospital Alerts"])
 _connection_limit = asyncio.Semaphore(settings.WS_MAX_CONNECTIONS)
+_waiting_room_connection_limit = asyncio.Semaphore(
+    settings.WS_MAX_WAITING_ROOM_CONNECTIONS
+)
 
 STREAM_PERMISSIONS = {
     "panic_labs": ("diagnostics:read",),
@@ -45,13 +48,22 @@ def _authenticate_ws(token: Optional[str], tenant_slug: str, stream: str) -> boo
                 decrypt_tenant_secret(tenant.jwt_secret_key),
                 algorithms=[settings.ALGORITHM],
             )
-            if payload.get("tenant_slug") != tenant.subdomain_slug:
+            if (
+                payload.get("tenant_slug") != tenant.subdomain_slug
+                or "purpose" in payload
+            ):
                 return False
         except jwt.InvalidTokenError:
             return False
 
     subject = payload.get("sub")
-    if not isinstance(subject, str) or not subject.isdecimal():
+    token_id = payload.get("jti")
+    if (
+        not isinstance(subject, str)
+        or not subject.isdecimal()
+        or not isinstance(token_id, str)
+        or not token_id
+    ):
         return False
 
     tenant_engine = tenant_engine_pool.get_engine(tenant.db_name)
@@ -59,20 +71,18 @@ def _authenticate_ws(token: Optional[str], tenant_slug: str, stream: str) -> boo
         user = tenant_db.get(User, int(subject))
         if not user or user.status != UserStatusEnum.ACTIVE:
             return False
-        token_id = payload.get("jti")
-        if token_id is not None:
-            auth_session = tenant_db.get(AuthSession, token_id)
-            if (
-                not auth_session
-                or auth_session.user_id != user.id
-                or auth_session.revoked_at is not None
-            ):
-                return False
-            expires_at = auth_session.expires_at
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-            if expires_at <= datetime.now(timezone.utc):
-                return False
+        auth_session = tenant_db.get(AuthSession, token_id)
+        if (
+            not auth_session
+            or auth_session.user_id != user.id
+            or auth_session.revoked_at is not None
+        ):
+            return False
+        expires_at = auth_session.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= datetime.now(timezone.utc):
+            return False
         if stream == "all":
             return user.is_superuser
         return user_has_permission(
@@ -96,11 +106,16 @@ async def websocket_event_stream(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
-    if _connection_limit.locked():
+    connection_limit = (
+        _waiting_room_connection_limit
+        if normalized_stream == "waiting_room"
+        else _connection_limit
+    )
+    if connection_limit.locked():
         await websocket.close(code=status.WS_1013_TRY_AGAIN_LATER)
         return
 
-    await _connection_limit.acquire()
+    await connection_limit.acquire()
     pubsub = None
     try:
         # Browser WebSocket clients pass credentials through the handshake
@@ -140,8 +155,24 @@ async def websocket_event_stream(
             pubsub.subscribe(channel_pattern)
 
         async def _send_pump():
+            next_auth_check = asyncio.get_running_loop().time() + 30
             try:
                 while True:
+                    if normalized_stream != "waiting_room":
+                        now = asyncio.get_running_loop().time()
+                        if now >= next_auth_check:
+                            authorized = await asyncio.to_thread(
+                                _authenticate_ws,
+                                token,
+                                tenant_slug,
+                                normalized_stream,
+                            )
+                            if not authorized:
+                                await websocket.close(
+                                    code=status.WS_1008_POLICY_VIOLATION
+                                )
+                                return
+                            next_auth_check = now + 30
                     message = pubsub.get_message(
                         ignore_subscribe_messages=True, timeout=0.0
                     )
@@ -180,4 +211,4 @@ async def websocket_event_stream(
             if pubsub is not None:
                 pubsub.close()
         finally:
-            _connection_limit.release()
+            connection_limit.release()

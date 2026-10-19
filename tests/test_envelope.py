@@ -40,6 +40,11 @@ def test_legacy_plaintext_secret_emits_migration_warning():
         assert envelope.decrypt_tenant_secret("legacy-value") == "legacy-value"
 
 
+def test_missing_tenant_secret_fails_closed():
+    with pytest.raises(ValueError, match="Tenant secret is missing"):
+        envelope.decrypt_tenant_secret("")
+
+
 def test_rotation_script_reencrypts_legacy_tenant_secrets(
     multi_tenant_env, monkeypatch
 ):
@@ -54,15 +59,18 @@ def test_rotation_script_reencrypts_legacy_tenant_secrets(
         tenant.backup_encryption_key = _encrypt_v1(
             "legacy-backup-value", envelope._MASTER_KEY
         )
+        tenant.hl7_shared_secret_encrypted = "legacy-hl7-value"
         db.commit()
 
     with pytest.warns(RuntimeWarning, match="unencrypted tenant secret"):
-        assert rotate_envelope_keys.rotate_tenant_secrets() == 2
+        assert rotate_envelope_keys.rotate_tenant_secrets() == 3
     assert rotate_envelope_keys.rotate_tenant_secrets() == 0
 
     with factory() as db:
         tenant = db.query(TenantRegistry).filter_by(subdomain_slug="default").one()
         assert tenant.jwt_secret_key.startswith("enc:v2:")
         assert tenant.backup_encryption_key.startswith("enc:v2:")
+        assert tenant.hl7_shared_secret_encrypted.startswith("enc:v2:")
         assert envelope.decrypt_tenant_secret(tenant.jwt_secret_key) == "legacy-jwt-value"
         assert envelope.decrypt_tenant_secret(tenant.backup_encryption_key) == "legacy-backup-value"
+        assert envelope.decrypt_tenant_secret(tenant.hl7_shared_secret_encrypted) == "legacy-hl7-value"

@@ -9,14 +9,17 @@ class Settings(BaseSettings):
     ENVIRONMENT: str
     DEVELOPMENT_AUTO_CREATE_SCHEMA: bool
     CONTROL_PLANE_MASTER_KEY: Optional[str] = None
+    CONTROL_PLANE_LEGACY_MASTER_KEY_ENABLED: bool = False
     CONTROL_PLANE_ACCESS_TOKEN_MINUTES: int = Field(default=15, ge=5, le=60)
     LOGIN_LOCKOUT_MINUTES: int = Field(default=15, ge=1, le=1440)
     MFA_REQUIRED_FOR_PRIVILEGED: bool = True
     TRUSTED_PROXY_IPS: str = ""
     WS_MAX_CONNECTIONS: int = Field(default=100, ge=1, le=10000)
-    HL7_SHARED_SECRET: Optional[str] = None
+    WS_MAX_WAITING_ROOM_CONNECTIONS: int = Field(default=25, ge=1, le=10000)
+    BREAK_GLASS_MAX_REQUESTS_PER_DAY: int = Field(default=5, ge=1, le=100)
     HL7_TLS_CERT_FILE: Optional[str] = None
     HL7_TLS_KEY_FILE: Optional[str] = None
+    HL7_CLIENT_IDLE_TIMEOUT_SECONDS: int = Field(default=300, ge=1, le=3600)
     TENANT_URL_TEMPLATE: Optional[str] = None
     API_PORT: int = Field(gt=0, le=65535)
     API_SERVICE_HOST: str

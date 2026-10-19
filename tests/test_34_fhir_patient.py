@@ -30,6 +30,12 @@ def test_fhir_patient_read_and_search_are_tenant_scoped(
         patient_id = patient.id
 
     headers = apollo_admin_headers
+    metadata = client.get("/v1/api/fhir/R4/metadata")
+    assert metadata.status_code == 200
+    assert metadata.headers["content-type"].startswith("application/fhir+json")
+    assert metadata.json()["fhirVersion"] == "4.0.1"
+    assert metadata.json()["rest"][0]["resource"][0]["type"] == "Patient"
+
     read = client.get(f"/v1/api/fhir/R4/Patient/{patient_id}", headers=headers)
     assert read.status_code == 200, read.text
     resource = read.json()
@@ -53,6 +59,20 @@ def test_fhir_patient_read_and_search_are_tenant_scoped(
     assert bundle["resourceType"] == "Bundle"
     assert bundle["total"] == 1
     assert bundle["entry"][0]["resource"]["id"] == str(patient_id)
+    wildcard_search = client.get(
+        "/v1/api/fhir/R4/Patient",
+        params={"name": "A%"},
+        headers=headers,
+    )
+    assert wildcard_search.status_code == 200
+    assert wildcard_search.json()["total"] == 0
+    not_found = client.get(
+        "/v1/api/fhir/R4/Patient/999999",
+        headers=headers,
+    )
+    assert not_found.status_code == 404
+    assert not_found.headers["content-type"].startswith("application/fhir+json")
+    assert not_found.json()["resourceType"] == "OperationOutcome"
     assert client.get(
         f"/v1/api/fhir/R4/Patient/{patient_id}",
         headers={"X-Hospital-Subdomain": "default", "Authorization": headers["Authorization"]},

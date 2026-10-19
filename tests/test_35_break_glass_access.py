@@ -19,7 +19,12 @@ def _patient(db: Session) -> Patient:
 
 
 def test_break_glass_scope_expiry_alert_and_review(
-    client, multi_tenant_env, doctor_headers, auditor_headers, fake_redis
+    client,
+    multi_tenant_env,
+    doctor_headers,
+    auditor_headers,
+    superuser_headers,
+    fake_redis,
 ):
     engine = multi_tenant_env["tenant_engines"]["hms_default"]
     with Session(engine) as db:
@@ -49,6 +54,9 @@ def test_break_glass_scope_expiry_alert_and_review(
     ).status_code == 403
     assert client.get(
         "/v1/api/break-glass/reviews/pending", headers=auditor_headers
+    ).status_code == 403
+    assert client.get(
+        "/v1/api/break-glass/reviews/pending", headers=superuser_headers
     ).json()["items"][0]["grant_id"] == grant["grant_id"]
 
     self_review = client.post(
@@ -59,13 +67,13 @@ def test_break_glass_scope_expiry_alert_and_review(
     assert self_review.status_code == 403
     reviewed = client.post(
         f"/v1/api/break-glass/reviews/{grant['grant_id']}",
-        headers=auditor_headers,
+        headers=superuser_headers,
         json={"outcome": "JUSTIFIED", "notes": "Reviewed against emergency record"},
     )
     assert reviewed.status_code == 200, reviewed.text
     assert client.post(
         f"/v1/api/break-glass/reviews/{grant['grant_id']}",
-        headers=auditor_headers,
+        headers=superuser_headers,
         json={"outcome": "JUSTIFIED", "notes": "Duplicate review"},
     ).status_code == 409
 
@@ -77,6 +85,37 @@ def test_break_glass_scope_expiry_alert_and_review(
         f"/v1/api/break-glass/grants/{grant['grant_id']}/patient",
         headers=doctor_headers,
     ).status_code == 403
+
+
+def test_break_glass_limit_and_notification_outage_do_not_block_access(
+    client, multi_tenant_env, doctor_headers, fake_redis, monkeypatch
+):
+    from backend.core.config import settings
+
+    monkeypatch.setattr(settings, "BREAK_GLASS_MAX_REQUESTS_PER_DAY", 1)
+    monkeypatch.setattr(
+        fake_redis,
+        "publish",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("Redis unavailable")),
+    )
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    with Session(engine) as db:
+        patient_id = _patient(db).id
+
+    payload = {"reason": "Urgent allergy review during emergency care"}
+    response = client.post(
+        f"/v1/api/break-glass/patients/{patient_id}/grants",
+        headers=doctor_headers,
+        json=payload,
+    )
+    assert response.status_code == 201, response.text
+    assert client.post(
+        f"/v1/api/break-glass/patients/{patient_id}/grants",
+        headers=doctor_headers,
+        json=payload,
+    ).status_code == 429
+    with Session(engine) as db:
+        assert db.query(BreakGlassGrant).count() == 1
 
 
 def test_break_glass_alert_stream_is_restricted_to_iam_read_users(

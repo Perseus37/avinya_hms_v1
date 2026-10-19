@@ -348,18 +348,20 @@ containers.
 | Backup/cache tuning | `BACKUP_INTERVAL_SECONDS`, `BACKUP_OUTPUT_DIR`, `VAULT_POLL_INTERVAL_SECONDS`, `REDIS_MAX_MEMORY` |
 | PostgreSQL | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_HOST=db`, `POSTGRES_PORT=5432`, `CONTROL_PLANE_DB_NAME` |
 | Redis | `REDIS_HOST=redis`, `REDIS_PORT=6379`, `REDIS_DB`, `REDIS_PASSWORD` |
-| Security | `SECRET_KEY` (at least 32 characters), `MASTER_ONBOARDING_KEY` (at least 16 characters), `CONTROL_PLANE_MASTER_KEY` (recommended), `ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES`, `ENVELOPE_ENCRYPTION_SALT`, `BACKUP_ENCRYPTION_SALT` |
+| Security | `SECRET_KEY` (at least 32 characters), `MASTER_ONBOARDING_KEY` (at least 16 characters), `CONTROL_PLANE_LEGACY_MASTER_KEY_ENABLED=false`, `TRUSTED_PROXY_IPS` (exact ingress proxy IP/CIDR values), `ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES`, `ENVELOPE_ENCRYPTION_SALT`, `BACKUP_ENCRYPTION_SALT` |
 | Initial account and CORS | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `CORS_ORIGINS` (comma-separated exact trusted origins, including `https://onboard.<BASE_DOMAIN>`) |
 | Mail and integrations | `MAIL_PROVIDER` (`smtp`, `aws_ses`, or `azure_communication_services`), `SMTP_FROM`; SMTP additionally uses `SMTP_HOST`, `SMTP_PORT`, optional `SMTP_USER`/`SMTP_PASSWORD`; SES uses `AWS_SES_REGION` and the AWS SDK credential chain/role; Azure uses `AZURE_COMMUNICATION_CONNECTION_STRING` and optional `AZURE_COMMUNICATION_SENDER`; optional `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` enable Stripe webhook handling |
 | Proxy/certificate | `CF_DNS_API_TOKEN`, `ACME_EMAIL`, `ACME_DNS_PROVIDER`, `ACME_DNS_RESOLVERS`, `TRAEFIK_HTTP_PORT`, `TRAEFIK_HTTPS_PORT`, `PUBLIC_HTTP_PORT`, `PUBLIC_HTTPS_PORT` |
 | Local Compose-only port bindings | `POSTGRES_PUBLISHED_PORT`, `REDIS_PUBLISHED_PORT`, `API_PUBLISHED_PORT`, `CONTROL_PLANE_PUBLISHED_PORT` |
 
-Use unique, randomly generated production values for all secrets. Keep the
-control-plane key separate from the Master Setup Key. Enter them only in the
-trusted onboarding browser; the current UI stores entered keys in browser
-local storage. Rotate any credential that has been shared in source control,
-chat, an IDE screenshot, or an untrusted browser. Configure billing and cloud
-integration credentials only if those integrations are enabled.
+Use unique, randomly generated production values for all secrets. Leave
+`CONTROL_PLANE_LEGACY_MASTER_KEY_ENABLED=false` in production and set
+`TRUSTED_PROXY_IPS` to the exact reverse-proxy address ranges; forwarded client
+IP headers are trusted only when the direct peer is in those ranges. Enter
+secrets only in approved secret-management tooling. Rotate any credential that
+has been shared in source control, chat, an IDE screenshot, or an untrusted
+browser. Configure billing and cloud integration credentials only if those
+integrations are enabled.
 
 The current application does not consume `KMS_INTERNAL_ROOT_KEY` or
 `KMS_INTERNAL_AUTH_TOKEN`; entries with those names in older local environment

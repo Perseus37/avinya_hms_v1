@@ -15,7 +15,7 @@ from backend.scripts.migrate import (
     validate_tenant_database_url,
 )
 
-CONTROL_PLANE_HEAD = "1c8b4a72e903"
+CONTROL_PLANE_HEAD = "3f6a8c1d9b24"
 
 
 def test_control_plane_initial_migration_matches_metadata(tmp_path):
