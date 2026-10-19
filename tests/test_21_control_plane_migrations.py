@@ -476,6 +476,99 @@ def test_migration_cli_returns_failure_when_a_tenant_upgrade_fails(monkeypatch):
     assert migrate.main(["--fleet"]) == 1
 
 
+def test_fleet_migration_persists_per_tenant_attempts_and_outcomes(monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from backend.scripts import migrate
+
+    tenants = [
+        SimpleNamespace(subdomain_slug="good", db_name="tenant_good"),
+        SimpleNamespace(subdomain_slug="bad", db_name="tenant_bad"),
+    ]
+    audit_logs = []
+
+    class Result:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return tenants
+
+    class ControlSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def execute(self, _statement):
+            return Result()
+
+        def add(self, entry):
+            audit_logs.append(entry)
+
+        def commit(self):
+            pass
+
+    monkeypatch.setattr(migrate, "ControlSessionLocal", ControlSession)
+    monkeypatch.setattr(
+        migrate,
+        "ensure_postgres_db_exists",
+        lambda _db_name: "postgresql:///tenant_default",
+    )
+    monkeypatch.setattr(migrate, "validate_tenant_database_url", lambda _url: None)
+    monkeypatch.setattr(
+        migrate.settings, "DEFAULT_TENANT_SLUG", "default"
+    )
+    monkeypatch.setattr(
+        migrate.settings, "TENANT_DATABASE_PREFIX", "tenant_"
+    )
+    monkeypatch.setenv("MIGRATION_ACTOR", "release-operator")
+    monkeypatch.setenv("GIT_COMMIT_SHA", "abc123")
+
+    def upgrade(db_name):
+        if db_name == "tenant_bad":
+            raise RuntimeError("DDL failed")
+        return "head123"
+
+    monkeypatch.setattr(migrate, "upgrade_single_database", upgrade)
+
+    result = migrate.migrate_remaining_fleet()
+
+    assert len(result["upgraded"]) == 1
+    assert len(result["failed"]) == 1
+    tenant_events = [
+        entry for entry in audit_logs
+        if entry.action in {
+            "TENANT_SCHEMA_MIGRATION_STARTED",
+            "TENANT_SCHEMA_MIGRATION",
+        }
+    ]
+    assert len(tenant_events) == 4
+    started = [
+        entry for entry in tenant_events
+        if entry.action.endswith("_STARTED")
+    ]
+    outcomes = [
+        entry for entry in tenant_events
+        if entry.action == "TENANT_SCHEMA_MIGRATION"
+    ]
+    assert {entry.actor for entry in tenant_events} == {"release-operator"}
+    assert {entry.target_slug for entry in tenant_events} == {"good", "bad"}
+    run_ids = {json.loads(entry.details)["run_id"] for entry in tenant_events}
+    assert len(run_ids) == 1
+    assert all(json.loads(entry.details)["release_revision"] == "abc123" for entry in tenant_events)
+    assert {json.loads(entry.details)["status"] for entry in started} == {"STARTED"}
+    outcome_details = {
+        entry.target_slug: json.loads(entry.details) for entry in outcomes
+    }
+    assert outcome_details["good"]["status"] == "SUCCEEDED"
+    assert outcome_details["good"]["revision"] == "head123"
+    assert outcome_details["bad"]["status"] == "FAILED"
+    assert outcome_details["bad"]["error"] == "DDL failed"
+
+
 def test_schema_autocreate_requires_explicit_opt_in(tmp_path):
     database_url = f"sqlite:///{(tmp_path / 'no_opt_in.sqlite').as_posix()}"
 

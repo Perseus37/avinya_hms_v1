@@ -24,6 +24,19 @@ availability.
 | Identity lifecycle | Tenant APIs provide password change, expiring single-use email reset links with a same-origin reset form, TOTP MFA with one-time recovery codes for privileged users, short-lived server-tracked access sessions, per-user failed-MFA throttling and lockout, and all-session logout/revocation. Initial privileged MFA enrollment requires a single-use email code stored hashed and expiring after 10 minutes; a password-only challenge cannot create or confirm an authenticator. Tenant HTTP and WebSocket access requires a session ID and rejects purpose-scoped challenge tokens. | Tenant MFA is enforced for superusers and `ROLE_ADMIN` when `MFA_REQUIRED_FOR_PRIVILEGED=true` (enabled in the production example); other users may enroll optionally. Static control-plane master-key authentication is disabled by default and production validation rejects enabling it. Validate SMTP delivery, secure first-admin credential handoff, account recovery, PostgreSQL migrations, and operator access before production. |
 | Interoperability and remaining product gaps | The read-only FHIR R4 Patient API has a capability statement and patient not-found `OperationOutcome`, with `patients:read` authorization and tenant-scoped data. FHIR Encounter/Observation/Condition/write mappings, ABDM profiles/consent/authentication, and live ABDM integration are not delivered; do not advertise full FHIR interoperability without a named partner profile and validated terminology/identifier mappings. Break-glass grants require the dedicated `break_glass:request` permission (seeded for default Attending Physician and Registered Nurse roles, without granting `patients:write`), are rate-limited per user, separately reviewed by `iam:write`, and alert failures do not block committed grants. HL7 credentials are tenant-specific, encrypted in the control plane, audited on rotation without storing plaintext, redacted from stored payloads, and results are checked against the PID patient. Privacy APIs maintain consent-decision history and versioned retention schedule records, but currently neither capture a complete hospital policy during onboarding nor gate every data use or trigger deletion. Patient anonymisation is deliberately not implemented until an approved legal policy and complete data/backup/export inventory exist. Workforce APIs provide attendance, leave request/approval, effective-dated monthly fixed-salary profiles, auditable pro-rata payroll inputs/outputs, and require different preparers/finalizers for payroll periods. | Validate custom MRN/ABHA identifier systems and FHIR mappings with integration partners; do not present this API as ABDM-compliant or connected. Validate the emergency-access minimum-data set and hospital review process; monitor the pending-review endpoint until automated reminders exist. Define each hospital's consent uses, exceptions, retention categories/periods, legal holds, and backup/export treatment during onboarding before implementing enforcement or deletion. Validate service protocols, staffing, sterilization policies, recipient identity and witness procedures, and applicable jurisdictional retention/payroll requirements with hospital owners before production; these MVP APIs are not a substitute for clinical or regulatory approval. The privacy ledger is governance evidence, not consent enforcement across all modules; do not claim anonymisation or automated retention enforcement. Workforce payroll is a configurable arithmetic ledger, not statutory payroll: paid days and components are manually supplied and tax, PF, ESI, overtime, gratuity, payslips, bank disbursement, roster integration, leave balances, and statutory compliance remain out of scope. |
 
+## Future prospects — deferred pending owners or external inputs
+
+These items are intentionally outside the current implementation queue; their
+missing requirements do not prevent unrelated engineering work. This
+classification does not waive any applicable P0 gate or authorize live patient
+data use.
+
+| Prospect | Input needed before implementation or exercise | Boundary until then |
+| --- | --- | --- |
+| Hospital-specific consent and retention enforcement | Hospital-approved consent purposes and exceptions; record categories and retention periods; legal holds; deletion/anonymisation rules; backup, export, and integration treatment; and a complete data-use map. | Current APIs are governance records only. Do not claim they gate data use or automatically delete/anonymise records. Obtain privacy/legal approval and satisfy applicable P0 sign-off before live patient data. |
+| Broader FHIR/ABDM interoperability | Named integration partner and target FHIR version/profile; required resources and operations; identifier/terminology mappings; authorization and consent requirements; and partner sandbox/test cases. | Describe only read-only FHIR R4 Patient search/read. Do not advertise complete FHIR interoperability, ABDM compliance, or a live ABDM connection. |
+| Staging capacity test and invoice OCR validation | For k6: staging-owner approval, HTTPS staging URL, test credentials, test window, and synthetic-data plan. For OCR: production-readiness/frontend trigger, representative synthetic or approved redacted invoices, and agreed extraction-quality measures. | The guarded k6 script is a preliminary patient-list read baseline, not a multi-tenant workload or capacity certification. Do not run it against production. OCR validation remains deferred; extraction is advisory and manual review remains necessary. |
+
 ## P0 — Required before first live patient data
 
 | Work item | Why it matters | Acceptance evidence |
@@ -33,9 +46,9 @@ availability.
 | Test migrations on PostgreSQL 17 | SQLite tests do not establish PostgreSQL DDL, lock, extension, permission, or failure behavior. The repository's baseline revisions are fresh-install histories, and older revision IDs need a tested bridge. | The opt-in test passed once on a disposable PostgreSQL 17 container and verifies fresh migrations plus ORM parity. Still cover fresh Compose bootstrap, retained-volume restart, tenant provisioning, canary/fleet failure, restore, and customer history bridges. |
 | Automate off-host encrypted backup delivery | Local encrypted dumps on the production VM do not protect against VM/host loss. | Schedule `deployments/backup-postgres.sh`, configure protected GPG key material and remote rsync/SSH destination on an independently administered host/NAS, verify checksums and retention, and alert on failed/missed jobs. The attached local disk is only a recovery copy. |
 | Prove restore and recovery objectives | A successful dump is not proof that a hospital can be restored. | A disposable PostgreSQL 17 DB round-trip using custom-format `pg_dump`, GPG AES-256, and `pg_restore` passed and verified a sample row. Still run the host scripts from the attached backup mount and remote copy; restore control-plane and tenant snapshots and verify revisions, records, authentication and tenant isolation. Record measured RPO/RTO and owner sign-off. |
-| Review production identity and privileged endpoints | The onboarding console still uses high-privilege shared setup keys. The UI now keeps them in memory only, and control-plane endpoints that require the second key fail closed when it is unconfigured. | Production access uses named operator accounts or an approved access proxy, MFA, least privilege, key rotation, rate limiting, audit review, secure browser controls, and a tested revocation process. If shared keys remain, document compensating controls and restrict network/browser access. |
+| Review production identity and privileged endpoints | The React onboarding UI uses named control-plane operators, MFA enrollment, bearer sessions, and server-side revocation. A legacy console/static-key API path remains available for compatibility and must not be assumed safe for production. | Disable the legacy static-key fallback in production; verify named operators or an approved access proxy, MFA, least privilege, key rotation, rate limiting, audit review, secure browser controls, and a tested revocation process. |
 | Verify database privilege and isolation | Bootstrap creates databases and tenant services connect using the configured PostgreSQL role. Over-privileged runtime access increases blast radius; insufficient privileges break onboarding. | Separate bootstrap/migration and runtime roles where feasible. Test that runtime cannot create/drop databases or read another tenant database, while approved provisioning can create one. Never expose PostgreSQL publicly. |
-| Release gates and branch alignment | `.github/workflows/release-gates.yml` runs Python tests plus PostgreSQL 17 migration parity and dependency audits, UI install/audit/tests/build, Compose validation, production image build, and Trivy image scan. PR #13's coordinated Vite/plugin upgrade passed all four jobs and was merged to `main`; PR #14 synchronized `main` back into `dev` and passed all four jobs. `main` is an ancestor of `dev`; local `dev` was fast-forwarded to the merged sync commit. Dependabot PRs #3–#12 were resolved; tooling PR #13 was merged; no PRs are currently open. Branch-protection enforcement remains a repository-settings responsibility. | Continue periodic dependency/image review and operational readiness work. Do not infer staging or production readiness from branch alignment or passing CI. |
+| Release gates and branch alignment | Release gates cover Python tests and PostgreSQL 17 migration parity, UI build, Compose validation, and production image build/scan. PR #30 merged the break-glass role-scope update to `dev`; PR #31 promoted it to `main`. PR #32 removed the completed `Audit.md` from `dev`; PR #33 promoted that deletion to `main`. The gates passed on both promotion PRs. At this roadmap update, `dev` is `76027a3` and `main` is `64e61f2`; no pull requests are open. Branch-protection enforcement remains a repository-settings responsibility. | Continue periodic dependency/image review and operational readiness work. Do not infer staging or production readiness from branch alignment or passing CI. |
 | Validate privacy and clinical workflows in India | Feature tests are not clinical validation or a legal assessment, and deployment geography alone does not establish compliance. | Indian hospital clinical, privacy/security, and legal owners review applicable data-protection, cybersecurity, medical-record retention, consent, access, breach response, and ABDM obligations if applicable; sign off tested workflows and operational controls before live use. |
 
 ## P1 — Required for a supported first cohort (1–10 hospitals)
@@ -43,9 +56,9 @@ availability.
 | Work item | Why it matters | Acceptance evidence |
 | --- | --- | --- |
 | Add operational monitoring and alerting | Compose health checks only report basic process/readiness state; they are not an on-call service. | Alerts cover API availability/error rate/latency, DB disk/connection saturation, Redis health, backup freshness/failure, certificate expiry, host disk/memory/CPU, and restore-job failure. Logs are centralized with access controls and retention. |
-| Make tenant migration outcomes durable and reviewable | The CLI now exits non-zero for failures, but a human still needs a complete, auditable migration record and safe retry semantics. | Per-tenant run ID, release/revision, start/end, success/failure reason, operator, and retry state are durably audited; rerun behavior is tested and no tenant is skipped silently. |
+| Make tenant migration outcomes durable and reviewable | Fleet migration now writes durable per-tenant STARTED and SUCCEEDED/FAILED control-plane audit events, grouped by run ID and recording tenant DB, timestamps, Alembic revision or failure, optional release SHA, and `MIGRATION_ACTOR`; it retains a batch summary and exits non-zero when any tenant fails. | A focused test verifies mixed success/failure outcome persistence. Still exercise operator identity, interrupted-run recovery, repeated attempts, audit-ledger review, and failure handling in staging before relying on it operationally. |
 | Separate schema deployment from application startup | The new production gate prevents API startup on schema mismatch. The release process still needs careful app/schema compatibility sequencing. | Deployment runbook demonstrates backward-compatible expand/migrate/contract releases, canary verification, explicit fleet approval, health checks, and rollback/forward-fix in a staging environment. |
-| Exercise capacity at representative scale | Hospital count alone is not a capacity metric; a single PostgreSQL server and four-worker API can be bottlenecks. | Start with 20 authenticated synthetic users for each of 10 tenants (200 concurrent users), ramp over 10 minutes and sustain 30 minutes; expand to 300/500 users after baseline. The included harness tests login, `/api/auth/me`, and `/health/ready` only. Add clinical, billing, reporting and backup workflows before claiming capacity. Initial p95 ≤1s, p99 ≤2s and <1% errors are provisional engineering targets, not a regulatory/industry certification. |
+| Exercise capacity at representative scale | Hospital count alone is not a capacity metric; a single PostgreSQL server and four-worker API can be bottlenecks. | The included HTTPS-only k6 script exercises a single tenant's patient-list read, ramps to 200 VUs, holds 15 minutes, and uses provisional thresholds of p95 <500 ms, failed requests <1%, and checks >99%. Run only with staging-owner approval, synthetic data, and an approved staging target. This is not a multi-tenant or representative clinical/billing/reporting workload and does not certify capacity; expand the profile with operators and realistic synthetic workflows before making capacity claims. |
 | Procurement invoice review and posting flow | Uploaded documents can be listed/filtered, retrieved, corrected by an authorized reviewer, reconciled against vendor/PO and mapped PO items, then approved into AP. Totals and dates are validated; posted records are locked and duplicate posting is blocked. | API end-to-end tests cover upload → manual review → list/detail → match → AP post, arithmetic validation, and duplicate-post/edit rejection. AI extraction remains advisory. The procurement workflow has no dedicated user interface; do not rely on it for live use until the separate document security/audit/retention/restore gaps are resolved. |
 | Frontend analytics contract | Analytics APIs provide bounded UTC windows, SQL aggregates, explicit snapshot/period semantics, and no-store cache headers. Clinical quality/safety measures are windowed; inventory/blood radar uses hospital-configurable batch-detail limits and hospital defaults with per-medication low-stock/expiry overrides. | API tests cover finance, pharmacy, demographic, workforce access, executive aggregates, clinical thresholds, customized inventory alert settings, invalid windows, and migration/schema parity. PostgreSQL query plans/performance, privacy cohort controls, and production role review remain staging evidence. Quality/safety ratios need clinical-owner review; clinical thresholds are not validated surveillance rules. |
 | Date-filtered record browsing | Invoice, prescription, diagnostic-order and appointment lists share bounded inclusive UTC calendar-date filters while retaining existing pagination, permission checks, and appointment datetime filters. Appointment status changes are transactionally recorded with actor, timestamp, from/to status and optional reason; an authorized history API exposes the log. | API tests cover date-window inclusion/exclusion and validation, status transition history and analytics, and migration/schema parity. Historical transitions before migration are irrecoverable; old appointments get only a current-status baseline. Diagnosis cohorts are not prevalence estimates, and appointment records do not measure unrecorded or unmet community demand. |
@@ -113,43 +126,26 @@ Update this document as items are completed, blocked, or superseded. Completion
 must reference test/restore evidence or an accountable owner and due date; do
 not mark an item complete based only on implementation code existing.
 
-## Current continuation — 2026-10-18
+## Current continuation — 2026-10-19
 
-- Repository branches are synchronized: `main` is at `04ca39c`; `dev` is at
-  merge commit `458585f`, which includes `main`. The local checkout is on `dev`
-  at that commit with a clean worktree. PR #14 performed the synchronization;
-  its Python/PostgreSQL, UI, Compose, and production-image checks passed.
-- Latest code release work is merged. No pull requests are open. This does
-  **not** mean the product is ready for live hospital data.
-- Next gate is an isolated staging rehearsal, not a production deployment:
-  use synthetic data and PostgreSQL 17; exercise fresh bootstrap, retained
-  volume restart, tenant provisioning, canary migration, schema parity, and
-  application smoke checks. Record the staging environment, commit, migration
-  heads, outcomes, and operator.
-- The opt-in repository tests were rerun locally against a fresh disposable
-  PostgreSQL 17 container: **2 passed** in 44.76 seconds (migration/schema
-  parity and encrypted dump/GPG/restore sample-row round-trip). The test
-  container and generated databases were removed afterward.
-- Diagnosed the local `docker compose up -d --build` startup log from
-  `backup-sidecar`: it raced `db-init` (control-plane database not created yet)
-  and also encountered PostgreSQL recovery. The running sidecar later completed
-  a backup. Its image-level HTTP healthcheck was also probing port 8000 in
-  services with no API listener, marking the sidecars and onboarding portal
-  unhealthy. The current fix gates the backup sidecar on successful `db-init`,
-  retries transient SQLAlchemy `OperationalError`s, gives onboarding its own
-  port healthcheck, disables HTTP checks for non-HTTP sidecars, and makes API
-  health report database readiness. Focused tests (18 passed), Compose syntax
-  validation, and a production image build passed locally. These changes are
-  not yet in the running Compose containers; rebuild/recreate after merging
-  their PR.
-- Before any live-data decision, an operator must run the encrypted host backup
-  script with the real protected passphrase file and independent remote
-  destination, verify remote checksums, restore into a new isolated PostgreSQL
-  database, and verify application records and attachment files. Record
-  measured recovery time and an agreed recovery-point objective. No production
-  host, remote destination, or protected key was available in this session, so
-  this operational drill remains **not run**.
-- Also outstanding: production secret/key recovery, database least-privilege
-  and tenant-isolation review, monitoring/alerting, DNS/TLS/firewall exercise,
-  and clinical/privacy owner sign-off. Do not use patient data until required
-  owners approve these controls.
+- `dev` is at `76027a3` and `main` is at `64e61f2`. Break-glass eligibility
+  changes passed release gates and were promoted through PR #30 to `dev` and
+  PR #31 to `main`. The obsolete root `Audit.md` was removed through PR #32
+  and promoted by PR #33. No pull requests are currently open.
+- Policy- and environment-dependent product expansions are future prospects,
+  not blockers to unrelated implementation work. Their prerequisites and
+  guardrails are listed above; their deferral does not waive P0 live-data gates.
+- Remaining live-data work is primarily operational and owner-evidenced:
+  production secrets and encryption-key recovery; host/off-host encrypted
+  backup and restore with measured RPO/RTO; runtime database least privilege
+  and tenant isolation; staging bootstrap/provisioning/migration rehearsal;
+  monitoring/alerting; DNS/TLS/firewall validation; and clinical, privacy,
+  security, and legal sign-off. The disposable PostgreSQL 17 migration and
+  encrypted backup/restore tests are useful evidence but do not replace those
+  deployment-specific exercises.
+- Additional supported-cohort work remains in the P1 list, notably durable
+  attachment malware scanning/download audit and restore coverage,
+  incident/downtime procedures, and a hospital-user UI scope. Per-tenant
+  migration audit records are now implemented, but need staging exercise.
+  Select the next item with its operational owner and acceptance evidence; do
+  not claim launch readiness from code-only tests or CI.

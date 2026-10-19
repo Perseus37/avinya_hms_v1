@@ -1,7 +1,10 @@
 import argparse
+from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 import sys
+from uuid import uuid4
 
 _BACKEND_DIR = Path(__file__).resolve().parents[1]
 _REPO_DIR = _BACKEND_DIR.parent
@@ -425,6 +428,11 @@ def migrate_remaining_fleet(target_slug: str | None = None) -> dict:
         f"[*] Verified canary '{default_db_name}' is at the checked-in head; "
         "continuing with the requested tenant rollout."
     )
+    run_id = str(uuid4())
+    run_started_at = datetime.now(timezone.utc)
+    actor = os.environ.get("MIGRATION_ACTOR", "").strip() or "MIGRATION_CLI"
+    actor = actor[:100]
+    release_revision = os.environ.get("GIT_COMMIT_SHA", "").strip() or None
     upgraded = []
     failed = []
 
@@ -440,21 +448,82 @@ def migrate_remaining_fleet(target_slug: str | None = None) -> dict:
         for t in tenants:
             if t.db_name == default_db_name and not target_slug:
                 continue
+            attempt_id = str(uuid4())
+            started_at = datetime.now(timezone.utc)
+            started_details = {
+                "run_id": run_id,
+                "attempt_id": attempt_id,
+                "status": "STARTED",
+                "db_name": t.db_name,
+                "release_revision": release_revision,
+                "started_at": started_at.isoformat(),
+            }
+            control_db.add(
+                ControlPlaneAuditLog(
+                    action="TENANT_SCHEMA_MIGRATION_STARTED",
+                    target_slug=t.subdomain_slug,
+                    actor=actor,
+                    details=json.dumps(started_details, sort_keys=True),
+                )
+            )
+            control_db.commit()
             try:
                 print(f"[*] Pushing head migration to '{t.db_name}' (Tenant: {t.subdomain_slug})...")
                 rev = upgrade_single_database(t.db_name)
                 upgraded.append({"subdomain_slug": t.subdomain_slug, "db_name": t.db_name, "revision": rev})
                 print(f"    [✓] '{t.db_name}' -> {rev}")
+                outcome = {
+                    "run_id": run_id,
+                    "attempt_id": attempt_id,
+                    "status": "SUCCEEDED",
+                    "db_name": t.db_name,
+                    "revision": rev,
+                    "release_revision": release_revision,
+                    "started_at": started_at.isoformat(),
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }
             except Exception as exc:
                 failed.append({"subdomain_slug": t.subdomain_slug, "db_name": t.db_name, "error": str(exc)})
                 print(f"    [x] FAILED on '{t.db_name}': {exc}")
+                outcome = {
+                    "run_id": run_id,
+                    "attempt_id": attempt_id,
+                    "status": "FAILED",
+                    "db_name": t.db_name,
+                    "release_revision": release_revision,
+                    "started_at": started_at.isoformat(),
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "error": str(exc)[:2000],
+                }
+
+            control_db.add(
+                ControlPlaneAuditLog(
+                    action="TENANT_SCHEMA_MIGRATION",
+                    target_slug=t.subdomain_slug,
+                    actor=actor,
+                    details=json.dumps(outcome, sort_keys=True),
+                )
+            )
+            control_db.commit()
 
         if upgraded or failed:
+            run_completed_at = datetime.now(timezone.utc)
             control_db.add(
                 ControlPlaneAuditLog(
                     action="UPGRADE_FLEET_SCHEMA",
                     target_slug=target_slug or "ALL_FLEET",
-                    details=f"Upgraded {len(upgraded)} database(s) to head; {len(failed)} failed.",
+                    actor=actor,
+                    details=json.dumps(
+                        {
+                            "run_id": run_id,
+                            "release_revision": release_revision,
+                            "started_at": run_started_at.isoformat(),
+                            "completed_at": run_completed_at.isoformat(),
+                            "upgraded": len(upgraded),
+                            "failed": len(failed),
+                        },
+                        sort_keys=True,
+                    ),
                 )
             )
             control_db.commit()
