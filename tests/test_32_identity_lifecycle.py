@@ -263,6 +263,92 @@ def test_failed_mfa_codes_lock_account_and_rate_limit_verification(
     assert limited.status_code == 401
 
 
+def test_mfa_rate_limit_does_not_bypass_tenant_lockout_threshold(
+    client, multi_tenant_env, monkeypatch
+):
+    from backend.domains.identity.models import User, UserStatusEnum
+    from backend.domains.policies.router import get_or_create_policy
+
+    monkeypatch.setattr(settings, "MFA_REQUIRED_FOR_PRIVILEGED", True)
+    enrollment = _login(client).json()
+    enrollment_code = _request_mfa_enrollment_code(
+        client, enrollment["mfa_token"], monkeypatch
+    )
+    setup = client.post(
+        "/v1/api/auth/mfa/setup",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={
+            "mfa_token": enrollment["mfa_token"],
+            "enrollment_code": enrollment_code,
+        },
+    )
+    assert setup.status_code == 200
+    confirmed = client.post(
+        "/v1/api/auth/mfa/confirm",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={
+            "mfa_token": enrollment["mfa_token"],
+            "code": _totp_code(setup.json()["secret"]),
+        },
+    )
+    assert confirmed.status_code == 200
+
+    tenant_engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    with Session(tenant_engine) as db:
+        policy = get_or_create_policy(db)
+        policy.max_failed_login_attempts = 10
+        db.commit()
+
+    login = _login(client).json()
+    for attempt in range(5):
+        response = client.post(
+            "/v1/api/auth/mfa/verify-login",
+            headers={"X-Hospital-Subdomain": "default"},
+            json={"mfa_token": login["mfa_token"], "code": "invalid"},
+        )
+        assert response.status_code == 401, f"attempt {attempt + 1}: {response.text}"
+
+    valid_code = client.post(
+        "/v1/api/auth/mfa/verify-login",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={
+            "mfa_token": login["mfa_token"],
+            "code": _totp_code(
+                setup.json()["secret"],
+                datetime.now(timezone.utc) + timedelta(seconds=30),
+            ),
+        },
+    )
+    assert valid_code.status_code == 200, valid_code.text
+
+    second_login = _login(client).json()
+    for attempt in range(60):
+        response = client.post(
+            "/v1/api/auth/mfa/verify-login",
+            headers={"X-Hospital-Subdomain": "default"},
+            json={"mfa_token": second_login["mfa_token"], "code": "invalid"},
+        )
+        if attempt < 10:
+            assert response.status_code == 429, f"attempt {attempt + 1}: {response.text}"
+        else:
+            assert response.status_code == 401, f"attempt {attempt + 1}: {response.text}"
+
+    with Session(tenant_engine) as db:
+        user = db.query(User).filter_by(email="admin@default.com").one()
+        assert user.status == UserStatusEnum.LOCKED
+        assert user.failed_login_attempts == 10
+
+    valid_after_lockout = client.post(
+        "/v1/api/auth/mfa/verify-login",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={
+            "mfa_token": second_login["mfa_token"],
+            "code": _totp_code(setup.json()["secret"]),
+        },
+    )
+    assert valid_after_lockout.status_code == 401
+
+
 def test_password_only_admin_cannot_claim_initial_mfa_enrollment(
     client, multi_tenant_env, monkeypatch
 ):

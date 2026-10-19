@@ -223,6 +223,20 @@ def _record_mfa_failure(db: Session, user: User) -> None:
     db.commit()
 
 
+def _check_mfa_failure_limit(
+    request: Request, redis_client, user: User, *, increment: bool
+) -> HTTPException | None:
+    try:
+        _mfa_failure_limiter.check_actor(
+            request, redis_client, f"user:{user.id}", increment=increment
+        )
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_429_TOO_MANY_REQUESTS:
+            raise
+        return exc
+    return None
+
+
 def _revoke_user_sessions(db: Session, user_id: int) -> None:
     db.execute(
         update(AuthSession)
@@ -633,11 +647,17 @@ def confirm_mfa(
         or not user.mfa_secret
     ):
         raise HTTPException(status_code=400, detail="MFA enrollment has not been started.")
+    rate_limit_error = _check_mfa_failure_limit(
+        request, redis_client, user, increment=False
+    )
     if not _verify_mfa_code(db, user, payload.code):
-        _mfa_failure_limiter.check_actor(
-            request, redis_client, f"user:{user.id}"
-        )
+        if rate_limit_error is None:
+            rate_limit_error = _check_mfa_failure_limit(
+                request, redis_client, user, increment=True
+            )
         _record_mfa_failure(db, user)
+        if rate_limit_error:
+            raise rate_limit_error
         raise HTTPException(status_code=400, detail="Invalid MFA code.")
     user.mfa_enabled = True
     user.failed_login_attempts = 0
@@ -671,11 +691,17 @@ def verify_mfa_login(
         or not user.mfa_secret
     ):
         raise HTTPException(status_code=401, detail="Invalid MFA challenge or code.")
+    rate_limit_error = _check_mfa_failure_limit(
+        request, redis_client, user, increment=False
+    )
     if not _verify_mfa_code(db, user, payload.code):
-        _mfa_failure_limiter.check_actor(
-            request, redis_client, f"user:{user.id}"
-        )
+        if rate_limit_error is None:
+            rate_limit_error = _check_mfa_failure_limit(
+                request, redis_client, user, increment=True
+            )
         _record_mfa_failure(db, user)
+        if rate_limit_error:
+            raise rate_limit_error
         raise HTTPException(status_code=401, detail="Invalid MFA challenge or code.")
     return _complete_login(user, tenant, db)
 

@@ -46,6 +46,8 @@ jobs:
             requirements.txt
             requirements-integrations.txt
             requirements-dev.txt
+            requirements-ai.txt
+            requirements-ai-pytorch.txt
 
       - name: Install Python dependencies
         run: python -m pip install -r requirements-dev.txt
@@ -56,6 +58,7 @@ jobs:
           python -m pip_audit -r requirements.txt
           python -m pip_audit -r requirements-integrations.txt
           python -m pip_audit -r requirements-ai.txt
+          python -m pip_audit -r requirements-ai-pytorch.txt
 
       - name: Run full test suite and PostgreSQL migration parity test
         env:
