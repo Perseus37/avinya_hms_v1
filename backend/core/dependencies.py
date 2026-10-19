@@ -193,10 +193,19 @@ class RateLimiter:
     def __call__(self, request: Request, redis_client=Depends(get_redis)) -> None:
         self._check(request, redis_client)
 
-    def check_actor(self, request: Request, redis_client, actor: str) -> None:
-        self._check(request, redis_client, actor=actor)
+    def check_actor(
+        self, request: Request, redis_client, actor: str, *, increment: bool = True
+    ) -> None:
+        self._check(request, redis_client, actor=actor, increment=increment)
 
-    def _check(self, request: Request, redis_client, actor: str | None = None) -> None:
+    def _check(
+        self,
+        request: Request,
+        redis_client,
+        actor: str | None = None,
+        *,
+        increment: bool = True,
+    ) -> None:
         sensitive_auth_scope = self.scope.startswith(("auth_login", "auth_mfa"))
         if not redis_client:
             if sensitive_auth_scope:
@@ -250,6 +259,8 @@ class RateLimiter:
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail=f"Rate limit exceeded ({self.max_requests} requests per {self.window_seconds}s). Please retry shortly.",
                 )
+            if not increment:
+                return
             if hasattr(redis_client, "incr"):
                 count = redis_client.incr(key)
                 if count == 1 and hasattr(redis_client, "expire"):
