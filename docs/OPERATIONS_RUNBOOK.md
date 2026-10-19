@@ -1000,9 +1000,11 @@ has completed and verification succeeds.
 ## 12. Incident records and access
 
 When an account is suspended, locked, or deactivated through the tenant IAM
-status endpoint, all existing tenant login sessions are revoked. Reactivating
-the account restores eligibility to sign in but does not restore old bearer
-tokens or WebSocket sessions; the user must authenticate again.
+status endpoint, or automatically locked after password or MFA failures, all
+existing tenant login sessions are revoked. Reactivating the account or letting
+the automatic lockout expire restores eligibility to sign in but does not
+restore old bearer tokens or WebSocket sessions; the user must authenticate
+again.
 
 Use the organization's approved incident/change-management system. Capture
 timestamps, environment, tenant slug (avoid unnecessary patient identifiers),
