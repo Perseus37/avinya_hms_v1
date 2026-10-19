@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
-    "build": "vite build",
+    "build": "vite build && tailwindcss -i src/legacy-console.css -o dist/assets/legacy-console.css --minify",
     "preview": "vite preview --host 0.0.0.0 --port 8080",
     "test": "node --test"
   },
@@ -16,6 +16,7 @@
     "reactflow": "^11.11.4"
   },
   "devDependencies": {
+    "@tailwindcss/cli": "^4.3.3",
     "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
