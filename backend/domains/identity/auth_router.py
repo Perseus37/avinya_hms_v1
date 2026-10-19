@@ -813,6 +813,8 @@ def update_user_status(
     if new_status == UserStatusEnum.ACTIVE:
         user.failed_login_attempts = 0
         user.locked_until = None
+    else:
+        _revoke_user_sessions(db, user.id)
     db.commit()
     return {"status": "success", "message": f"User {user.email} status updated to {new_status.value}"}
 

@@ -83,6 +83,39 @@ def test_04_admin_account_unlock_resets_attempts(client, superuser_headers):
     assert success_res.status_code == 200
 
 
+def test_suspending_user_revokes_sessions_permanently_across_reactivation(
+    client, billing_headers, superuser_headers, multi_tenant_env
+):
+    from sqlalchemy.orm import Session
+
+    from backend.domains.identity.models import AuthSession, User
+
+    assert client.get("/v1/api/auth/me", headers=billing_headers).status_code == 200
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    with Session(engine) as db:
+        user = db.query(User).filter_by(email="billing@default.com").one()
+        user_id = user.id
+
+    suspended = client.patch(
+        f"/v1/api/auth/users/{user_id}/status?new_status=SUSPENDED",
+        headers=superuser_headers,
+    )
+    assert suspended.status_code == 200, suspended.text
+    assert client.get("/v1/api/auth/me", headers=billing_headers).status_code == 401
+
+    reactivated = client.patch(
+        f"/v1/api/auth/users/{user_id}/status?new_status=ACTIVE",
+        headers=superuser_headers,
+    )
+    assert reactivated.status_code == 200, reactivated.text
+    assert client.get("/v1/api/auth/me", headers=billing_headers).status_code == 401
+
+    with Session(engine) as db:
+        sessions = db.query(AuthSession).filter_by(user_id=user_id).all()
+        assert sessions
+        assert all(session.revoked_at is not None for session in sessions)
+
+
 def test_password_lockout_expires_and_uses_hospital_policy(client, multi_tenant_env):
     from datetime import datetime, timedelta, timezone
     from sqlalchemy.orm import Session
