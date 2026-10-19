@@ -1,5 +1,7 @@
 import os
 import re
+import socket
+import struct
 import uuid
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
@@ -16,6 +18,57 @@ _ALLOWED_SIGNATURES = {
 }
 _TENANT_SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _CHUNK_SIZE = 1024 * 1024
+_CLAMD_CHUNK_SIZE = 64 * 1024
+_CLAMD_MAX_RESPONSE_BYTES = 4096
+
+
+def scan_file_with_clamav(document_path: Path) -> None:
+    """Stream a staged document to clamd and fail closed on every non-clean result."""
+    try:
+        with socket.create_connection(
+            (settings.CLAMD_HOST, settings.CLAMD_PORT),
+            timeout=settings.CLAMD_TIMEOUT_SECONDS,
+        ) as scanner:
+            scanner.settimeout(settings.CLAMD_TIMEOUT_SECONDS)
+            scanner.sendall(b"zINSTREAM\0")
+            with document_path.open("rb") as document:
+                while chunk := document.read(_CLAMD_CHUNK_SIZE):
+                    scanner.sendall(struct.pack("!I", len(chunk)))
+                    scanner.sendall(chunk)
+            scanner.sendall(b"\0\0\0\0")
+
+            response = bytearray()
+            while b"\0" not in response:
+                chunk = scanner.recv(1024)
+                if not chunk:
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="Invoice malware scanner returned no verdict.",
+                    )
+                response.extend(chunk)
+                if len(response) > _CLAMD_MAX_RESPONSE_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="Invoice malware scanner returned an invalid verdict.",
+                    )
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Invoice malware scanner is unavailable; the upload was not accepted.",
+        ) from exc
+
+    verdict = bytes(response).split(b"\0", 1)[0]
+    if verdict == b"stream: OK":
+        return
+    if verdict.startswith(b"stream: ") and verdict.endswith(b" FOUND"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Invoice document failed malware scanning.",
+        )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Invoice malware scanner returned an invalid or error verdict.",
+    )
 
 
 def store_vendor_invoice_document(
@@ -71,6 +124,7 @@ def store_vendor_invoice_document(
                 detail="Invoice document cannot be empty.",
             )
 
+        scan_file_with_clamav(temporary)
         os.replace(temporary, destination)
     except Exception:
         temporary.unlink(missing_ok=True)

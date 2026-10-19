@@ -66,7 +66,7 @@ docker compose --profile test run --build --rm test-runner
 
 ```powershell
 docker compose ps
-docker compose logs --since=30m db-init api onboarding-portal
+docker compose logs --since=30m db-init api clamav onboarding-portal
 docker compose logs --since=24h backup-sidecar
 curl.exe --fail --show-error http://127.0.0.1:8000/health
 curl.exe --fail --show-error http://127.0.0.1:8000/health/ready
@@ -410,17 +410,33 @@ Production configuration supports both storage layouts:
 Procurement vendor invoice uploads are stored durably below
 `ATTACHMENTS_STORAGE_DIR` in a directory for the active tenant. The API accepts
 PDF, PNG, and JPEG files up to `MAX_ATTACHMENT_UPLOAD_BYTES` (20 MiB by
-default); it checks the file signature, assigns a random server-side filename,
-and requires `procurement:read` to download. The AI extraction task uses a
-separate tenant DB session and does not delete the source document. Local
-Compose uses the persistent `hms_attachments` volume; production uses
-`ATTACHMENTS_HOST_PATH`. Include attachments in encrypted host backups and
-verify a restore before relying on them.
+default); it checks the file signature, scans the staged file with the local
+ClamAV service, then assigns a random server-side filename. A detection rejects
+the upload, and a scanner error or unavailable service fails closed without
+creating an invoice or dispatching OCR. The API waits for the scanner's health
+check at startup and does not publish the scanner port. Production gives
+ClamAV a separate egress network for signature updates; allow the required
+ClamAV update traffic through the host's egress policy and monitor scanner
+health and logs. The AI extraction task uses a separate tenant DB session and
+does not delete the source document. Local Compose uses the persistent
+`hms_attachments` volume; production uses `ATTACHMENTS_HOST_PATH`. Include
+attachments in encrypted host backups and verify a restore before relying on
+them.
 
-This is not yet a general clinical-document system. There is no malware
-scanner, durable download audit trail, retention/deletion workflow, or
-end-to-end restore evidence for attachment files. Do not treat basic
-extension/signature checks as antivirus or a production privacy approval.
+The invoice path now has a durable audit of authorized download requests; it
+records that a response was initiated, not that the client received every
+byte. This is not yet a general clinical-document system. Retention/deletion
+controls, cross-tenant authorization testing, and end-to-end restore evidence
+for attachment files remain open. Do not treat a malware scan or file-signature
+check as a production privacy approval.
+
+For scanner operations, confirm `clamav` is healthy with `docker compose ps`
+and review its logs for successful signature updates. The scanner has a
+persistent definitions volume and a dedicated egress path in production; if
+definitions cannot be refreshed or the service is unavailable, invoice uploads
+are rejected. Do not bypass the scanner by restoring direct-to-storage uploads.
+Include scanner memory and startup/signature-update time in host capacity and
+deployment checks.
 
 ### Procurement vendor invoice workflow
 
