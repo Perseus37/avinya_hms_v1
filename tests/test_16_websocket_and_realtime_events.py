@@ -1,16 +1,71 @@
+import asyncio
 import json
+from urllib.parse import urlsplit
+
 import pytest
 from starlette.websockets import WebSocketDisconnect
 import backend.core.event_bus as event_bus
 from backend.core.event_bus import publish_tenant_event
 
 
+async def _run_websocket_asgi(client, path, subprotocols=(), messages=()):
+    parsed_url = urlsplit(path)
+    incoming = asyncio.Queue()
+    outgoing = asyncio.Queue()
+    await incoming.put({"type": "websocket.connect"})
+    scope = {
+        "type": "websocket",
+        "asgi": {"version": "3.0", "spec_version": "2.4"},
+        "http_version": "1.1",
+        "scheme": "ws",
+        "server": ("testserver", 80),
+        "client": ("testclient", 50000),
+        "root_path": "",
+        "path": parsed_url.path,
+        "raw_path": parsed_url.path.encode("ascii"),
+        "query_string": parsed_url.query.encode("ascii"),
+        "headers": [(b"host", b"testserver")],
+        "subprotocols": list(subprotocols),
+        "state": client.app_state.copy(),
+        "app": client.app,
+    }
+
+    async def receive():
+        return await incoming.get()
+
+    async def send(message):
+        await outgoing.put(message)
+
+    app_task = asyncio.create_task(client.app(scope, receive, send))
+    sent = []
+    try:
+        sent.append(await asyncio.wait_for(outgoing.get(), timeout=2))
+        if sent[-1]["type"] == "websocket.accept":
+            for message in messages:
+                await incoming.put({"type": "websocket.receive", "text": message})
+                sent.append(await asyncio.wait_for(outgoing.get(), timeout=2))
+            await incoming.put(
+                {"type": "websocket.disconnect", "code": 1000, "reason": ""}
+            )
+        await asyncio.wait_for(app_task, timeout=2)
+    finally:
+        if not app_task.done():
+            app_task.cancel()
+        await asyncio.gather(app_task, return_exceptions=True)
+    return sent
+
+
 def test_01_websocket_waiting_room_public_connection_and_heartbeat(client):
     """Scenario 1: Waiting room display connects without auth and handles ping/pong."""
-    with client.websocket_connect("/v1/ws/waiting_room?tenant_slug=default") as ws:
-        ws.send_text("ping")
-        data = json.loads(ws.receive_text())
-        assert data["type"] == "pong"
+    messages = client.portal.call(
+        _run_websocket_asgi,
+        client,
+        "/v1/ws/waiting_room?tenant_slug=default",
+        (),
+        ("ping",),
+    )
+    assert messages[0]["type"] == "websocket.accept"
+    assert json.loads(messages[1]["text"])["type"] == "pong"
 
 
 def test_02_websocket_authenticated_streams_reject_unauthorized_tokens(client):
@@ -44,18 +99,26 @@ def test_websocket_authorizes_requested_stream_and_rejects_wildcard_for_staff(
     assert doctor_login.status_code == 200
     doctor_token = doctor_login.json()["access_token"]
 
-    with pytest.raises(WebSocketDisconnect):
-        with client.websocket_connect(
-            f"/v1/ws/panic_labs?token={doctor_token}&tenant_slug=default"
-        ):
-            pass
+    query_token_result = client.portal.call(
+        _run_websocket_asgi,
+        client,
+        f"/v1/ws/panic_labs?token={doctor_token}&tenant_slug=default",
+    )
+    assert query_token_result[0] == {
+        "type": "websocket.close",
+        "code": 1008,
+        "reason": "",
+    }
 
-    with client.websocket_connect(
+    authorized_result = client.portal.call(
+        _run_websocket_asgi,
+        client,
         "/v1/ws/panic_labs?tenant_slug=default",
-        subprotocols=["bearer", doctor_token],
-    ) as ws:
-        ws.send_text("ping")
-        assert json.loads(ws.receive_text())["type"] == "pong"
+        ("bearer", doctor_token),
+        ("ping",),
+    )
+    assert authorized_result[0]["type"] == "websocket.accept"
+    assert json.loads(authorized_result[1]["text"])["type"] == "pong"
 
     billing_login = client.post(
         "/v1/api/auth/login",
@@ -64,20 +127,26 @@ def test_websocket_authorizes_requested_stream_and_rejects_wildcard_for_staff(
     )
     assert billing_login.status_code == 200
     billing_token = billing_login.json()["access_token"]
-    with pytest.raises(WebSocketDisconnect):
-        with client.websocket_connect(
-            "/v1/ws/panic_labs?tenant_slug=default",
-            subprotocols=["bearer", billing_token],
-        ):
-            pass
+    billing_result = client.portal.call(
+        _run_websocket_asgi,
+        client,
+        "/v1/ws/panic_labs?tenant_slug=default",
+        ("bearer", billing_token),
+    )
+    assert billing_result[0] == {
+        "type": "websocket.close",
+        "code": 1008,
+        "reason": "",
+    }
 
     for stream in ("all", "unknown_stream"):
-        with pytest.raises(WebSocketDisconnect):
-            with client.websocket_connect(
-                f"/v1/ws/{stream}?tenant_slug=default",
-                subprotocols=["bearer", doctor_token],
-            ):
-                pass
+        result = client.portal.call(
+            _run_websocket_asgi,
+            client,
+            f"/v1/ws/{stream}?tenant_slug=default",
+            ("bearer", doctor_token),
+        )
+        assert result[0]["type"] == "websocket.close"
 
 
 def test_websocket_rejects_tenant_mfa_challenge_tokens(
