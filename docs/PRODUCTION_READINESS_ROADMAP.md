@@ -128,26 +128,30 @@ not mark an item complete based only on implementation code existing.
 
 ## Current continuation — 2026-10-19
 
-- `dev` is at `76027a3` and `main` is at `64e61f2`. Break-glass eligibility
-  changes passed release gates and were promoted through PR #30 to `dev` and
-  PR #31 to `main`. The obsolete root `Audit.md` was removed through PR #32
-  and promoted by PR #33. No pull requests are currently open.
-- Policy- and environment-dependent product expansions are future prospects,
-  not blockers to unrelated implementation work. Their prerequisites and
-  guardrails are listed above; their deferral does not waive P0 live-data gates.
-- Remaining live-data work is primarily operational and owner-evidenced:
-  production secrets and encryption-key recovery; host/off-host encrypted
+- `dev` is at `c2dc69e` and `main` is at `c89ec5a`; PR #42 merged the
+  session-revocation fix to `dev`, and PR #43 promoted it to `main` after all
+  release gates passed. No pull requests are currently open. The obsolete
+  root `Audit.md` was removed earlier through PRs #32 and #33.
+- Tenant session revocation now covers non-active IAM status changes and
+  automatic password/MFA lockouts. Regression coverage verifies that old
+  bearer sessions remain invalid after reactivation or lockout expiry. The
+  IAM/RBAC module passed locally (19 tests); this does not replace the
+  deployment-specific checks below.
+- There are no unblocked tracked readiness tasks. The four deferred items
+  require hospital-approved consent/retention policy, a named FHIR/ABDM
+  partner profile, approved staging load/OCR inputs, or an approved staging
+  environment for migration-audit validation. Their prerequisites and
+  boundaries are recorded above and in the session task tracker; do not run
+  against production or infer approval to handle live patient data.
+- Required live-data evidence remains owner- and environment-dependent:
+  production secret and encryption-key recovery; host/off-host encrypted
   backup and restore with measured RPO/RTO; runtime database least privilege
   and tenant isolation; staging bootstrap/provisioning/migration rehearsal;
-  monitoring/alerting; DNS/TLS/firewall validation; and clinical, privacy,
-  security, and legal sign-off. The disposable PostgreSQL 17 migration and
-  encrypted backup/restore tests are useful evidence but do not replace those
-  deployment-specific exercises.
-- Additional supported-cohort work remains in the P1 list, notably staging
-  verification of attachment scanning/download audit and restore coverage,
-  incident/downtime procedures, and a hospital-user UI scope. The legacy
-  console's runtime CDN dependency has been removed in code; verify it in an
-  outbound-restricted production-like deployment. Per-tenant migration audit
-  records are implemented but need staging exercise.
-  Select the next item with its operational owner and acceptance evidence; do
-  not claim launch readiness from code-only tests or CI.
+  scanner freshness/outage and attachment restore verification; monitoring
+  and alerting; DNS/TLS/firewall validation; and clinical, privacy, security,
+  and legal sign-off. Disposable PostgreSQL tests and passing CI do not
+  replace these exercises.
+- Continue only when an implementable engineering task is identified or the
+  required owners and staging inputs are available. Keep the `feature → dev →
+  main` promotion path and do not claim launch readiness from code-only tests
+  or CI.
