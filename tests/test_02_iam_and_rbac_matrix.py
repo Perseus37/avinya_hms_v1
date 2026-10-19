@@ -137,6 +137,63 @@ def test_password_lockout_expires_and_uses_hospital_policy(client, multi_tenant_
     assert response.status_code == 200, response.text
 
 
+def test_password_lockout_revokes_sessions_after_expiry(
+    client, doctor_headers, multi_tenant_env
+):
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy.orm import Session
+    from backend.domains.identity.models import AuthSession, User, UserStatusEnum
+    from backend.domains.policies.models import HospitalPolicySetting
+
+    assert client.get("/v1/api/auth/me", headers=doctor_headers).status_code == 200
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    with Session(engine) as db:
+        user = db.query(User).filter_by(email="doctor@default.com").one()
+        original_session_ids = {
+            session.token_id
+            for session in db.query(AuthSession).filter_by(user_id=user.id).all()
+        }
+        policy = db.query(HospitalPolicySetting).first()
+        if policy is None:
+            policy = HospitalPolicySetting()
+            db.add(policy)
+        policy.max_failed_login_attempts = 1
+        db.commit()
+
+    failed_login = client.post(
+        "/v1/api/auth/login",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={"email": "doctor@default.com", "password": "WrongPassword!"},
+    )
+    assert failed_login.status_code == 401
+
+    with Session(engine) as db:
+        user = db.query(User).filter_by(email="doctor@default.com").one()
+        assert user.status == UserStatusEnum.LOCKED
+        user.locked_until = datetime.now(timezone.utc) - timedelta(minutes=1)
+        db.commit()
+
+    successful_login = client.post(
+        "/v1/api/auth/login",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={"email": "doctor@default.com", "password": "StaffPass123!"},
+    )
+    assert successful_login.status_code == 200, successful_login.text
+    assert client.get("/v1/api/auth/me", headers=doctor_headers).status_code == 401
+
+    with Session(engine) as db:
+        user = db.query(User).filter_by(email="doctor@default.com").one()
+        sessions = db.query(AuthSession).filter_by(user_id=user.id).all()
+        sessions_by_id = {session.token_id: session for session in sessions}
+        assert user.status == UserStatusEnum.ACTIVE
+        assert sessions
+        assert original_session_ids
+        assert all(
+            sessions_by_id[token_id].revoked_at is not None
+            for token_id in original_session_ids
+        )
+
+
 def test_password_lock_threshold_uses_hospital_policy(client, multi_tenant_env):
     from sqlalchemy.orm import Session
     from backend.domains.policies.models import HospitalPolicySetting

@@ -220,6 +220,7 @@ def _record_mfa_failure(db: Session, user: User) -> None:
         user.locked_until = datetime.now(timezone.utc) + timedelta(
             minutes=settings.LOGIN_LOCKOUT_MINUTES
         )
+        _revoke_user_sessions(db, user.id)
     db.commit()
 
 
@@ -336,6 +337,7 @@ def login(
                 user.locked_until = now + timedelta(
                     minutes=settings.LOGIN_LOCKOUT_MINUTES
                 )
+                _revoke_user_sessions(db, user.id)
             db.commit()
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
