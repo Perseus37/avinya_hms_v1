@@ -7,7 +7,10 @@ from fastapi import HTTPException
 from sqlalchemy.orm import sessionmaker
 
 from backend.core.config import settings
-from backend.domains.procurement.documents import resolve_vendor_invoice_document
+from backend.domains.procurement.documents import (
+    resolve_vendor_invoice_document,
+    scan_file_with_clamav,
+)
 from backend.domains.procurement.models import (
     ProcurementDocumentDownloadAudit,
     VendorCategoryEnum,
@@ -39,6 +42,10 @@ def test_invoice_document_is_persisted_and_authorized_download_is_tenant_scoped(
     client, superuser_headers, monkeypatch, tmp_path, multi_tenant_env
 ):
     monkeypatch.setattr(settings, "ATTACHMENTS_STORAGE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "backend.domains.procurement.documents.scan_file_with_clamav",
+        lambda _: None,
+    )
     extraction_calls = []
     monkeypatch.setattr(
         "backend.domains.procurement.router.trigger_donut_invoice_extraction",
@@ -102,6 +109,145 @@ def test_invoice_document_is_persisted_and_authorized_download_is_tenant_scoped(
     with pytest.raises(HTTPException) as exc_info:
         resolve_vendor_invoice_document("default", other_tenant_key)
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "response_chunks",
+    [[b"stream: OK\0"], [b"stream: O", b"K\0"]],
+)
+def test_clamav_instream_protocol_accepts_a_clean_verdict(
+    monkeypatch, tmp_path, response_chunks
+):
+    content = b"%PDF-1.7\nsynthetic invoice\n"
+    document_path = tmp_path / "staged.part"
+    document_path.write_bytes(content)
+
+    class ScannerSocket:
+        def __init__(self):
+            self.sent = bytearray()
+            self.responses = list(response_chunks)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def settimeout(self, _):
+            pass
+
+        def sendall(self, data):
+            self.sent.extend(data)
+
+        def recv(self, _):
+            return self.responses.pop(0) if self.responses else b""
+
+    scanner = ScannerSocket()
+    monkeypatch.setattr(
+        "backend.domains.procurement.documents.socket.create_connection",
+        lambda *_args, **_kwargs: scanner,
+    )
+
+    scan_file_with_clamav(document_path)
+
+    expected = (
+        b"zINSTREAM\0"
+        + len(content).to_bytes(4, "big")
+        + content
+        + b"\0\0\0\0"
+    )
+    assert scanner.sent == expected
+
+
+@pytest.mark.parametrize(
+    ("verdict", "expected_status"),
+    [
+        (b"stream: Test-Signature FOUND\0", 422),
+        (b"stream: scan failed ERROR\0", 503),
+        (b"unexpected response\0", 503),
+    ],
+)
+def test_clamav_scanner_fails_closed_on_non_clean_verdict(
+    monkeypatch, tmp_path, verdict, expected_status
+):
+    document_path = tmp_path / "staged.part"
+    document_path.write_bytes(b"%PDF-1.7\nsynthetic invoice\n")
+
+    class ScannerSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def settimeout(self, _):
+            pass
+
+        def sendall(self, _):
+            pass
+
+        def recv(self, _):
+            return verdict
+
+    monkeypatch.setattr(
+        "backend.domains.procurement.documents.socket.create_connection",
+        lambda *_args, **_kwargs: ScannerSocket(),
+    )
+    with pytest.raises(HTTPException) as rejected:
+        scan_file_with_clamav(document_path)
+    assert rejected.value.status_code == expected_status
+
+
+def test_clamav_scanner_fails_closed_when_unavailable(monkeypatch, tmp_path):
+    document_path = tmp_path / "staged.part"
+    document_path.write_bytes(b"%PDF-1.7\nsynthetic invoice\n")
+
+    def connection_failure(*_args, **_kwargs):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(
+        "backend.domains.procurement.documents.socket.create_connection",
+        connection_failure,
+    )
+    with pytest.raises(HTTPException) as unavailable:
+        scan_file_with_clamav(document_path)
+    assert unavailable.value.status_code == 503
+
+
+@pytest.mark.parametrize("scan_status", [422, 503])
+def test_invoice_upload_is_not_stored_or_dispatched_when_scan_fails(
+    client, superuser_headers, monkeypatch, tmp_path, multi_tenant_env, scan_status
+):
+    monkeypatch.setattr(settings, "ATTACHMENTS_STORAGE_DIR", str(tmp_path))
+    vendor_id = _create_vendor(client, superuser_headers)
+    extraction_calls = []
+    monkeypatch.setattr(
+        "backend.domains.procurement.router.trigger_donut_invoice_extraction",
+        lambda *args: extraction_calls.append(args),
+    )
+
+    def reject_staged_document(document_path):
+        assert document_path.is_file()
+        assert document_path.name.endswith(".part")
+        raise HTTPException(status_code=scan_status, detail="scan denied")
+
+    monkeypatch.setattr(
+        "backend.domains.procurement.documents.scan_file_with_clamav",
+        reject_staged_document,
+    )
+    response = client.post(
+        "/v1/api/procurement/invoices/upload-document",
+        params={"vendor_id": vendor_id},
+        headers=superuser_headers,
+        files={"file": ("invoice.pdf", b"%PDF-1.7\nsynthetic invoice", "application/pdf")},
+    )
+
+    assert response.status_code == scan_status
+    assert not [path for path in tmp_path.rglob("*") if path.is_file()]
+    assert not extraction_calls
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    with sessionmaker(bind=engine)() as db:
+        assert db.query(VendorInvoice).filter(VendorInvoice.vendor_id == vendor_id).count() == 0
 
 
 @pytest.mark.parametrize(
