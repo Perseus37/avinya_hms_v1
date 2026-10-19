@@ -12,7 +12,7 @@ def render_command_deck():
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Avinya Nexus // Enterprise Multi-Tenant Control Plane v4.0</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/assets/legacy-console.css" />
   <style>
     body { background: radial-gradient(circle at top right, #0f172a, #020617 70%); color: #f1f5f9; font-family: ui-sans-serif, system-ui, sans-serif; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
