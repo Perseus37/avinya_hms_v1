@@ -153,7 +153,7 @@ advertising or enabling an ABDM connection.
 
 ## 3.3 Emergency patient access
 
-Authenticated users with `patients:write` may request a reasoned emergency grant with
+Authenticated users with `break_glass:request` may request a reasoned emergency grant with
 `POST /api/break-glass/patients/{patient_id}/grants`. The grant lasts 30 minutes
 and only the requesting account can use
 `GET /api/break-glass/grants/{grant_id}/patient`; it exposes a limited patient
@@ -164,10 +164,10 @@ use is durably recorded. Each account is limited to
 receives the grant ID alert. Do not send PHI in the alert payload. A Redis
 outage can delay the alert but does not undo or block the committed emergency
 grant.
-The default Registered Nurse role has `patients:read`, not `patients:write`, so
-it cannot request a grant. Granting `patients:write` also permits patient
-registration and allergy updates; do not add that permission solely for
-break-glass use without clinical least-privilege approval.
+The default Attending Physician and Registered Nurse roles have
+`break_glass:request`; this dedicated permission does not grant `patients:write`
+or permit patient registration and allergy updates. Tenant administrators may
+grant the permission to additional roles after clinical approval.
 
 Independent reviewers with `iam:write` use
 `GET /api/break-glass/reviews/pending` and
@@ -883,6 +883,19 @@ Extraction failures still leave the source document available for manual
 review, are logged, and keep the invoice pending verification; they are never
 treated as successful extraction. The model repository is pinned to an
 immutable revision.
+
+### Staging API load baseline
+
+`tests/load/api_baseline.js` is an opt-in k6 read-only staging baseline. It
+ramps to 200 virtual users, holds that level for 15 minutes, then ramps down.
+The provisional acceptance thresholds are p95 response latency below 500 ms
+and fewer than 1% failed requests/checks; treat these as this deployment's
+engineering targets, not a regulatory or universal industry certification.
+It requires a dedicated staging access token with `patients:read`, a staging
+tenant slug, and an HTTPS base URL. Never point it at production or use
+patient-identifying search terms. Obtain approval from the staging owner before
+running it, then record the tested image SHA, database size, workload, and
+results in the release evidence.
 
 ### Envelope-encryption key rotation
 

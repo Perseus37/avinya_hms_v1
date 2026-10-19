@@ -25,7 +25,7 @@ from backend.domains.identity.passwords import pwd_context
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("avinya.seed")
 
-# 27 Granular Resource:Action Permissions Across All 9 Modules
+# Granular Resource:Action Permissions Across All Modules
 GRANULAR_PERMISSIONS = [
     # Patients & MPI
     ("patients:read", "View patient profiles and charted allergies", "Patients"),
@@ -79,6 +79,7 @@ GRANULAR_PERMISSIONS = [
     # Privacy governance
     ("privacy:read", "View consent records and retention policies", "Privacy"),
     ("privacy:write", "Record consent decisions and retention policies", "Privacy"),
+    ("break_glass:request", "Request audited emergency patient access", "Privacy"),
     # Workforce and payroll
     ("hr:read", "View staff attendance, leave, salary profiles and payroll", "Workforce"),
     ("hr:write", "Record attendance, leave requests and salary profiles", "Workforce"),
@@ -150,7 +151,7 @@ def seed_universal_hospital_data(
     seed_allergies: bool = True,
     seed_complaints: bool = True,
 ) -> bool:
-    """Seeds ONLY the 30 granular permissions, standard role templates, universal dictionaries, and 1 Admin."""
+    """Seeds granular permissions, standard role templates, universal dictionaries, and one admin."""
     perm_map = ensure_permissions_exist(db)
 
     if db.query(User).first():
@@ -175,13 +176,13 @@ def seed_universal_hospital_data(
     role_doctor = Role(
         code="ROLE_DOCTOR",
         name="Attending Physician",
-        description="Read/Write clinical orders, OPD, ADT, and diagnostics",
+        description="Read/Write clinical orders, OPD, ADT, diagnostics, and emergency access",
         is_system_role=True,
     )
     role_nurse = Role(
         code="ROLE_NURSE",
         name="Registered Nurse",
-        description="Ward map read and ADT bed movement access",
+        description="Ward map, ADT bed movement, and emergency patient access",
         is_system_role=True,
     )
     role_pharm = Role(
@@ -210,10 +211,11 @@ def seed_universal_hospital_data(
         perm_map["adt:read"], perm_map["adt:write"], perm_map["adt:discharge"],
         perm_map["wards:read"], perm_map["diagnostics:read"], perm_map["diagnostics:write"],
         perm_map["pharmacy:read"], perm_map["pharmacy:write"],
+        perm_map["break_glass:request"],
     ])
     role_nurse.permissions.extend([
         perm_map["patients:read"], perm_map["wards:read"], perm_map["wards:write"],
-        perm_map["adt:read"], perm_map["adt:write"],
+        perm_map["adt:read"], perm_map["adt:write"], perm_map["break_glass:request"],
     ])
     role_pharm.permissions.extend([
         perm_map["patients:read"], perm_map["pharmacy:read"],

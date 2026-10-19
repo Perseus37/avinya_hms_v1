@@ -22,6 +22,7 @@ def test_break_glass_scope_expiry_alert_and_review(
     client,
     multi_tenant_env,
     doctor_headers,
+    nurse_headers,
     auditor_headers,
     superuser_headers,
     fake_redis,
@@ -45,6 +46,18 @@ def test_break_glass_scope_expiry_alert_and_review(
         headers=auditor_headers,
         json={"reason": "Emergency access requested without clinical permission"},
     ).status_code == 403
+    nurse_grant = client.post(
+        f"/v1/api/break-glass/patients/{patient_id}/grants",
+        headers=nurse_headers,
+        json={"reason": "Urgent allergy check during bedside emergency"},
+    )
+    assert nurse_grant.status_code == 201, nurse_grant.text
+    from backend.core.dependencies import user_has_permission
+    from backend.domains.identity.models import User
+
+    with Session(engine) as db:
+        nurse = db.query(User).filter_by(email="nurse@default.com").one()
+        assert not user_has_permission(db, nurse, "patients:write")
 
     patient_data = client.get(
         f"/v1/api/break-glass/grants/{grant['grant_id']}/patient",
