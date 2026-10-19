@@ -19,13 +19,14 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from backend.core.config import settings
-from backend.core.database import get_db, resolve_tenant_context
+from backend.core.database import get_db, get_redis, resolve_tenant_context
 from backend.core.dependencies import RateLimiter, RequirePermission, get_current_user, validate_pagination, enforce_tenant_resource_quota
 from backend.core.mailer import send_email
 from backend.domains.identity.models import (
     AuthSession,
     Department,
     DoctorProfile,
+    MfaEnrollmentCode,
     MfaRecoveryCode,
     Permission,
     PasswordResetToken,
@@ -43,6 +44,12 @@ from backend.domains.policies.router import get_or_create_policy
 from backend.security.totp import matching_totp_counter, totp_code as _totp_code
 
 router = APIRouter(prefix="/api/auth", tags=["IAM & Auth"])
+_mfa_failure_limiter = RateLimiter(
+    scope="auth_mfa_failure", max_requests=5, window_seconds=300
+)
+_mfa_enrollment_email_limiter = RateLimiter(
+    scope="auth_mfa_enrollment_email", max_requests=3, window_seconds=300
+)
 
 
 class PasswordChangeRequest(BaseModel):
@@ -71,6 +78,10 @@ class PasswordResetStartRequest(BaseModel):
 
 class MfaTokenRequest(BaseModel):
     mfa_token: str = Field(min_length=32, max_length=4096)
+
+
+class MfaEnrollmentSetupRequest(MfaTokenRequest):
+    enrollment_code: str = Field(min_length=32, max_length=128)
 
 
 class MfaCodeRequest(MfaTokenRequest):
@@ -144,7 +155,7 @@ def _issue_mfa_token(user: User, tenant, purpose: str) -> str:
             "purpose": purpose,
             "exp": now + timedelta(minutes=5),
         },
-        decrypt_tenant_secret(tenant.jwt_secret_key),
+        tenant.jwt_secret_key,
         algorithm=settings.ALGORITHM,
     )
 
@@ -153,7 +164,7 @@ def _decode_mfa_token(token: str, tenant, purpose: str) -> int:
     try:
         payload = jwt.decode(
             token,
-            decrypt_tenant_secret(tenant.jwt_secret_key),
+            tenant.jwt_secret_key,
             algorithms=[settings.ALGORITHM],
         )
     except jwt.InvalidTokenError as exc:
@@ -182,7 +193,7 @@ def _issue_access_session(user: User, tenant, db: Session) -> str:
             "iat": now,
             "exp": expires_at,
         },
-        decrypt_tenant_secret(tenant.jwt_secret_key),
+        tenant.jwt_secret_key,
         algorithm=settings.ALGORITHM,
     )
     db.add(AuthSession(token_id=token_id, user_id=user.id, expires_at=expires_at))
@@ -516,9 +527,49 @@ def begin_mfa_enrollment(
     }
 
 
+@router.post("/mfa/enrollment/request", status_code=status.HTTP_202_ACCEPTED)
+def request_mfa_enrollment_code(
+    payload: MfaTokenRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    redis_client=Depends(get_redis),
+):
+    tenant = resolve_tenant_context(request)
+    user_id = _decode_mfa_token(payload.mfa_token, tenant, "mfa_setup")
+    user = db.get(User, user_id)
+    if not user or user.status != UserStatusEnum.ACTIVE or user.mfa_enabled:
+        raise HTTPException(status_code=401, detail="Invalid or expired MFA setup.")
+    _mfa_enrollment_email_limiter.check_actor(
+        request, redis_client, f"user:{user.id}"
+    )
+    now = datetime.now(timezone.utc)
+    db.query(MfaEnrollmentCode).filter(
+        MfaEnrollmentCode.user_id == user.id,
+        MfaEnrollmentCode.used_at.is_(None),
+    ).update({"used_at": now}, synchronize_session=False)
+    code = secrets.token_urlsafe(32)
+    db.add(
+        MfaEnrollmentCode(
+            user_id=user.id,
+            token_hash=hashlib.sha256(code.encode("utf-8")).hexdigest(),
+            expires_at=now + timedelta(minutes=10),
+        )
+    )
+    db.commit()
+    background_tasks.add_task(
+        send_email,
+        user.email,
+        "Avinya HMS MFA enrollment code",
+        f"Use this one-time code to enroll your authenticator: {code}\n\n"
+        "It expires in 10 minutes. If you did not request this, ignore this email.",
+    )
+    return {"message": "If this account can enroll MFA, a one-time code was sent to its registered email."}
+
+
 @router.post("/mfa/setup")
 def setup_mfa(
-    payload: MfaTokenRequest,
+    payload: MfaEnrollmentSetupRequest,
     request: Request,
     db: Session = Depends(get_db),
 ):
@@ -529,29 +580,48 @@ def setup_mfa(
         raise HTTPException(status_code=401, detail="Account is not active.")
     if user.mfa_enabled:
         raise HTTPException(status_code=409, detail="MFA is already enabled.")
+    enrollment_hash = hashlib.sha256(
+        payload.enrollment_code.encode("utf-8")
+    ).hexdigest()
+    enrollment = db.execute(
+        select(MfaEnrollmentCode)
+        .where(
+            MfaEnrollmentCode.user_id == user.id,
+            MfaEnrollmentCode.token_hash == enrollment_hash,
+            MfaEnrollmentCode.used_at.is_(None),
+        )
+        .with_for_update()
+    ).scalar_one_or_none()
+    if not enrollment:
+        raise HTTPException(
+            status_code=401, detail="Invalid or expired MFA enrollment code."
+        )
+    enrollment_expires_at = enrollment.expires_at
+    if enrollment_expires_at.tzinfo is None:
+        enrollment_expires_at = enrollment_expires_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if enrollment_expires_at <= now:
+        raise HTTPException(
+            status_code=401, detail="Invalid or expired MFA enrollment code."
+        )
+    enrollment.used_at = now
     if user.mfa_secret:
         secret = decrypt_tenant_secret(user.mfa_secret)
     else:
         secret = base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
         user.mfa_secret = encrypt_tenant_secret(secret)
-        db.commit()
     label = f"Avinya HMS:{user.email}"
     uri = f"otpauth://totp/{label}?secret={secret}&issuer=Avinya%20HMS&algorithm=SHA1&digits=6&period=30"
+    db.commit()
     return {"secret": secret, "otpauth_uri": uri}
 
 
-@router.post(
-    "/mfa/confirm",
-    dependencies=[
-        Depends(
-            RateLimiter(scope="auth_mfa_confirm", max_requests=5, window_seconds=300)
-        )
-    ],
-)
+@router.post("/mfa/confirm")
 def confirm_mfa(
     payload: MfaCodeRequest,
     request: Request,
     db: Session = Depends(get_db),
+    redis_client=Depends(get_redis),
 ):
     tenant = resolve_tenant_context(request)
     user_id = _decode_mfa_token(payload.mfa_token, tenant, "mfa_setup")
@@ -564,6 +634,9 @@ def confirm_mfa(
     ):
         raise HTTPException(status_code=400, detail="MFA enrollment has not been started.")
     if not _verify_mfa_code(db, user, payload.code):
+        _mfa_failure_limiter.check_actor(
+            request, redis_client, f"user:{user.id}"
+        )
         _record_mfa_failure(db, user)
         raise HTTPException(status_code=400, detail="Invalid MFA code.")
     user.mfa_enabled = True
@@ -581,18 +654,12 @@ def confirm_mfa(
     return {**result, "recovery_codes": recovery_codes}
 
 
-@router.post(
-    "/mfa/verify-login",
-    dependencies=[
-        Depends(
-            RateLimiter(scope="auth_mfa_verify", max_requests=5, window_seconds=300)
-        )
-    ],
-)
+@router.post("/mfa/verify-login")
 def verify_mfa_login(
     payload: MfaCodeRequest,
     request: Request,
     db: Session = Depends(get_db),
+    redis_client=Depends(get_redis),
 ):
     tenant = resolve_tenant_context(request)
     user_id = _decode_mfa_token(payload.mfa_token, tenant, "mfa_login")
@@ -605,6 +672,9 @@ def verify_mfa_login(
     ):
         raise HTTPException(status_code=401, detail="Invalid MFA challenge or code.")
     if not _verify_mfa_code(db, user, payload.code):
+        _mfa_failure_limiter.check_actor(
+            request, redis_client, f"user:{user.id}"
+        )
         _record_mfa_failure(db, user)
         raise HTTPException(status_code=401, detail="Invalid MFA challenge or code.")
     return _complete_login(user, tenant, db)

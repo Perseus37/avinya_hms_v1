@@ -55,7 +55,7 @@ USER avinya
 CMD ["pytest", "-v", "--durations=10"]
 
 # =====================================================================
-# STAGE 4: PRODUCTION TARGET (Locked Non-Root Gunicorn)
+# STAGE 4: STANDARD PRODUCTION TARGET (Locked Non-Root Gunicorn)
 # =====================================================================
 FROM base AS production
 COPY --chown=avinya:avinya . .
@@ -68,3 +68,14 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -f "http://localhost:${API_PORT:?API_PORT is required}/health/ready" || exit 1
 
 CMD ["sh", "-c", "exec gunicorn backend.main:app --workers ${GUNICORN_WORKERS:?GUNICORN_WORKERS is required} --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${API_PORT:?API_PORT is required} --access-logfile - --error-logfile -"]
+
+# =====================================================================
+# STAGE 5: PRODUCTION TARGET WITH OPTIONAL CPU INVOICE OCR RUNTIME
+# =====================================================================
+FROM production AS production-ai
+USER root
+RUN pip install --root-user-action=ignore \
+    --index-url https://download.pytorch.org/whl/cpu \
+    --extra-index-url https://pypi.org/simple \
+    -r /app/requirements-ai.txt
+USER avinya

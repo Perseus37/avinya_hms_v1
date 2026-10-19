@@ -122,7 +122,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Build production image
-        run: docker build --target production --tag avinya-hms-api:ci .
+        run: docker build --target production-ai --tag avinya-hms-api:ci .
 
       - name: Scan production image for fixable high and critical vulnerabilities
         uses: aquasecurity/trivy-action@v0.36.0

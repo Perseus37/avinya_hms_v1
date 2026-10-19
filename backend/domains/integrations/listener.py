@@ -92,9 +92,18 @@ def authenticate_hl7_message(raw_msg: str) -> tuple[str, str | None]:
     except ValueError:
         return "UNKNOWN", None
     tenant_config = _tenant_hl7_config(branch_code)
-    if not tenant_config or not tenant_config[1] or not hmac.compare_digest(
-        supplied_secret, tenant_config[1]
-    ):
+    try:
+        secret_matches = bool(
+            tenant_config
+            and tenant_config[1]
+            and hmac.compare_digest(
+                supplied_secret.encode("utf-8"),
+                tenant_config[1].encode("utf-8"),
+            )
+        )
+    except (AttributeError, UnicodeError):
+        secret_matches = False
+    if not secret_matches:
         return message_control_id, None
     return message_control_id, tenant_config[0]
 

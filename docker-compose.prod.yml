@@ -99,7 +99,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: production
+      target: production-ai
     image: avinya-hms-api:latest
     restart: unless-stopped
     env_file: .env.production
