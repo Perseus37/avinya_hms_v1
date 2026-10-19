@@ -164,6 +164,10 @@ use is durably recorded. Each account is limited to
 receives the grant ID alert. Do not send PHI in the alert payload. A Redis
 outage can delay the alert but does not undo or block the committed emergency
 grant.
+The default Registered Nurse role has `patients:read`, not `patients:write`, so
+it cannot request a grant. Granting `patients:write` also permits patient
+registration and allergy updates; do not add that permission solely for
+break-glass use without clinical least-privilege approval.
 
 Independent reviewers with `iam:write` use
 `GET /api/break-glass/reviews/pending` and
@@ -869,9 +873,12 @@ task's patient; verified or cancelled results cannot be updated. Idle
 connections are closed after `HL7_CLIENT_IDLE_TIMEOUT_SECONDS` (default 300,
 maximum 3600 seconds).
 
-The production Compose image uses the `production-ai` target, which installs
-the pinned CPU-only OCR runtime from `requirements-ai.txt`. Standard
-development/testing images intentionally omit the large ML dependencies.
+The production Compose image uses the `production-ai` target. It installs the
+pinned CPU-only PyTorch wheel from the PyTorch index separately, then resolves
+the remaining OCR runtime from PyPI, avoiding a mixed-index install.
+`requirements-ai-pytorch.txt` and `requirements-ai.txt` hold those respective
+pins. Standard development/testing images intentionally omit the large ML
+dependencies.
 Extraction failures still leave the source document available for manual
 review, are logged, and keep the invoice pending verification; they are never
 treated as successful extraction. The model repository is pinned to an

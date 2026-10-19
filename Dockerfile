@@ -76,6 +76,10 @@ FROM production AS production-ai
 USER root
 RUN pip install --root-user-action=ignore \
     --index-url https://download.pytorch.org/whl/cpu \
-    --extra-index-url https://pypi.org/simple \
-    -r /app/requirements-ai.txt
+    --no-deps \
+    -r /app/requirements-ai-pytorch.txt \
+    && pip install --root-user-action=ignore \
+        --index-url https://pypi.org/simple \
+        -r /app/requirements-ai.txt \
+        -r /app/requirements-ai-pytorch.txt
 USER avinya
