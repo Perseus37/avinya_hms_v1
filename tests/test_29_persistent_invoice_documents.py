@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from backend.core.config import settings
 from backend.domains.procurement.documents import resolve_vendor_invoice_document
 from backend.domains.procurement.models import (
+    ProcurementDocumentDownloadAudit,
     VendorCategoryEnum,
     VendorInvoice,
     VendorInvoiceStatusEnum,
@@ -35,7 +36,7 @@ def _create_vendor(client, headers):
 
 
 def test_invoice_document_is_persisted_and_authorized_download_is_tenant_scoped(
-    client, superuser_headers, monkeypatch, tmp_path
+    client, superuser_headers, monkeypatch, tmp_path, multi_tenant_env
 ):
     monkeypatch.setattr(settings, "ATTACHMENTS_STORAGE_DIR", str(tmp_path))
     extraction_calls = []
@@ -80,6 +81,22 @@ def test_invoice_document_is_persisted_and_authorized_download_is_tenant_scoped(
     assert download.headers["content-type"] == "application/pdf"
     assert download.headers["x-content-type-options"] == "nosniff"
     assert "vendor-invoice-" in download.headers["content-disposition"]
+
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    with sessionmaker(bind=engine)() as db:
+        audit = db.query(ProcurementDocumentDownloadAudit).one()
+        invoice = db.get(VendorInvoice, invoice_id)
+        assert audit.invoice_id == invoice_id
+        assert invoice is not None
+        assert audit.invoice_number == invoice.invoice_number
+        assert audit.actor_user_id is not None
+        assert audit.actor_email == "admin@default.com"
+        assert audit.requested_at is not None
+
+    unauthorized = client.get(f"/v1/api/procurement/invoices/{invoice_id}/document")
+    assert unauthorized.status_code == 401
+    with sessionmaker(bind=engine)() as db:
+        assert db.query(ProcurementDocumentDownloadAudit).count() == 1
 
     other_tenant_key = "another-hospital/procurement-invoices/invoice.pdf"
     with pytest.raises(HTTPException) as exc_info:

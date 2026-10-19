@@ -78,6 +78,27 @@ tenant database and Redis; Redis may be reported degraded while the DB check
 still passes, so read the JSON response. The app logs include request IDs;
 capture that ID when investigating an HTTP error.
 
+### Reviewing procurement document download requests
+
+Authorized requests for procurement invoice documents are recorded in the
+tenant database before the file response is returned. Each row includes the
+invoice number, actor ID and email snapshot, and request timestamp. It records
+that an authorized download was initiated; it does not prove the client
+received every byte. The audit row remains if the invoice or user is later
+deleted, with the corresponding foreign key set to `NULL`. Restrict database
+access to authorized operators and apply the hospital's approved retention
+policy to these records.
+
+To review recent events, connect to the correct tenant database with an
+authorized read-only database account:
+
+```sql
+SELECT invoice_number, actor_user_id, actor_email, requested_at
+FROM procurement_document_download_audits
+WHERE requested_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
+ORDER BY requested_at DESC;
+```
+
 The API container's healthcheck calls `/health/ready`; the onboarding portal
 checks its own listener on `CONTROL_PLANE_PORT`. The backup sidecar and vault
 do not serve HTTP, so they intentionally have no inherited API healthcheck.
