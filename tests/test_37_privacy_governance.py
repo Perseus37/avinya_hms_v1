@@ -1,9 +1,17 @@
 from datetime import date, datetime, timedelta, timezone
 
+import pytest
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from backend.domains.identity.models import Permission, Role, User
 from backend.domains.patients.models import Patient
-from backend.domains.privacy.models import PatientConsentRecord, PrivacyRetentionPolicy
+from backend.domains.privacy.models import (
+    PatientConsentRecord,
+    PrivacyLegalHold,
+    PrivacyPolicyRevision,
+    PrivacyRetentionPolicy,
+)
 
 
 def _create_patient(db: Session) -> int:
@@ -169,3 +177,141 @@ def test_retention_policy_requires_approval_reference(
         },
     )
     assert response.status_code == 422
+
+
+def test_privacy_policy_draft_requires_independent_approval_and_stays_off(
+    client, multi_tenant_env, superuser_headers, doctor_headers
+):
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    with Session(engine) as db:
+        admin_role = db.query(Role).filter_by(code="ROLE_ADMIN").one()
+        approve_permission = (
+            db.query(Permission).filter_by(code="privacy:approve").one()
+        )
+        assert approve_permission in admin_role.permissions
+
+    payload = {
+        "policy_type": "CONSENT",
+        "policy_document": {
+            "purposes": [{"code": "hospital-defined-purpose"}],
+            "exceptions": [],
+            "no_record_handling": "hospital-defined",
+        },
+    }
+    unauthorized = client.post(
+        "/v1/api/privacy/policies",
+        headers=doctor_headers,
+        json=payload,
+    )
+    assert unauthorized.status_code == 403
+
+    created = client.post(
+        "/v1/api/privacy/policies",
+        headers=superuser_headers,
+        json=payload,
+    )
+    assert created.status_code == 201, created.text
+    revision_id = created.json()["id"]
+    assert created.json()["status"] == "DRAFT"
+    assert created.json()["enforcement_mode"] == "OFF"
+    assert created.json()["policy_document"] == payload["policy_document"]
+
+    approval = client.post(
+        f"/v1/api/privacy/policies/{revision_id}/approve",
+        headers=superuser_headers,
+        json={"approval_reference": "PRIVACY-APPROVAL-001"},
+    )
+    assert approval.status_code == 409
+
+    with Session(engine) as db:
+        revision = db.get(PrivacyPolicyRevision, revision_id)
+        assert revision is not None
+        revision.configured_by_user_id = (
+            db.query(User).filter_by(email="doctor@default.com").one().id
+        )
+        db.commit()
+
+    approval = client.post(
+        f"/v1/api/privacy/policies/{revision_id}/approve",
+        headers=superuser_headers,
+        json={"approval_reference": "PRIVACY-APPROVAL-001"},
+    )
+    assert approval.status_code == 200, approval.text
+    assert approval.json()["status"] == "APPROVED"
+    assert approval.json()["enforcement_mode"] == "OFF"
+    assert approval.json()["approval_reference"] == "PRIVACY-APPROVAL-001"
+
+    with Session(engine) as db:
+        revision = db.get(PrivacyPolicyRevision, revision_id)
+        revision.enforcement_mode = "ENFORCE"
+        with pytest.raises(IntegrityError):
+            db.commit()
+            db.rollback()
+
+
+def test_legal_hold_requires_scope_and_independent_release(
+    client, multi_tenant_env, superuser_headers, doctor_headers
+):
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    with Session(engine) as db:
+        patient_id = _create_patient(db)
+
+    base_url = "/v1/api/privacy/legal-holds"
+    unauthorized = client.post(
+        base_url,
+        headers=doctor_headers,
+        json={
+            "patient_id": patient_id,
+            "reason": "Pending legal review",
+            "hold_reference": "HOLD-UNAUTHORIZED",
+        },
+    )
+    assert unauthorized.status_code == 403
+
+    no_scope = client.post(
+        base_url,
+        headers=superuser_headers,
+        json={
+            "reason": "Pending legal review",
+            "hold_reference": "HOLD-001",
+        },
+    )
+    assert no_scope.status_code == 422
+
+    created = client.post(
+        base_url,
+        headers=superuser_headers,
+        json={
+            "patient_id": patient_id,
+            "reason": "Pending legal review",
+            "hold_reference": "HOLD-002",
+        },
+    )
+    assert created.status_code == 201, created.text
+    hold_id = created.json()["id"]
+    assert len(client.get(base_url, headers=superuser_headers).json()["items"]) == 1
+
+    release_payload = {"release_reference": "HOLD-RELEASE-002"}
+    self_release = client.post(
+        f"{base_url}/{hold_id}/release",
+        headers=superuser_headers,
+        json=release_payload,
+    )
+    assert self_release.status_code == 409
+
+    with Session(engine) as db:
+        hold = db.get(PrivacyLegalHold, hold_id)
+        hold.created_by_user_id = (
+            db.query(User).filter_by(email="doctor@default.com").one().id
+        )
+        db.commit()
+
+    released = client.post(
+        f"{base_url}/{hold_id}/release",
+        headers=superuser_headers,
+        json=release_payload,
+    )
+    assert released.status_code == 200, released.text
+    assert released.json()["released_by_user_id"]
+    assert released.json()["release_reference"] == "HOLD-RELEASE-002"
+    assert client.get(base_url, headers=superuser_headers).json()["items"] == []

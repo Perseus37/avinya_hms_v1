@@ -238,6 +238,21 @@ unimplemented pending an approved policy and complete review of tenant data,
 central indexes, backups, exports, and integrations; deactivation is not
 anonymisation.
 
+Hospital policy drafts can be recorded at `POST /api/privacy/policies` as
+opaque consent or retention policy documents. Draft approval requires a
+different user with `privacy:approve` and an approval reference. This records
+workflow evidence only; it does not validate legal approval or change behavior.
+The database constrains the policy enforcement mode to `OFF`, and there is no
+endpoint to enable audit-only or enforcement. Existing consent and retention
+records are not rewritten or interpreted by these drafts.
+
+Legal holds can be registered at `POST /api/privacy/legal-holds` for a patient
+and/or hospital-defined data category, then released by a different
+`privacy:approve` user with a release reference. These records are not yet
+connected to any purge process; no deletion or anonymisation operation exists.
+Do not put patient-identifying details in policy documents or use them as a
+substitute for the hospital's approved legal record.
+
 ## 3.6 Workforce and payroll MVP
 
 The licensed `/api/workforce` API covers attendance entries, leave requests
