@@ -165,9 +165,11 @@ receives the grant ID alert. Do not send PHI in the alert payload. A Redis
 outage can delay the alert but does not undo or block the committed emergency
 grant.
 The default Attending Physician and Registered Nurse roles have
-`break_glass:request`; this dedicated permission does not grant `patients:write`
-or permit patient registration and allergy updates. Tenant administrators may
-grant the permission to additional roles after clinical approval.
+`break_glass:request`; administrators and superusers do not receive an implicit
+exception. This dedicated permission does not grant `patients:write` or permit
+patient registration and allergy updates. The migration preserves access for
+existing custom roles that already had `patients:write`; tenant administrators
+may grant the permission to additional roles after clinical approval.
 
 Independent reviewers with `iam:write` use
 `GET /api/break-glass/reviews/pending` and

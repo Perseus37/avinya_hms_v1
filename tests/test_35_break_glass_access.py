@@ -52,6 +52,11 @@ def test_break_glass_scope_expiry_alert_and_review(
         json={"reason": "Urgent allergy check during bedside emergency"},
     )
     assert nurse_grant.status_code == 201, nurse_grant.text
+    assert client.post(
+        f"/v1/api/break-glass/patients/{patient_id}/grants",
+        headers=superuser_headers,
+        json={"reason": "Administrator requested clinical emergency access"},
+    ).status_code == 403
     from backend.core.dependencies import user_has_permission
     from backend.domains.identity.models import User
 

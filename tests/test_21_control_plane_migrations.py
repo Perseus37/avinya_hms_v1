@@ -61,7 +61,7 @@ def test_tenant_initial_migration_matches_metadata(tmp_path):
         engine.dispose()
 
 
-def test_break_glass_permission_migration_grants_approved_system_roles(tmp_path):
+def test_break_glass_permission_migration_preserves_clinical_role_access(tmp_path):
     database_url = f"sqlite:///{(tmp_path / 'tenant_break_glass.sqlite').as_posix()}"
     config = Config("backend/alembic.ini")
     config.set_main_option("sqlalchemy.url", database_url)
@@ -79,7 +79,31 @@ def test_break_glass_permission_migration_grants_approved_system_roles(tmp_path)
                         ('ROLE_ADMIN', 'Administrator', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
                         ('ROLE_DOCTOR', 'Doctor', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
                         ('ROLE_NURSE', 'Nurse', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-                        ('ROLE_AUDITOR_READONLY', 'Auditor', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        ('ROLE_AUDITOR_READONLY', 'Auditor', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                        ('ROLE_CUSTOM_CLINICAL', 'Custom Clinical', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO permissions (
+                        code, description, module, created_at, updated_at
+                    ) VALUES (
+                        'patients:write', 'Write patients', 'Patients',
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO role_permissions (role_id, permission_id)
+                    SELECT roles.id, permissions.id
+                    FROM roles, permissions
+                    WHERE roles.code = 'ROLE_CUSTOM_CLINICAL'
+                      AND permissions.code = 'patients:write'
                     """
                 )
             )
@@ -91,7 +115,7 @@ def test_break_glass_permission_migration_grants_approved_system_roles(tmp_path)
                 connection.execute(
                     text(
                         """
-                        SELECT roles.code
+                        SELECT roles.name
                         FROM role_permissions
                         JOIN roles ON roles.id = role_permissions.role_id
                         JOIN permissions
@@ -101,7 +125,11 @@ def test_break_glass_permission_migration_grants_approved_system_roles(tmp_path)
                     )
                 ).scalars()
             )
-            assert assigned_roles == {"ROLE_ADMIN", "ROLE_DOCTOR", "ROLE_NURSE"}
+            assert assigned_roles == {
+                "Doctor",
+                "Nurse",
+                "Custom Clinical",
+            }
     finally:
         engine.dispose()
 

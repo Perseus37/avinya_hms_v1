@@ -204,7 +204,9 @@ def seed_universal_hospital_data(
         is_system_role=False,
     )
 
-    role_admin.permissions.extend(perm_map.values())
+    role_admin.permissions.extend(
+        perm for code, perm in perm_map.items() if code != "break_glass:request"
+    )
     role_doctor.permissions.extend([
         perm_map["patients:read"], perm_map["patients:write"],
         perm_map["mdm:read"], perm_map["opd:read"], perm_map["opd:write"],

@@ -39,7 +39,21 @@ def upgrade() -> None:
             SELECT roles.id, permissions.id
             FROM roles
             JOIN permissions ON permissions.code = :permission_code
-            WHERE roles.code IN ('ROLE_ADMIN', 'ROLE_DOCTOR', 'ROLE_NURSE')
+            WHERE (
+                (roles.code IN ('ROLE_DOCTOR', 'ROLE_NURSE')
+                 AND roles.is_system_role = TRUE)
+                OR (
+                    roles.is_system_role = FALSE
+                    AND EXISTS (
+                        SELECT 1
+                        FROM role_permissions existing_role_permissions
+                        JOIN permissions existing_permissions
+                          ON existing_permissions.id = existing_role_permissions.permission_id
+                        WHERE existing_role_permissions.role_id = roles.id
+                          AND existing_permissions.code = 'patients:write'
+                    )
+                )
+            )
               AND NOT EXISTS (
                   SELECT 1
                   FROM role_permissions
