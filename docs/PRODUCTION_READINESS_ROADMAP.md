@@ -140,10 +140,10 @@ not mark an item complete based only on implementation code existing.
 
 ## Current continuation — 2026-10-20
 
-- `dev` is at `a728b94` and `main` is at `7d7168a`. PR #46/#47 promoted
-  redaction of raw tenant migration exceptions to `main`; PR #48/#49 promoted
-  the policy-neutral privacy foundation. All release gates passed and no
-  pull requests were open at this snapshot.
+- PR #46/#47 promoted redaction of raw tenant migration exceptions to `main`;
+  PR #48/#49 promoted the policy-neutral privacy foundation; and PR #50/#51
+  refreshed this roadmap status. All release gates passed and no pull requests
+  were open after PR #51 merged.
 - Tenant session revocation covers non-active IAM status changes and automatic
   password/MFA lockouts. Regression coverage verifies that old bearer sessions
   remain invalid after reactivation or lockout expiry.
