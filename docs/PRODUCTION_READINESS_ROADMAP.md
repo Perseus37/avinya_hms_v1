@@ -138,22 +138,28 @@ Update this document as items are completed, blocked, or superseded. Completion
 must reference test/restore evidence or an accountable owner and due date; do
 not mark an item complete based only on implementation code existing.
 
-## Current continuation — 2026-10-19
+## Current continuation — 2026-10-20
 
-- `dev` is at `c2dc69e` and `main` is at `c89ec5a`; PR #42 merged the
-  session-revocation fix to `dev`, and PR #43 promoted it to `main` after all
-  release gates passed. No pull requests are currently open. The obsolete
-  root `Audit.md` was removed earlier through PRs #32 and #33.
-- Tenant session revocation now covers non-active IAM status changes and
-  automatic password/MFA lockouts. Regression coverage verifies that old
-  bearer sessions remain invalid after reactivation or lockout expiry. The
-  IAM/RBAC module passed locally (19 tests); this does not replace the
-  deployment-specific checks below.
-- There are no unblocked tracked readiness tasks. The four deferred items
-  require hospital-approved consent/retention policy, a named FHIR/ABDM
-  partner profile, approved staging load/OCR inputs, or an approved staging
-  environment for migration-audit validation. Their prerequisites and
-  boundaries are recorded above and in the session task tracker; do not run
+- `dev` is at `a728b94` and `main` is at `7d7168a`. PR #46/#47 promoted
+  redaction of raw tenant migration exceptions to `main`; PR #48/#49 promoted
+  the policy-neutral privacy foundation. All release gates passed and no
+  pull requests were open at this snapshot.
+- Tenant session revocation covers non-active IAM status changes and automatic
+  password/MFA lockouts. Regression coverage verifies that old bearer sessions
+  remain invalid after reactivation or lockout expiry.
+- The privacy foundation stores hospital-defined policy documents as versioned
+  drafts, allows a separate approver to record an approval reference, and
+  constrains enforcement to `OFF`. Legal holds have separate release metadata.
+  This is governance scaffolding only: there is no consent enforcement,
+  retention dry run, deletion, or anonymisation path. Existing records remain
+  untouched; see the privacy foundation boundary above.
+- Migration failure summaries and durable audit details no longer include raw
+  exception text; only the exception class and generic failure summary are
+  recorded. This does not replace staging validation of migration audit
+  lifecycle behavior.
+- Hospital-approved consent/retention policy, a named FHIR/ABDM partner
+  profile, approved staging load/OCR inputs, and an approved staging
+  environment for migration-audit validation remain prerequisites. Do not run
   against production or infer approval to handle live patient data.
 - Required live-data evidence remains owner- and environment-dependent:
   production secret and encryption-key recovery; host/off-host encrypted
@@ -163,7 +169,5 @@ not mark an item complete based only on implementation code existing.
   and alerting; DNS/TLS/firewall validation; and clinical, privacy, security,
   and legal sign-off. Disposable PostgreSQL tests and passing CI do not
   replace these exercises.
-- Continue only when an implementable engineering task is identified or the
-  required owners and staging inputs are available. Keep the `feature → dev →
-  main` promotion path and do not claim launch readiness from code-only tests
-  or CI.
+- Keep the `feature → dev → main` promotion path and do not claim launch
+  readiness from code-only tests or CI.
