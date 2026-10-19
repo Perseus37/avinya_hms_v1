@@ -483,8 +483,17 @@ def migrate_remaining_fleet(target_slug: str | None = None) -> dict:
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                 }
             except Exception as exc:
-                failed.append({"subdomain_slug": t.subdomain_slug, "db_name": t.db_name, "error": str(exc)})
-                print(f"    [x] FAILED on '{t.db_name}': {exc}")
+                error_type = type(exc).__name__
+                failure_summary = f"Migration failed ({error_type})."
+                failed.append(
+                    {
+                        "subdomain_slug": t.subdomain_slug,
+                        "db_name": t.db_name,
+                        "error": failure_summary,
+                        "error_type": error_type,
+                    }
+                )
+                print(f"    [x] FAILED on '{t.db_name}' ({error_type})")
                 outcome = {
                     "run_id": run_id,
                     "attempt_id": attempt_id,
@@ -493,7 +502,8 @@ def migrate_remaining_fleet(target_slug: str | None = None) -> dict:
                     "release_revision": release_revision,
                     "started_at": started_at.isoformat(),
                     "completed_at": datetime.now(timezone.utc).isoformat(),
-                    "error": str(exc)[:2000],
+                    "error": failure_summary,
+                    "error_type": error_type,
                 }
 
             control_db.add(
