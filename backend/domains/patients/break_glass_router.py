@@ -58,7 +58,7 @@ def request_emergency_access(
     payload: BreakGlassRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(RequirePermission("patients:write")),
     redis_client=Depends(get_redis),
 ):
     now = datetime.now(timezone.utc)

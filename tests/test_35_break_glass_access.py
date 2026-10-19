@@ -40,6 +40,11 @@ def test_break_glass_scope_expiry_alert_and_review(
     grant = grant_response.json()
     assert grant["status"] == "ACTIVE"
     assert "break_glass" in next(iter(fake_redis.store))
+    assert client.post(
+        f"/v1/api/break-glass/patients/{patient_id}/grants",
+        headers=auditor_headers,
+        json={"reason": "Emergency access requested without clinical permission"},
+    ).status_code == 403
 
     patient_data = client.get(
         f"/v1/api/break-glass/grants/{grant['grant_id']}/patient",

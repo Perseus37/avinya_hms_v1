@@ -182,8 +182,8 @@ async def websocket_event_stream(
                             raw_data = raw_data.decode("utf-8")
                         await websocket.send_text(raw_data)
                     await asyncio.sleep(0.2)
-            except (WebSocketDisconnect, asyncio.CancelledError):
-                pass
+            except WebSocketDisconnect:
+                return
             except Exception as exc:
                 logger.debug("WebSocket client disconnected: %s", str(exc))
 
@@ -193,8 +193,8 @@ async def websocket_event_stream(
                     data = await websocket.receive_text()
                     if data == "ping":
                         await websocket.send_text(json.dumps({"type": "pong"}))
-            except (WebSocketDisconnect, asyncio.CancelledError):
-                pass
+            except WebSocketDisconnect:
+                return
 
         pump_task = asyncio.create_task(_send_pump())
         recv_task = asyncio.create_task(_receive_pump())

@@ -35,9 +35,9 @@ def test_envelope_rotation_reads_previous_version_and_reencrypts(monkeypatch):
     assert envelope.decrypt_tenant_secret(encrypted) == "rotation-value"
 
 
-def test_legacy_plaintext_secret_emits_migration_warning():
-    with pytest.warns(RuntimeWarning, match="unencrypted tenant secret"):
-        assert envelope.decrypt_tenant_secret("legacy-value") == "legacy-value"
+def test_legacy_plaintext_secret_fails_closed_until_rotated():
+    with pytest.raises(ValueError, match="stored as plaintext"):
+        envelope.decrypt_tenant_secret("legacy-value")
 
 
 def test_missing_tenant_secret_fails_closed():
@@ -62,8 +62,7 @@ def test_rotation_script_reencrypts_legacy_tenant_secrets(
         tenant.hl7_shared_secret_encrypted = "legacy-hl7-value"
         db.commit()
 
-    with pytest.warns(RuntimeWarning, match="unencrypted tenant secret"):
-        assert rotate_envelope_keys.rotate_tenant_secrets() == 3
+    assert rotate_envelope_keys.rotate_tenant_secrets() == 3
     assert rotate_envelope_keys.rotate_tenant_secrets() == 0
 
     with factory() as db:

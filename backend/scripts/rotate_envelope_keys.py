@@ -26,7 +26,10 @@ def rotate_tenant_secrets() -> int:
                     continue
                 if not needs_reencryption(stored_value):
                     continue
-                plaintext = decrypt_tenant_secret(stored_value)
+                if stored_value.startswith(("enc:v1:", "enc:v2:")):
+                    plaintext = decrypt_tenant_secret(stored_value)
+                else:
+                    plaintext = stored_value
                 encrypted_value = encrypt_tenant_secret(plaintext)
                 if encrypted_value != stored_value:
                     setattr(tenant, field, encrypted_value)

@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
+import pytest
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from backend.core.config import settings
@@ -91,6 +93,27 @@ def test_email_password_reset_token_is_single_use(client, monkeypatch):
     assert _login(client, "ResetAdminPassword456!").status_code == 200
 
 
+def _request_mfa_enrollment_code(client, mfa_token, monkeypatch):
+    sent = {}
+
+    def capture_email(recipient, subject, text_body, **kwargs):
+        sent.update(recipient=recipient, body=text_body)
+
+    monkeypatch.setattr(
+        "backend.domains.identity.auth_router.send_email", capture_email
+    )
+    response = client.post(
+        "/v1/api/auth/mfa/enrollment/request",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={"mfa_token": mfa_token},
+    )
+    assert response.status_code == 202, response.text
+    assert sent["recipient"] == "admin@default.com"
+    return sent["body"].split(
+        "one-time code to enroll your authenticator: ", 1
+    )[1].splitlines()[0]
+
+
 def test_privileged_login_requires_mfa_then_challenges_for_each_login(
     client, multi_tenant_env, monkeypatch
 ):
@@ -101,13 +124,28 @@ def test_privileged_login_requires_mfa_then_challenges_for_each_login(
     assert challenge["mfa_setup_required"] is True
     assert "access_token" not in challenge
 
+    enrollment_code = _request_mfa_enrollment_code(
+        client, challenge["mfa_token"], monkeypatch
+    )
     setup = client.post(
         "/v1/api/auth/mfa/setup",
         headers={"X-Hospital-Subdomain": "default"},
-        json={"mfa_token": challenge["mfa_token"]},
+        json={
+            "mfa_token": challenge["mfa_token"],
+            "enrollment_code": enrollment_code,
+        },
     )
     assert setup.status_code == 200, setup.text
     secret = setup.json()["secret"]
+    replayed_enrollment = client.post(
+        "/v1/api/auth/mfa/setup",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={
+            "mfa_token": challenge["mfa_token"],
+            "enrollment_code": enrollment_code,
+        },
+    )
+    assert replayed_enrollment.status_code == 401
     enrolled = client.post(
         "/v1/api/auth/mfa/confirm",
         headers={"X-Hospital-Subdomain": "default"},
@@ -178,10 +216,16 @@ def test_failed_mfa_codes_lock_account_and_rate_limit_verification(
 ):
     monkeypatch.setattr(settings, "MFA_REQUIRED_FOR_PRIVILEGED", True)
     enrollment = _login(client).json()
+    enrollment_code = _request_mfa_enrollment_code(
+        client, enrollment["mfa_token"], monkeypatch
+    )
     setup = client.post(
         "/v1/api/auth/mfa/setup",
         headers={"X-Hospital-Subdomain": "default"},
-        json={"mfa_token": enrollment["mfa_token"]},
+        json={
+            "mfa_token": enrollment["mfa_token"],
+            "enrollment_code": enrollment_code,
+        },
     )
     assert setup.status_code == 200
     confirmed = client.post(
@@ -216,4 +260,66 @@ def test_failed_mfa_codes_lock_account_and_rate_limit_verification(
         headers={"X-Hospital-Subdomain": "default"},
         json={"mfa_token": login["mfa_token"], "code": "invalid"},
     )
-    assert limited.status_code == 429
+    assert limited.status_code == 401
+
+
+def test_password_only_admin_cannot_claim_initial_mfa_enrollment(
+    client, multi_tenant_env, monkeypatch
+):
+    monkeypatch.setattr(settings, "MFA_REQUIRED_FOR_PRIVILEGED", True)
+    challenge = _login(client).json()
+    assert challenge["mfa_setup_required"] is True
+    assert "access_token" not in challenge
+
+    rejected_setup = client.post(
+        "/v1/api/auth/mfa/setup",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={
+            "mfa_token": challenge["mfa_token"],
+            "enrollment_code": "A" * 43,
+        },
+    )
+    assert rejected_setup.status_code == 401
+    with Session(multi_tenant_env["tenant_engines"]["hms_default"]) as db:
+        from backend.domains.identity.models import User
+
+        admin = db.query(User).filter_by(email="admin@default.com").one()
+        assert admin.mfa_secret is None
+        assert admin.mfa_enabled is False
+    assert client.get("/v1/api/auth/me").status_code == 401
+
+
+def test_mfa_failure_rate_limit_is_per_account_and_only_charges_failures():
+    from starlette.requests import Request
+    from backend.core.dependencies import RateLimiter
+
+    class MemoryRedis:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value, ex=None):
+            self.values[key] = value
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/auth/mfa/verify-login",
+            "headers": [(b"host", b"localhost")],
+            "query_string": b"",
+            "server": ("localhost", 443),
+            "client": ("192.0.2.10", 1234),
+            "scheme": "https",
+        }
+    )
+    redis = MemoryRedis()
+    limiter = RateLimiter("auth_mfa_failure", max_requests=2, window_seconds=300)
+    limiter.check_actor(request, redis, "user:1")
+    limiter.check_actor(request, redis, "user:1")
+    limiter.check_actor(request, redis, "user:2")
+    with pytest.raises(HTTPException) as exc_info:
+        limiter.check_actor(request, redis, "user:1")
+    assert exc_info.value.status_code == 429

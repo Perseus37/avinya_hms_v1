@@ -126,9 +126,12 @@ fragment directly to the API without sending it in the HTTP request URL. If a
 reset email is not delivered, check the mail-provider configuration and
 server-side mail logs without exposing the token. Never request or forward
 reset tokens through support tickets or chat. Deliver initial privileged-user
-credentials only to the named administrator through a secure, one-time channel;
-have that administrator enroll MFA immediately before sharing access with
-anyone else, since the first valid login controls initial authenticator setup.
+credentials only to the named administrator through a secure, one-time channel.
+Privileged tenant accounts receive only a limited MFA setup challenge after
+password authentication. They must request a short-lived code sent to the
+account's registered email before an authenticator can be enrolled; the code is
+single-use, stored hashed, and expires after 10 minutes. Do not share enrollment
+codes or authenticator secrets.
 
 ## 3.2 FHIR API scope
 
@@ -150,7 +153,7 @@ advertising or enabling an ABDM connection.
 
 ## 3.3 Emergency patient access
 
-Authenticated staff may request a reasoned emergency grant with
+Authenticated users with `patients:write` may request a reasoned emergency grant with
 `POST /api/break-glass/patients/{patient_id}/grants`. The grant lasts 30 minutes
 and only the requesting account can use
 `GET /api/break-glass/grants/{grant_id}/patient`; it exposes a limited patient
@@ -866,18 +869,13 @@ task's patient; verified or cancelled results cannot be updated. Idle
 connections are closed after `HL7_CLIENT_IDLE_TIMEOUT_SECONDS` (default 300,
 maximum 3600 seconds).
 
-For invoice AI extraction, the default API/Docker install deliberately omits
-the large ML runtime. Install `requirements-ai.txt` with the CPU PyTorch index
-only on a worker intended to process invoices:
-
-```powershell
-python -m pip install --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple -r requirements-ai.txt
-```
-
-Without those optional packages, source documents remain available for manual
-review; extraction failures are logged, leave the document available, and put
-the invoice in pending verification rather than treating the failure as a
-successful extraction. The model repository is pinned to an immutable revision.
+The production Compose image uses the `production-ai` target, which installs
+the pinned CPU-only OCR runtime from `requirements-ai.txt`. Standard
+development/testing images intentionally omit the large ML dependencies.
+Extraction failures still leave the source document available for manual
+review, are logged, and keep the invoice pending verification; they are never
+treated as successful extraction. The model repository is pinned to an
+immutable revision.
 
 ### Envelope-encryption key rotation
 
@@ -887,7 +885,12 @@ temporarily set `ENVELOPE_ENCRYPTION_PREVIOUS_SECRET_KEY` and
 `ENVELOPE_ENCRYPTION_PREVIOUS_SALT` to the old pair. Run
 `python -m backend.scripts.rotate_envelope_keys`; it re-encrypts the tenant JWT
 and backup keys without printing them. Verify tenant login and a backup-key
-read, then remove both previous-key settings and restart the services. Never
+read, then remove both previous-key settings and restart the services. Before
+deploying a release that rejects plaintext tenant secrets, run this script
+against the existing control-plane registry while the previous release is
+still available; verify it reports every migrated secret and returns zero on a
+second run. The new release intentionally refuses to use plaintext registry
+secrets. Never
 rotate the encryption key without retaining the old pair until the conversion
 has completed and verification succeeds.
 
