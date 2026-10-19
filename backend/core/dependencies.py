@@ -191,6 +191,12 @@ class RateLimiter:
         self.window_seconds = window_seconds
 
     def __call__(self, request: Request, redis_client=Depends(get_redis)) -> None:
+        self._check(request, redis_client)
+
+    def check_actor(self, request: Request, redis_client, actor: str) -> None:
+        self._check(request, redis_client, actor=actor)
+
+    def _check(self, request: Request, redis_client, actor: str | None = None) -> None:
         sensitive_auth_scope = self.scope.startswith(("auth_login", "auth_mfa"))
         if not redis_client:
             if sensitive_auth_scope:
@@ -227,7 +233,7 @@ class RateLimiter:
                 if not any(candidate in network for network in trusted_proxies):
                     client_ip = str(candidate)
                     break
-        actor = client_ip
+        actor = actor or client_ip
         hostname = (request.url.hostname or "").lower().rstrip(".")
         base_domain = settings.BASE_DOMAIN.strip(".").lower()
         tenant_slug = settings.DEFAULT_TENANT_SLUG

@@ -303,7 +303,7 @@ def test_hl7_result_cannot_overwrite_verified_diagnostic_task(
 def test_hl7_secret_is_tenant_scoped_and_redacted_from_result_logs(
     client, superuser_headers, doctor_headers, multi_tenant_env, monkeypatch
 ):
-    from backend.control_plane.models import TenantRegistry
+    from backend.control_plane.models import ControlPlaneAuditLog, TenantRegistry
     from backend.domains.integrations.models import HL7IntegrationLog
     from backend.security.envelope import decrypt_tenant_secret
 
@@ -315,6 +315,13 @@ def test_hl7_secret_is_tenant_scoped_and_redacted_from_result_logs(
     )
     assert rotated.status_code == 200, rotated.text
     secret = rotated.json()["secret"]
+    with multi_tenant_env["control_session_factory"]() as control_db:
+        audit = control_db.query(ControlPlaneAuditLog).filter_by(
+            action="HL7_SECRET_ROTATED",
+            target_slug="default",
+        ).one()
+        assert audit.actor == "admin@default.com"
+        assert secret not in (audit.details or "")
     with multi_tenant_env["control_session_factory"]() as control_db:
         default_tenant = control_db.query(TenantRegistry).filter_by(
             subdomain_slug="default"
@@ -331,6 +338,9 @@ def test_hl7_secret_is_tenant_scoped_and_redacted_from_result_logs(
         authenticated_message
     )
     assert (control_id, tenant_db_name) == ("CTL-SECRET", "hms_default")
+    assert listener.authenticate_hl7_message(
+        authenticated_message.replace(secret, "sécret")
+    ) == ("CTL-SECRET", None)
     other_tenant_message = authenticated_message.replace(
         "HQ-HYD-01", "APOLLO-HYD-01"
     )

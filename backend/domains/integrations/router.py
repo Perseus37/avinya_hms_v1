@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.control_plane.models import TenantRegistry
+from backend.control_plane.models import ControlPlaneAuditLog, TenantRegistry
 from backend.core.database import get_control_db, get_db, resolve_tenant_context
 from backend.core.dependencies import RequirePermission
 from backend.domains.identity.models import User
@@ -36,6 +36,14 @@ def rotate_hl7_secret(
         raise HTTPException(status_code=404, detail="Hospital tenant not found.")
     secret = secrets.token_urlsafe(32)
     tenant.hl7_shared_secret_encrypted = encrypt_tenant_secret(secret)
+    control_db.add(
+        ControlPlaneAuditLog(
+            action="HL7_SECRET_ROTATED",
+            target_slug=tenant_context.subdomain_slug,
+            actor=current_user.email,
+            details="Tenant HL7 shared secret rotated; plaintext returned once.",
+        )
+    )
     control_db.commit()
     return {
         "secret": secret,

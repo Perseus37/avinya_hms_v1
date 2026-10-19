@@ -1,6 +1,5 @@
 import base64
 import os
-import warnings
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidTag
 from backend.core.config import settings
@@ -79,12 +78,9 @@ def decrypt_tenant_secret(value: str) -> str:
         prefix = _ENC_V2_PREFIX
         keys = [_MASTER_KEY, _PREVIOUS_KEY]
     else:
-        warnings.warn(
-            "A legacy unencrypted tenant secret was loaded; run the envelope-key rotation tool.",
-            RuntimeWarning,
-            stacklevel=2,
+        raise ValueError(
+            "Tenant secret is stored as plaintext; run the envelope-key rotation tool before use."
         )
-        return str(value)
     last_error = None
     for key in dict.fromkeys(keys):
         if key is None:
