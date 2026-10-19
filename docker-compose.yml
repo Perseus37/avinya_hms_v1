@@ -53,6 +53,20 @@ services:
       timeout: 3s
       retries: 5
 
+  clamav:
+    image: clamav/clamav:1.4.6-debian13-slim@sha256:c7df83a4c9794aeb43b7cff296fc9f42a0f47cbf0e96704510e7e5b57b2f4913
+    restart: unless-stopped
+    volumes:
+      - hms_clamav_db:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --ping=1 --wait=10 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 90s
+    networks:
+      - scanner-net
+
   api:
     build:
       context: .
@@ -89,6 +103,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      clamav:
+        condition: service_healthy
+    networks:
+      - default
+      - scanner-net
 
   onboarding-portal:
     image: avinya-hms-api:latest
@@ -175,4 +194,10 @@ volumes:
   hms_redisdata:
   hms_backups:
   hms_attachments:
+  hms_clamav_db:
   hms_vault_storage:
+
+networks:
+  scanner-net:
+    driver: bridge
+    internal: true

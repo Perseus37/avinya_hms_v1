@@ -16,6 +16,10 @@ def test_vendor_invoice_review_match_and_approval_are_end_to_end(
         "backend.domains.procurement.router.trigger_donut_invoice_extraction",
         lambda *_: None,
     )
+    monkeypatch.setattr(
+        "backend.domains.procurement.documents.scan_file_with_clamav",
+        lambda _: None,
+    )
     vendor_response = client.post(
         "/v1/api/procurement/vendors",
         headers=superuser_headers,
@@ -191,6 +195,10 @@ def test_invoice_review_requires_consistent_totals(client, superuser_headers, mo
     monkeypatch.setattr(
         "backend.domains.procurement.router.trigger_donut_invoice_extraction",
         lambda *_: None,
+    )
+    monkeypatch.setattr(
+        "backend.domains.procurement.documents.scan_file_with_clamav",
+        lambda _: None,
     )
     vendor_response = client.post(
         "/v1/api/procurement/vendors",

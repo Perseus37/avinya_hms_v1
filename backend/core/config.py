@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     MIGRATION_MAX_UPLOAD_BYTES: int = Field(gt=0)
     ATTACHMENTS_STORAGE_DIR: str = "attachments"
     MAX_ATTACHMENT_UPLOAD_BYTES: int = Field(gt=0)
+    CLAMD_HOST: str = "clamav"
+    CLAMD_PORT: int = Field(default=3310, gt=0, le=65535)
+    CLAMD_TIMEOUT_SECONDS: int = Field(default=60, ge=1, le=300)
     MIGRATION_MAX_EXPRESSION_DEPTH: int = Field(gt=0)
     MIGRATION_MAX_INPUTS: int = Field(gt=0)
     BACKUP_INTERVAL_SECONDS: int = Field(gt=0)

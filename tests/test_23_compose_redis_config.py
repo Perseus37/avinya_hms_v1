@@ -124,3 +124,36 @@ def test_production_backup_and_attachment_paths_are_host_mounts():
         "CMD-SHELL",
         'curl -f "http://localhost:$$CONTROL_PLANE_PORT/" || exit 1',
     ]
+
+
+def test_clamav_service_is_private_pinned_and_required_for_api_uploads():
+    local = yaml.safe_load((REPOSITORY_ROOT / "docker-compose.yml").read_text())
+    production = yaml.safe_load(
+        (REPOSITORY_ROOT / "docker-compose.prod.yml").read_text()
+    )
+    for compose in (local, production):
+        scanner = compose["services"]["clamav"]
+        api = compose["services"]["api"]
+        assert "@sha256:" in scanner["image"]
+        assert "ports" not in scanner
+        assert scanner["healthcheck"]["test"][1].startswith("clamdscan --ping")
+        assert api["depends_on"]["clamav"]["condition"] == "service_healthy"
+        assert "hms_clamav_db:/var/lib/clamav" in scanner["volumes"]
+
+    prod_scanner = production["services"]["clamav"]
+    assert set(prod_scanner["networks"]) == {"scanner-net", "scanner-egress"}
+    assert set(production["services"]["api"]["networks"]) == {
+        "internal-net",
+        "public-net",
+        "scanner-net",
+    }
+    assert production["networks"]["internal-net"]["internal"] is True
+    assert production["networks"]["scanner-net"]["internal"] is True
+    assert production["networks"]["scanner-egress"]["driver"] == "bridge"
+    assert set(local["services"]["clamav"]["networks"]) == {"scanner-net"}
+    assert set(local["services"]["api"]["networks"]) == {"default", "scanner-net"}
+    assert local["networks"]["scanner-net"]["internal"] is True
+    release_workflow = (
+        REPOSITORY_ROOT / ".github" / "workflows" / "release-gates.yml"
+    ).read_text()
+    assert production["services"]["clamav"]["image"] in release_workflow

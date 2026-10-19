@@ -130,10 +130,16 @@ caps.
   container mount (`/app/attachments` in the supplied Compose file).
   Procurement invoice files are now retained there under tenant-specific
   directories; include them in encrypted host backups and verify restoration.
-  Uploads are limited to PDF/PNG/JPEG and 20 MiB by default, but signature
-  checks do not replace malware scanning. The app still lacks general clinical
-  attachment support, durable download auditing, and retention/deletion
-  controls.
+  Uploads are limited to PDF/PNG/JPEG and 20 MiB by default. Before an invoice
+  is persisted or sent to OCR, the API scans it with the private ClamAV Compose
+  service; a detected threat is rejected, and scanner errors fail closed.
+  Production Compose gives ClamAV a dedicated egress network for signature
+  updates without publishing its scanner port. Permit the required ClamAV
+  update traffic through the host egress policy, monitor scanner health, and
+  confirm the scanner is healthy before accepting uploads. Include scanner
+  memory and signature-update startup time in host sizing and release
+  rehearsals. The app still lacks general clinical attachment support and
+  retention/deletion controls.
 - Configure the disk mount persistently (for example by UUID in `/etc/fstab`)
   and verify it with `findmnt` before starting Compose or cron. The backup job
   checks `BACKUP_STORAGE_MOUNTPOINT` and refuses to write a backup under the
