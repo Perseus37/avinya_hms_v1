@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from backend.core.config import settings
 from backend.core.database import get_db, get_redis, resolve_tenant_context
 from backend.core.dependencies import RequirePermission, get_current_user
-from backend.domains.identity.models import User
+from backend.domains.identity.models import Permission, Role, User
 from backend.domains.patients.models import (
     AllergyMaster,
     BreakGlassGrant,
@@ -52,13 +52,35 @@ def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
+def require_break_glass_permission(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> User:
+    permission_id = db.execute(
+        select(Permission.id)
+        .join(Role.permissions)
+        .join(Role.users)
+        .where(
+            User.id == current_user.id,
+            Permission.code == "break_glass:request",
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    if permission_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Required permission 'break_glass:request' missing.",
+        )
+    return current_user
+
+
 @router.post("/patients/{patient_id}/grants", status_code=status.HTTP_201_CREATED)
 def request_emergency_access(
     patient_id: int,
     payload: BreakGlassRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(RequirePermission("patients:write")),
+    current_user: User = Depends(require_break_glass_permission),
     redis_client=Depends(get_redis),
 ):
     now = datetime.now(timezone.utc)
