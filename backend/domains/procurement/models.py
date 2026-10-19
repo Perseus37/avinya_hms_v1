@@ -254,6 +254,32 @@ class VendorInvoice(AuditMixin, Base):
     items: Mapped[List["VendorInvoiceItem"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
 
 
+class ProcurementDocumentDownloadAudit(Base):
+    """Records authorized requests to download a procurement invoice document."""
+    __tablename__ = "procurement_document_download_audits"
+    __table_args__ = (
+        Index("ix_proc_doc_download_invoice_time", "invoice_id", "requested_at"),
+        Index("ix_proc_doc_download_actor_time", "actor_user_id", "requested_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    invoice_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("procurement_vendor_invoices.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    invoice_number: Mapped[str] = mapped_column(String(100), nullable=False)
+    actor_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    actor_email: Mapped[str] = mapped_column(String(255), nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
 class VendorInvoiceItem(AuditMixin, Base):
     """Line item details extracted or mapped from the vendor invoice."""
     __tablename__ = "procurement_vendor_invoice_items"

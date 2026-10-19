@@ -13,6 +13,7 @@ from backend.domains.procurement.models import (
     VendorMaster, PurchaseOrder, PurchaseOrderItem, POStatusEnum,
     GoodsReceiptNote, GoodsReceiptItem, GRNStatusEnum,
     VendorInvoice, VendorInvoiceItem, VendorInvoiceStatusEnum,
+    ProcurementDocumentDownloadAudit,
     StoreIndent, StoreIndentItem, IndentStatusEnum
 )
 from backend.domains.procurement.schemas import (
@@ -188,7 +189,7 @@ def download_vendor_invoice_document(
     invoice_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("procurement:read")),
+    current_user: User = Depends(RequirePermission("procurement:read")),
 ):
     tenant = resolve_tenant_context(request)
     invoice = db.get(VendorInvoice, invoice_id)
@@ -204,6 +205,15 @@ def download_vendor_invoice_document(
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
     }[document_path.suffix.lower()]
+    db.add(
+        ProcurementDocumentDownloadAudit(
+            invoice_id=invoice.id,
+            invoice_number=invoice.invoice_number,
+            actor_user_id=current_user.id,
+            actor_email=current_user.email,
+        )
+    )
+    db.commit()
     return FileResponse(
         document_path,
         media_type=media_type,
