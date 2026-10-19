@@ -54,7 +54,7 @@ def test_03_brute_force_account_lockout(client):
         json={"email": "doctor@default.com", "password": "StaffPass123!"},
     )
     assert locked_res.status_code == 401
-    assert "locked" in locked_res.json()["message"].lower()
+    assert locked_res.json()["message"] == "Invalid credentials"
 
 
 def test_04_admin_account_unlock_resets_attempts(client, superuser_headers):

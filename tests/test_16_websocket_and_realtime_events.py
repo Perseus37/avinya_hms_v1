@@ -80,6 +80,37 @@ def test_websocket_authorizes_requested_stream_and_rejects_wildcard_for_staff(
                 pass
 
 
+def test_websocket_rejects_tenant_mfa_challenge_tokens(
+    client, multi_tenant_env, monkeypatch
+):
+    from backend.core.config import settings
+    from backend.domains.realtime import router as realtime_router
+
+    monkeypatch.setattr(settings, "MFA_REQUIRED_FOR_PRIVILEGED", True)
+    monkeypatch.setattr(
+        realtime_router, "ControlSessionLocal", multi_tenant_env["control_session_factory"]
+    )
+    monkeypatch.setattr(
+        realtime_router.tenant_engine_pool,
+        "get_engine",
+        lambda db_name: multi_tenant_env["tenant_engines"][db_name],
+    )
+    login = client.post(
+        "/v1/api/auth/login",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={"email": "admin@default.com", "password": "AdminPassword123!"},
+    )
+    assert login.status_code == 200
+    challenge_token = login.json()["mfa_token"]
+
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(
+            "/v1/ws/panic_labs?tenant_slug=default",
+            subprotocols=["bearer", challenge_token],
+        ):
+            pass
+
+
 def test_websocket_rejects_missing_users_even_with_valid_jwt(
     client, multi_tenant_env, monkeypatch
 ):

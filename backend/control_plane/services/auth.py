@@ -320,6 +320,11 @@ def verify_control_plane_secret(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired operator session.",
         )
+    if not settings.CONTROL_PLANE_LEGACY_MASTER_KEY_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Static Control Plane credentials are disabled; use a named operator session.",
+        )
     expected_key = settings.CONTROL_PLANE_MASTER_KEY
     if not expected_key:
         raise HTTPException(

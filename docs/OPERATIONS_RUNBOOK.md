@@ -114,27 +114,36 @@ Control-plane access tokens expire after 15 minutes and are revocable at
 `POST /api/auth/logout`. The React onboarding UI signs in with a named operator,
 requires MFA enrollment at first sign-in and a fresh TOTP code on each login,
 keeps the access token in memory only, and returns to sign-in when an operator
-request receives 401. Refreshing the page requires signing in again. The older
-`/console` fallback and static setup-key API clients remain accepted during
-migration; rotate/restrict these keys and remove the fallback only after every
-approved operator client has migrated and has been verified.
+request receives 401. Refreshing the page requires signing in again. Static
+Control Plane master-key authentication is disabled by default and must remain
+disabled in production. `CONTROL_PLANE_LEGACY_MASTER_KEY_ENABLED=true` is only
+for local migration of approved clients; switch it off once named operator
+sessions are in use.
 
-Tenant reset links are single-use and expire after 30 minutes. If a reset email
-is not delivered, check the mail-provider configuration and server-side mail
-logs without exposing the token. Never request or forward reset tokens through
-support tickets or chat.
+Tenant reset links are single-use and expire after 30 minutes. The email link
+opens a same-origin password-reset form, which submits the token from the URL
+fragment directly to the API without sending it in the HTTP request URL. If a
+reset email is not delivered, check the mail-provider configuration and
+server-side mail logs without exposing the token. Never request or forward
+reset tokens through support tickets or chat. Deliver initial privileged-user
+credentials only to the named administrator through a secure, one-time channel;
+have that administrator enroll MFA immediately before sharing access with
+anyone else, since the first valid login controls initial authenticator setup.
 
 ## 3.2 FHIR API scope
 
-The backend exposes read-only FHIR R4 Patient search and read endpoints at
-`/api/fhir/R4/Patient` and `/api/fhir/R4/Patient/{id}`. Calls require a tenant
-access token with `patients:read`; patient lookup remains within the resolved
-tenant database. Supported search parameters are `_id`, `identifier`, `name`,
+The backend exposes a FHIR R4 capability statement at
+`/api/fhir/R4/metadata` and read-only Patient search/read endpoints at
+`/api/fhir/R4/Patient` and `/api/fhir/R4/Patient/{id}`. Patient calls require a
+tenant access token with `patients:read`; patient lookup remains within the
+resolved tenant database. Supported search parameters are `_id`, `identifier`, `name`,
 `birthdate`, `gender`, `_count`, and the implementation's `_offset` paging
 parameter. MRN and ABHA values use the custom identifier systems
 `urn:avinya:hms:mrn` and `urn:avinya:hms:abha`.
 
-This is not an ABDM integration. It does not implement ABDM consent/auth
+Patient not-found errors use FHIR `OperationOutcome`; other validation and
+authorization errors may use the standard API error format. This is not an
+ABDM integration. It does not implement ABDM consent/auth
 workflows, registered profiles, Encounter or Observation resources, or FHIR
 write operations. Obtain partner-profile and sandbox approval before
 advertising or enabling an ABDM connection.
@@ -146,11 +155,14 @@ Authenticated staff may request a reasoned emergency grant with
 and only the requesting account can use
 `GET /api/break-glass/grants/{grant_id}/patient`; it exposes a limited patient
 demographic and active-allergy view, not general clinical chart access. Each
-use is durably recorded. A `break_glass` WebSocket stream is restricted to
-users with `iam:read` and receives the grant ID alert. Do not send PHI in the
-alert payload.
+use is durably recorded. Each account is limited to
+`BREAK_GLASS_MAX_REQUESTS_PER_DAY` grants per UTC calendar day (default 5). A
+`break_glass` WebSocket stream is restricted to users with `iam:read` and
+receives the grant ID alert. Do not send PHI in the alert payload. A Redis
+outage can delay the alert but does not undo or block the committed emergency
+grant.
 
-Independent reviewers with `iam:read` use
+Independent reviewers with `iam:write` use
 `GET /api/break-glass/reviews/pending` and
 `POST /api/break-glass/reviews/{grant_id}`. Self-review is rejected. Reviews
 are due within 24 hours; overdue records are flagged in the pending list, but
@@ -834,18 +846,25 @@ Important operational constraints:
   the service sits behind a reverse proxy. Forwarded client IPs are ignored
   unless the direct peer is trusted; leaving this unset may group clients by
   the proxy address for rate limiting.
-- `WS_MAX_CONNECTIONS` caps active WebSocket connections per API worker.
+- `WS_MAX_CONNECTIONS` caps authenticated WebSocket connections per API
+  worker. Public waiting-room connections have a separate
+  `WS_MAX_WAITING_ROOM_CONNECTIONS` cap.
 
 ### HL7/MLLP listener
 
-The optional listener refuses to start unless `HL7_SHARED_SECRET`,
-`HL7_TLS_CERT_FILE`, and `HL7_TLS_KEY_FILE` are configured. Install the TLS
-certificate/key on the listener host, configure the equipment to connect over
-TLS and send the same shared secret in HL7 `MSH-8`, and restrict network access
-to the equipment VLAN or an approved VPN. Do not expose the listener directly
-to the public internet. The listener bounds incomplete frames and rejects
-updates to verified or cancelled results. Keep diagnostic-equipment credentials
-out of source control and rotate them with the equipment administrator.
+The optional listener refuses to start unless `HL7_TLS_CERT_FILE` and
+`HL7_TLS_KEY_FILE` are configured. A tenant administrator with `mdm:write`
+rotates a tenant-specific secret at `/api/equipment/hl7-secret/rotate`; the
+plaintext is returned once. Configure only that hospital's equipment to send
+the value in HL7 `MSH-8`. The secret is encrypted in the control-plane
+database, redacted from stored HL7 payloads, and can be re-encrypted with the
+envelope-key rotation script. Install the TLS certificate/key on the listener
+host, configure equipment for TLS, and restrict network access to the equipment
+VLAN or an approved VPN. Do not expose the listener directly to the public
+internet. Results must include a PID patient identifier matching the diagnostic
+task's patient; verified or cancelled results cannot be updated. Idle
+connections are closed after `HL7_CLIENT_IDLE_TIMEOUT_SECONDS` (default 300,
+maximum 3600 seconds).
 
 For invoice AI extraction, the default API/Docker install deliberately omits
 the large ML runtime. Install `requirements-ai.txt` with the CPU PyTorch index
@@ -856,8 +875,9 @@ python -m pip install --index-url https://download.pytorch.org/whl/cpu --extra-i
 ```
 
 Without those optional packages, source documents remain available for manual
-review; extraction failures are not treated as successful results. The model
-repository is pinned to an immutable revision.
+review; extraction failures are logged, leave the document available, and put
+the invoice in pending verification rather than treating the failure as a
+successful extraction. The model repository is pinned to an immutable revision.
 
 ### Envelope-encryption key rotation
 

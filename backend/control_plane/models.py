@@ -50,6 +50,7 @@ class TenantRegistry(ControlBase):
     admin_email: Mapped[str] = mapped_column(String(255), nullable=False)
     jwt_secret_key: Mapped[str] = mapped_column(String(255), nullable=False)
     backup_encryption_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    hl7_shared_secret_encrypted: Mapped[Optional[str]] = mapped_column(Text)
     deployment_mode: Mapped[DeploymentModeEnum] = mapped_column(
         Enum(DeploymentModeEnum), default=DeploymentModeEnum.CLOUD, nullable=False
     )

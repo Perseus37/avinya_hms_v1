@@ -84,6 +84,15 @@ def test_control_plane_secret_fails_closed_when_unconfigured(monkeypatch):
     assert exc_info.value.status_code == 503
 
 
+def test_control_plane_secret_rejects_legacy_key_when_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "CONTROL_PLANE_LEGACY_MASTER_KEY_ENABLED", False)
+    monkeypatch.setattr(settings, "CONTROL_PLANE_MASTER_KEY", "legacy-key")
+    request = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+    with pytest.raises(HTTPException) as exc_info:
+        verify_control_plane_secret(request, "legacy-key")
+    assert exc_info.value.status_code == 401
+
+
 def test_module_license_fails_closed_for_missing_or_invalid_configuration(monkeypatch):
     from types import SimpleNamespace
 

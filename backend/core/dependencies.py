@@ -45,28 +45,34 @@ def get_current_user(
         payload = jwt.decode(token, tenant.jwt_secret_key, algorithms=[settings.ALGORITHM])
         user_id: str = payload.get("sub")
         token_tenant: str = payload.get("tenant_slug")
-        if user_id is None or token_tenant != tenant.subdomain_slug:
-            raise credentials_exception
         token_id = payload.get("jti")
+        if (
+            not isinstance(user_id, str)
+            or not user_id.isdecimal()
+            or token_tenant != tenant.subdomain_slug
+            or "purpose" in payload
+            or not isinstance(token_id, str)
+            or not token_id
+        ):
+            raise credentials_exception
     except jwt.InvalidTokenError:
         raise credentials_exception
 
     user = db.get(User, int(user_id))
     if not user or user.status != UserStatusEnum.ACTIVE:
         raise credentials_exception
-    if token_id is not None:
-        auth_session = db.get(AuthSession, token_id)
-        if (
-            not auth_session
-            or auth_session.user_id != user.id
-            or auth_session.revoked_at is not None
-        ):
-            raise credentials_exception
-        expires_at = auth_session.expires_at
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-        if expires_at <= datetime.now(timezone.utc):
-            raise credentials_exception
+    auth_session = db.get(AuthSession, token_id)
+    if (
+        not auth_session
+        or auth_session.user_id != user.id
+        or auth_session.revoked_at is not None
+    ):
+        raise credentials_exception
+    expires_at = auth_session.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= datetime.now(timezone.utc):
+        raise credentials_exception
 
     # Populate audit actor ID for the SQLAlchemy before_flush listener in models.py
     db.info["audit_user_id"] = user.id
@@ -185,7 +191,13 @@ class RateLimiter:
         self.window_seconds = window_seconds
 
     def __call__(self, request: Request, redis_client=Depends(get_redis)) -> None:
+        sensitive_auth_scope = self.scope.startswith(("auth_login", "auth_mfa"))
         if not redis_client:
+            if sensitive_auth_scope:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Authentication temporarily unavailable due to security infrastructure outage.",
+                )
             return
 
         client_ip = request.client.host if request.client else "unknown"
@@ -243,7 +255,7 @@ class RateLimiter:
             raise
         except Exception:
             # SEC-001: Fail-closed for sensitive authentication paths to prevent brute force if Redis drops
-            if "auth_login" in self.scope:
+            if sensitive_auth_scope:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="Authentication temporarily unavailable due to security infrastructure outage."

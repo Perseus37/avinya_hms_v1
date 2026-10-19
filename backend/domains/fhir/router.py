@@ -3,6 +3,7 @@ from typing import Optional
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -13,6 +14,43 @@ from backend.domains.identity.models import GenderEnum, User
 from backend.domains.patients.models import Patient
 
 router = APIRouter(prefix="/api/fhir/R4", tags=["FHIR R4"])
+
+
+@router.get("/metadata")
+def capability_statement():
+    return JSONResponse(
+        media_type="application/fhir+json",
+        content={
+            "resourceType": "CapabilityStatement",
+            "status": "active",
+            "date": date.today().isoformat(),
+            "kind": "instance",
+            "fhirVersion": "4.0.1",
+            "format": ["application/fhir+json"],
+            "rest": [
+                {
+                    "mode": "server",
+                    "resource": [
+                        {
+                            "type": "Patient",
+                            "profile": "http://hl7.org/fhir/StructureDefinition/Patient",
+                            "interaction": [
+                                {"code": "read"},
+                                {"code": "search-type"},
+                            ],
+                            "searchParam": [
+                                {"name": "_id", "type": "token"},
+                                {"name": "identifier", "type": "token"},
+                                {"name": "name", "type": "string"},
+                                {"name": "birthdate", "type": "date"},
+                                {"name": "gender", "type": "token"},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
 
 
 def _patient_resource(patient: Patient, tenant_slug: str) -> dict:
@@ -90,7 +128,20 @@ def read_patient(
 ):
     patient = db.get(Patient, patient_id)
     if not patient or not patient.is_active:
-        raise HTTPException(status_code=404, detail="FHIR Patient not found.")
+        return JSONResponse(
+            status_code=404,
+            media_type="application/fhir+json",
+            content={
+                "resourceType": "OperationOutcome",
+                "issue": [
+                    {
+                        "severity": "error",
+                        "code": "not-found",
+                        "diagnostics": "FHIR Patient not found.",
+                    }
+                ],
+            },
+        )
     response.media_type = "application/fhir+json"
     tenant = resolve_tenant_context(request)
     return _patient_resource(patient, tenant.subdomain_slug)
@@ -129,7 +180,10 @@ def search_patients(
                 or_(Patient.mrn == identifier, Patient.abha_number == identifier)
             )
     if name:
-        statement = statement.where(Patient.full_name.ilike(f"%{name}%"))
+        escaped_name = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        statement = statement.where(
+            Patient.full_name.ilike(f"%{escaped_name}%", escape="\\")
+        )
     if birthdate:
         statement = statement.where(func.date(Patient.date_of_birth) == birthdate.isoformat())
     if gender:

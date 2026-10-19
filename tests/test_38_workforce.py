@@ -3,7 +3,7 @@ from datetime import time
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.domains.identity.models import User
+from backend.domains.identity.models import Role, User
 from backend.domains.workforce.models import (
     AttendanceRecord,
     LeaveRequest,
@@ -182,9 +182,41 @@ def test_payroll_calculation_is_snapshotted_and_finalized_period_is_immutable(
     )
     assert len(history.json()["items"]) == 2
 
-    finalized = client.post(
+    self_finalization = client.post(
         f"/v1/api/workforce/payroll-periods/{period_id}/finalize",
         headers=superuser_headers,
+    )
+    assert self_finalization.status_code == 403
+
+    with Session(engine) as db:
+        original_admin = db.execute(
+            select(User).where(User.email == "admin@default.com")
+        ).scalar_one()
+        reviewer = User(
+            login_id="PAYROLL_REVIEWER",
+            email="payroll-reviewer@default.com",
+            full_name="Payroll Reviewer",
+            hashed_password=original_admin.hashed_password,
+            roles=[db.execute(select(Role).where(Role.code == "ROLE_ADMIN")).scalar_one()],
+        )
+        db.add(reviewer)
+        db.commit()
+    reviewer_login = client.post(
+        "/v1/api/auth/login",
+        headers={"X-Hospital-Subdomain": "default"},
+        json={
+            "email": "payroll-reviewer@default.com",
+            "password": "AdminPassword123!",
+        },
+    )
+    assert reviewer_login.status_code == 200
+    reviewer_headers = {
+        "Authorization": f"Bearer {reviewer_login.json()['access_token']}",
+        "X-Hospital-Subdomain": "default",
+    }
+    finalized = client.post(
+        f"/v1/api/workforce/payroll-periods/{period_id}/finalize",
+        headers=reviewer_headers,
     )
     assert finalized.status_code == 200, finalized.text
     assert finalized.json()["status"] == "FINALIZED"

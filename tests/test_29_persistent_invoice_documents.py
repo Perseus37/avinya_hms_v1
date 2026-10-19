@@ -1,11 +1,19 @@
 from io import BytesIO
 from pathlib import Path
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.orm import sessionmaker
 
 from backend.core.config import settings
 from backend.domains.procurement.documents import resolve_vendor_invoice_document
+from backend.domains.procurement.models import (
+    VendorCategoryEnum,
+    VendorInvoice,
+    VendorInvoiceStatusEnum,
+    VendorMaster,
+)
 
 
 def _create_vendor(client, headers):
@@ -119,3 +127,57 @@ def test_invoice_upload_enforces_configured_size_limit(
 
     assert response.status_code == 413
     assert not [path for path in tmp_path.rglob("*") if path.is_file()]
+
+
+def test_invoice_extraction_failure_retains_document_for_manual_review(
+    multi_tenant_env, monkeypatch
+):
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    tenant_session = sessionmaker(bind=engine)
+    now = datetime.now(timezone.utc)
+    with tenant_session() as db:
+        vendor = VendorMaster(
+            code="VND-AI-FAILURE",
+            name="AI Failure Vendor",
+            category=VendorCategoryEnum.GENERAL_SUPPLIES,
+            contact_person="Test Contact",
+            phone="1234567890",
+            email="ai-failure@example.com",
+            address="1 Test Street",
+        )
+        db.add(vendor)
+        db.flush()
+        invoice = VendorInvoice(
+            vendor_id=vendor.id,
+            invoice_number="UPLOADED",
+            invoice_date=now,
+            due_date=now,
+            subtotal_paise=0,
+            tax_amount_paise=0,
+            discount_paise=0,
+            total_amount_paise=0,
+            status=VendorInvoiceStatusEnum.PENDING_VERIFICATION,
+            document_file_url="default/procurement-invoices/source.pdf",
+        )
+        db.add(invoice)
+        db.commit()
+        invoice_id = invoice.id
+
+    def fail_parser_initialization():
+        raise RuntimeError("OCR runtime is unavailable")
+
+    monkeypatch.setattr(
+        "backend.domains.procurement.services.DonutInvoiceParser",
+        fail_parser_initialization,
+    )
+    from backend.domains.procurement.services import trigger_donut_invoice_extraction
+
+    trigger_donut_invoice_extraction("hms_default", invoice_id, "source.pdf")
+
+    with tenant_session() as db:
+        invoice = db.get(VendorInvoice, invoice_id)
+        assert invoice.status == VendorInvoiceStatusEnum.PENDING_VERIFICATION
+        assert invoice.document_file_url == "default/procurement-invoices/source.pdf"
+        assert invoice.notes == (
+            "AI extraction failed; the source document is retained for manual review."
+        )
