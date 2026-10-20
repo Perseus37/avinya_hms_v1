@@ -13,6 +13,7 @@ from backend.domains.identity.models import BloodGroupEnum, User
 from backend.domains.diagnostics.models import DiagnosticTask, ServiceTypeEnum
 from backend.domains.bloodbank.schemas import BloodBagCreate, BloodBagResponse, BloodCrossMatchCreate, BloodCrossMatchResponse, RadiologyStudyResponse, RadiologyStudyUpsert, TransfusionReactionRequest
 from backend.domains.billing.services import auto_bill_blood_transfusion_issue
+from backend.domains.privacy.runtime import evaluate_tenant_patient_data_uses
 
 router = APIRouter(prefix="/api", tags=["Blood Bank Transfusion Safety & Radiology PACS/DICOM"])
 
@@ -306,15 +307,26 @@ def attach_pacs_dicom_study_metadata(
 @router.get(
     "/diagnostics/tasks/{task_id}/dicom-study",
     response_model=RadiologyStudyResponse,
+    openapi_extra={"x-privacy-data-use-point": "diagnostics.study.read"},
 )
 def get_pacs_dicom_study_metadata(
     task_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("diagnostics:read", "opd:read", "adt:read")),
+    actor: User = Depends(RequirePermission("diagnostics:read", "opd:read", "adt:read")),
 ):
     study = db.execute(
         select(RadiologyStudyMetadata).where(RadiologyStudyMetadata.diagnostic_task_id == task_id)
     ).scalar_one_or_none()
     if not study:
         raise HTTPException(status_code=404, detail="DICOM study metadata not found for this task.")
+    task = db.get(DiagnosticTask, task_id)
+    if task is not None and task.order is not None:
+        decisions = evaluate_tenant_patient_data_uses(
+            db,
+            data_use_point="diagnostics.study.read",
+            patient_ids=[task.order.patient_id],
+            actor_user_id=actor.id,
+        )
+        if any(not decision.allowed for decision in decisions):
+            raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     return study

@@ -1,4 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
+import json
+from pathlib import Path
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -192,11 +194,13 @@ def test_privacy_policy_draft_requires_independent_approval_and_stays_off(
 
     payload = {
         "policy_type": "CONSENT",
-        "policy_document": {
-            "purposes": [{"code": "hospital-defined-purpose"}],
-            "exceptions": [],
-            "no_record_handling": "hospital-defined",
-        },
+        "policy_document": json.loads(
+            (
+                Path(__file__).parent
+                / "fixtures"
+                / "privacy_policy_strict.json"
+            ).read_text(encoding="utf-8")
+        ),
     }
     unauthorized = client.post(
         "/v1/api/privacy/policies",

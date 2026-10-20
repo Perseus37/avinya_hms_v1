@@ -26,6 +26,7 @@ from backend.domains.billing.services import (
     reverse_cancelled_diagnostic_order_billing,
 )   
 from backend.core.event_bus import publish_tenant_event
+from backend.domains.privacy.runtime import evaluate_tenant_patient_data_uses
 
 router = APIRouter(prefix="/api/diagnostics", tags=["Diagnostic Services & LIS"])
 
@@ -301,7 +302,11 @@ def place_diagnostic_order(
     return order
 
 
-@router.get("/orders", response_model=PaginatedResponse[DiagnosticOrderResponse])
+@router.get(
+    "/orders",
+    response_model=PaginatedResponse[DiagnosticOrderResponse],
+    openapi_extra={"x-privacy-data-use-point": "diagnostics.orders.search"},
+)
 def list_diagnostic_orders(
     patient_id: Optional[int] = None,
     start_date: Optional[date] = None,
@@ -309,7 +314,7 @@ def list_diagnostic_orders(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("diagnostics:read")),
+    actor: User = Depends(RequirePermission("diagnostics:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     start_at, end_at = resolve_record_date_window(start_date, end_date)
@@ -325,14 +330,26 @@ def list_diagnostic_orders(
 
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="diagnostics.orders.search",
+        patient_ids=[item.patient_id for item in items],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-@router.get("/orders/{order_id}", response_model=DiagnosticOrderResponse)
+@router.get(
+    "/orders/{order_id}",
+    response_model=DiagnosticOrderResponse,
+    openapi_extra={"x-privacy-data-use-point": "diagnostics.orders.read"},
+)
 def get_diagnostic_order(
     order_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("diagnostics:read")),
+    actor: User = Depends(RequirePermission("diagnostics:read")),
 ):
     order = (
         db.query(DiagnosticOrder)
@@ -342,6 +359,14 @@ def get_diagnostic_order(
     )
     if not order:
         raise HTTPException(status_code=404, detail="Diagnostic order not found.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="diagnostics.orders.read",
+        patient_ids=[order.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     return order
 
 
@@ -388,27 +413,45 @@ def cancel_diagnostic_order(
     db.commit()
     return {"status": "success", "message": f"Order {order_id} and associated pending tasks cancelled."}
 
-@router.get("/orders/{order_id}/tasks", response_model=PaginatedResponse[DiagnosticTaskResponse])
+@router.get(
+    "/orders/{order_id}/tasks",
+    response_model=PaginatedResponse[DiagnosticTaskResponse],
+    openapi_extra={"x-privacy-data-use-point": "diagnostics.order.tasks.read"},
+)
 def list_order_tasks(
     order_id: int,
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("diagnostics:read")),
+    actor: User = Depends(RequirePermission("diagnostics:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     query = db.query(DiagnosticTask).filter(DiagnosticTask.order_id == order_id).order_by(DiagnosticTask.id.asc())
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
+    order = db.get(DiagnosticOrder, order_id)
+    if order is not None:
+        decisions = evaluate_tenant_patient_data_uses(
+            db,
+            data_use_point="diagnostics.order.tasks.read",
+            patient_ids=[order.patient_id],
+            actor_user_id=actor.id,
+        )
+        if any(not decision.allowed for decision in decisions):
+            raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-@router.get("/tasks/pending", response_model=PaginatedResponse[DiagnosticTaskResponse])
+@router.get(
+    "/tasks/pending",
+    response_model=PaginatedResponse[DiagnosticTaskResponse],
+    openapi_extra={"x-privacy-data-use-point": "diagnostics.tasks.pending.read"},
+)
 def get_department_task_queue(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("diagnostics:read")),
+    actor: User = Depends(RequirePermission("diagnostics:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     query = (
@@ -418,6 +461,15 @@ def get_department_task_queue(
     )
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
+    patient_ids = [task.order.patient_id for task in items if task.order is not None]
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="diagnostics.tasks.pending.read",
+        patient_ids=patient_ids,
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
@@ -545,10 +597,14 @@ def submit_task_result(
 
     return {"status": "success", "message": f"Task {task_id} status advanced to {task.status.value}."}
 
-@router.get("/tasks/panic-alerts", response_model=list[DiagnosticTaskResponse])
+@router.get(
+    "/tasks/panic-alerts",
+    response_model=list[DiagnosticTaskResponse],
+    openapi_extra={"x-privacy-data-use-point": "diagnostics.tasks.panic.read"},
+)
 def list_critical_panic_lab_alerts(
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("diagnostics:read", "opd:read", "adt:read")),
+    actor: User = Depends(RequirePermission("diagnostics:read", "opd:read", "adt:read")),
 ):
     """Returns all diagnostic tasks flagged with critical life-threatening panic values."""
     stmt = (
@@ -556,4 +612,13 @@ def list_critical_panic_lab_alerts(
         .where(DiagnosticTask.is_critical_panic == True)
         .order_by(DiagnosticTask.id.desc())
     )
-    return list(db.execute(stmt).scalars().all())
+    tasks = list(db.execute(stmt).scalars().all())
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="diagnostics.tasks.panic.read",
+        patient_ids=[task.order.patient_id for task in tasks if task.order is not None],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
+    return tasks

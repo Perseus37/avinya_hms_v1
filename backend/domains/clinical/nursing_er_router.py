@@ -22,6 +22,7 @@ from backend.domains.reports.router import (
 from backend.domains.clinical.schemas import ERTriageCreate, ERTriageResponse, FluidBalanceSummaryResponse, FluidLogCreate, FluidLogResponse, MLCCreate, MLCPoliceIntimationRequest, MLCResponse, eMARCreate, eMARResponse
 from backend.domains.clinical.services import check_allergy_hard_stop
 from backend.core.event_bus import publish_tenant_event
+from backend.domains.privacy.runtime import evaluate_tenant_patient_data_uses
 
 router = APIRouter(prefix="/api", tags=["Inpatient Nursing (eMAR & Fluid I/O) & Emergency (ER Triage & MLC)"])
 
@@ -101,14 +102,27 @@ def record_emar_administration(
     return log
 
 
-@router.get("/nursing/encounters/{encounter_id}/emar", response_model=List[eMARResponse])
+@router.get(
+    "/nursing/encounters/{encounter_id}/emar",
+    response_model=List[eMARResponse],
+    openapi_extra={"x-privacy-data-use-point": "nursing.emar.read"},
+)
 def list_encounter_emar_logs(
     encounter_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read", "opd:read")),
+    actor: User = Depends(RequirePermission("adt:read", "opd:read")),
 ):
-    if not db.get(PatientEncounter, encounter_id):
+    encounter = db.get(PatientEncounter, encounter_id)
+    if not encounter:
         raise HTTPException(status_code=404, detail="Encounter not found.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="nursing.emar.read",
+        patient_ids=[encounter.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     stmt = (
         select(MedicationAdministrationLog)
         .where(MedicationAdministrationLog.encounter_id == encounter_id)
@@ -150,14 +164,24 @@ def record_fluid_balance_log(
 @router.get(
     "/nursing/encounters/{encounter_id}/fluid-balance",
     response_model=FluidBalanceSummaryResponse,
+    openapi_extra={"x-privacy-data-use-point": "nursing.fluid_balance.read"},
 )
 def get_encounter_fluid_balance_summary(
     encounter_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read", "opd:read")),
+    actor: User = Depends(RequirePermission("adt:read", "opd:read")),
 ):
-    if not db.get(PatientEncounter, encounter_id):
+    encounter = db.get(PatientEncounter, encounter_id)
+    if not encounter:
         raise HTTPException(status_code=404, detail="Encounter not found.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="nursing.fluid_balance.read",
+        patient_ids=[encounter.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
 
     logs = list(
         db.execute(
@@ -241,10 +265,14 @@ def record_er_triage_assessment(
     return triage
 
 
-@router.get("/er/triage-queue", response_model=List[ERTriageResponse])
+@router.get(
+    "/er/triage-queue",
+    response_model=List[ERTriageResponse],
+    openapi_extra={"x-privacy-data-use-point": "er.triage_queue.read"},
+)
 def get_er_triage_queue(
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read", "opd:read")),
+    actor: User = Depends(RequirePermission("adt:read", "opd:read")),
 ):
     """Returns active ER triage cases ordered by clinical priority."""
     stmt = (
@@ -254,6 +282,14 @@ def get_er_triage_queue(
         .order_by(ERTriageAssessment.id.asc())
     )
     all_active = list(db.execute(stmt).scalars().all())
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="er.triage_queue.read",
+        patient_ids=[triage.encounter.patient_id for triage in all_active],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
     priority_rank = {
         "RED_RESUSCITATION": 1,
         "ORANGE_EMERGENT": 2,
@@ -328,13 +364,17 @@ def record_mlc_police_intimation(
     return mlc
 
 
-@router.get("/er/mlc/{mlc_id}/print", response_class=HTMLResponse)
+@router.get(
+    "/er/mlc/{mlc_id}/print",
+    response_class=HTMLResponse,
+    openapi_extra={"x-privacy-data-use-point": "registry.mlc.print"},
+)
 def print_mlc_police_intimation_report(
     mlc_id: int,
     request: Request,
     print_mode: Optional[PrintModeEnum] = Query(default=None),
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read", "opd:read")),
+    actor: User = Depends(RequirePermission("adt:read", "opd:read")),
 ):
     tenant = resolve_tenant_context(request)
     stmt = (
@@ -348,6 +388,14 @@ def print_mlc_police_intimation_report(
     mlc = db.execute(stmt).scalar_one_or_none()
     if not mlc:
         raise HTTPException(status_code=404, detail="Medico-Legal Case not found.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="registry.mlc.print",
+        patient_ids=[mlc.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
 
     context = {
         "tenant": {

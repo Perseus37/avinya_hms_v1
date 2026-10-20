@@ -22,6 +22,7 @@ from backend.domains.reports.router import (
     _resolve_template_for_print,
 )
 from backend.domains.clinical.schemas import BirthRecordCreate, BirthRecordResponse, DeathRecordCreate, DeathRecordResponse
+from backend.domains.privacy.runtime import evaluate_tenant_patient_data_uses
 
 router = APIRouter(
     prefix="/api/registries",
@@ -115,6 +116,7 @@ def register_maternity_birth(
             patient=newborn,
             has_critical_allergies=False,
             tenant_db=db,
+            actor_user_id=current_user.id,
         )
 
     resp = BirthRecordResponse.model_validate(rec)
@@ -122,10 +124,14 @@ def register_maternity_birth(
     return resp
 
 
-@router.get("/births", response_model=List[BirthRecordResponse])
+@router.get(
+    "/births",
+    response_model=List[BirthRecordResponse],
+    openapi_extra={"x-privacy-data-use-point": "registry.births.read"},
+)
 def list_birth_records(
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read", "opd:read")),
+    actor: User = Depends(RequirePermission("adt:read", "opd:read")),
 ):
     stmt = (
         select(BirthRecord)
@@ -133,6 +139,20 @@ def list_birth_records(
         .order_by(BirthRecord.id.desc())
     )
     records = list(db.execute(stmt).scalars().all())
+    patient_ids = [
+        patient_id
+        for record in records
+        for patient_id in (record.mother_patient_id, record.newborn_patient_id)
+        if patient_id is not None
+    ]
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="registry.births.read",
+        patient_ids=patient_ids,
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
     results = []
     for r in records:
         item = BirthRecordResponse.model_validate(r)
@@ -141,13 +161,17 @@ def list_birth_records(
     return results
 
 
-@router.get("/births/{birth_id}/print", response_class=HTMLResponse)
+@router.get(
+    "/births/{birth_id}/print",
+    response_class=HTMLResponse,
+    openapi_extra={"x-privacy-data-use-point": "registry.births.print"},
+)
 def print_official_birth_certificate(
     birth_id: int,
     request: Request,
     print_mode: Optional[PrintModeEnum] = Query(default=None),
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read", "opd:read")),
+    actor: User = Depends(RequirePermission("adt:read", "opd:read")),
 ):
     tenant = resolve_tenant_context(request)
     stmt = (
@@ -162,6 +186,19 @@ def print_official_birth_certificate(
     rec = db.execute(stmt).scalar_one_or_none()
     if not rec:
         raise HTTPException(status_code=404, detail="Birth record not found.")
+    patient_ids = [
+        patient_id
+        for patient_id in (rec.mother_patient_id, rec.newborn_patient_id)
+        if patient_id is not None
+    ]
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="registry.births.print",
+        patient_ids=patient_ids,
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
 
     context = {
         "tenant": {
@@ -269,13 +306,17 @@ def certify_patient_death_mccd(
     return rec
 
 
-@router.get("/deaths/{death_id}/print", response_class=HTMLResponse)
+@router.get(
+    "/deaths/{death_id}/print",
+    response_class=HTMLResponse,
+    openapi_extra={"x-privacy-data-use-point": "registry.deaths.print"},
+)
 def print_mccd_death_certificate(
     death_id: int,
     request: Request,
     print_mode: Optional[PrintModeEnum] = Query(default=None),
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read", "opd:read")),
+    actor: User = Depends(RequirePermission("adt:read", "opd:read")),
 ):
     tenant = resolve_tenant_context(request)
     stmt = (
@@ -290,6 +331,14 @@ def print_mccd_death_certificate(
     rec = db.execute(stmt).scalar_one_or_none()
     if not rec:
         raise HTTPException(status_code=404, detail="Death record not found.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="registry.deaths.print",
+        patient_ids=[rec.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
 
     context = {
         "tenant": {

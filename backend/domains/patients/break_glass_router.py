@@ -18,6 +18,7 @@ from backend.domains.patients.models import (
     Patient,
     PatientAllergy,
 )
+from backend.domains.privacy.runtime import evaluate_tenant_patient_data_uses
 
 router = APIRouter(prefix="/api/break-glass", tags=["Emergency Patient Access"])
 logger = logging.getLogger("avinya.break_glass")
@@ -132,7 +133,10 @@ def request_emergency_access(
     }
 
 
-@router.get("/grants/{grant_id}/patient")
+@router.get(
+    "/grants/{grant_id}/patient",
+    openapi_extra={"x-privacy-data-use-point": "break_glass.patient.read"},
+)
 def read_emergency_patient_record(
     grant_id: int,
     db: Session = Depends(get_db),
@@ -149,6 +153,14 @@ def read_emergency_patient_record(
     patient = db.get(Patient, grant.patient_id)
     if not patient or not patient.is_active:
         raise HTTPException(status_code=404, detail="Patient not found.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="break_glass.patient.read",
+        patient_ids=[patient.id],
+        actor_user_id=current_user.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     allergies = db.execute(
         select(PatientAllergy, AllergyMaster)
         .join(AllergyMaster, PatientAllergy.allergy_id == AllergyMaster.id)
@@ -181,7 +193,10 @@ def read_emergency_patient_record(
     }
 
 
-@router.get("/reviews/pending")
+@router.get(
+    "/reviews/pending",
+    openapi_extra={"x-privacy-data-use-point": "break_glass.reviews.read"},
+)
 def list_pending_reviews(
     db: Session = Depends(get_db),
     reviewer: User = Depends(RequirePermission("iam:write")),
@@ -193,6 +208,14 @@ def list_pending_reviews(
         .order_by(BreakGlassGrant.created_at.asc())
         .limit(200)
     ).scalars().all()
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="break_glass.reviews.read",
+        patient_ids=[grant.patient_id for grant in grants],
+        actor_user_id=reviewer.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
     return {
         "items": [
             {

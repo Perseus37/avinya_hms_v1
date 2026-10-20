@@ -20,8 +20,41 @@ from backend.domains.patients.services import (
     get_department_taxonomy,
     invalidate_department_taxonomy_cache,
 )
+from backend.domains.privacy.runtime import (
+    calculate_patient_age,
+    evaluate_tenant_data_use,
+)
 
 router = APIRouter(prefix="/api/clinical", tags=["Clinical EMR & Taxonomies"])
+
+
+def _evaluate_patient_read(
+    db: Session, patient_id: int, actor: User, data_use_point: str
+) -> None:
+    patient = db.get(Patient, patient_id)
+    if patient is None:
+        return
+    decision = evaluate_tenant_data_use(
+        db,
+        data_use_point=data_use_point,
+        patient_id=patient.id,
+        actor_user_id=actor.id,
+        patient_age=calculate_patient_age(patient.date_of_birth),
+    )
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Privacy policy does not permit this patient disclosure.",
+        )
+
+
+def _evaluate_encounter_read(
+    db: Session, encounter_id: int, actor: User, data_use_point: str
+) -> PatientEncounter | None:
+    encounter = db.get(PatientEncounter, encounter_id)
+    if encounter is not None:
+        _evaluate_patient_read(db, encounter.patient_id, actor, data_use_point)
+    return encounter
 
 
 @router.get("/departments/{department_id}/taxonomy/{taxonomy_type}")
@@ -428,13 +461,21 @@ def record_encounter_vitals(
     return vital
 
 
-@router.get("/encounters/{encounter_id}/vitals", response_model=List[EncounterVitalResponse])
+@router.get(
+    "/encounters/{encounter_id}/vitals",
+    response_model=List[EncounterVitalResponse],
+    openapi_extra={
+        "x-privacy-data-use-point": "clinical.encounter.vitals.read"
+    },
+)
 def list_encounter_vitals(
     encounter_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read")),
+    actor: User = Depends(RequirePermission("adt:read")),
 ):
-    if not db.get(PatientEncounter, encounter_id):
+    if not _evaluate_encounter_read(
+        db, encounter_id, actor, "clinical.encounter.vitals.read"
+    ):
         raise HTTPException(status_code=404, detail="Encounter not found.")
     stmt = (
         select(EncounterVital)
@@ -469,13 +510,19 @@ def create_soap_clinical_note(
     return note
 
 
-@router.get("/encounters/{encounter_id}/notes", response_model=List[ClinicalNoteResponse])
+@router.get(
+    "/encounters/{encounter_id}/notes",
+    response_model=List[ClinicalNoteResponse],
+    openapi_extra={"x-privacy-data-use-point": "clinical.encounter.notes.read"},
+)
 def list_soap_clinical_notes(
     encounter_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read")),
+    actor: User = Depends(RequirePermission("adt:read")),
 ):
-    if not db.get(PatientEncounter, encounter_id):
+    if not _evaluate_encounter_read(
+        db, encounter_id, actor, "clinical.encounter.notes.read"
+    ):
         raise HTTPException(status_code=404, detail="Encounter not found.")
     stmt = (
         select(ClinicalNote)
@@ -590,13 +637,21 @@ def attach_encounter_diagnosis(
     return db.execute(stmt).scalar_one()
 
 
-@router.get("/encounters/{encounter_id}/diagnoses", response_model=List[EncounterDiagnosisResponse])
+@router.get(
+    "/encounters/{encounter_id}/diagnoses",
+    response_model=List[EncounterDiagnosisResponse],
+    openapi_extra={
+        "x-privacy-data-use-point": "clinical.encounter.diagnoses.read"
+    },
+)
 def list_encounter_diagnoses(
     encounter_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read")),
+    actor: User = Depends(RequirePermission("adt:read")),
 ):
-    if not db.get(PatientEncounter, encounter_id):
+    if not _evaluate_encounter_read(
+        db, encounter_id, actor, "clinical.encounter.diagnoses.read"
+    ):
         raise HTTPException(status_code=404, detail="Encounter not found.")
     stmt = (
         select(EncounterDiagnosis)
@@ -662,12 +717,21 @@ def chart_patient_comorbidity(
     return db.execute(stmt).scalar_one()
 
 
-@router.get("/patients/{patient_id}/comorbidities", response_model=List[PatientComorbidityResponse])
+@router.get(
+    "/patients/{patient_id}/comorbidities",
+    response_model=List[PatientComorbidityResponse],
+    openapi_extra={
+        "x-privacy-data-use-point": "clinical.patient.comorbidities.read"
+    },
+)
 def list_patient_comorbidities(
     patient_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("patients:read", "opd:read", "adt:read")),
+    actor: User = Depends(RequirePermission("patients:read", "opd:read", "adt:read")),
 ):
+    _evaluate_patient_read(
+        db, patient_id, actor, "clinical.patient.comorbidities.read"
+    )
     stmt = (
         select(PatientComorbidity)
         .options(joinedload(PatientComorbidity.comorbidity))
@@ -717,12 +781,21 @@ def record_encounter_physical_exam(
     return db.execute(stmt).scalar_one()
 
 
-@router.get("/encounters/{encounter_id}/physical-exams", response_model=List[EncounterPhysicalExamResponse])
+@router.get(
+    "/encounters/{encounter_id}/physical-exams",
+    response_model=List[EncounterPhysicalExamResponse],
+    openapi_extra={
+        "x-privacy-data-use-point": "clinical.encounter.physical_exams.read"
+    },
+)
 def list_encounter_physical_exams(
     encounter_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("opd:read", "adt:read")),
+    actor: User = Depends(RequirePermission("opd:read", "adt:read")),
 ):
+    _evaluate_encounter_read(
+        db, encounter_id, actor, "clinical.encounter.physical_exams.read"
+    )
     stmt = (
         select(EncounterPhysicalExam)
         .options(joinedload(EncounterPhysicalExam.exam_master))

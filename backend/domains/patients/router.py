@@ -26,6 +26,10 @@ from backend.domains.patients.schemas import (
     PatientResponse,
     PatientUpdate,
 )
+from backend.domains.privacy.runtime import (
+    calculate_patient_age,
+    evaluate_tenant_data_use,
+)
 
 router = APIRouter(prefix="/api/patients", tags=["Master Patient Index (MPI)"])
 
@@ -127,6 +131,7 @@ def register_patient(
             patient=patient,
             tenant_db=db,
             has_critical_allergies=False,
+            actor_user_id=current_user.id,
         )
     except IntegrityError:
         control_db.rollback()
@@ -138,17 +143,22 @@ def register_patient(
             patient=patient,
             tenant_db=db,
             has_critical_allergies=False,
+            actor_user_id=current_user.id,
         )
     return patient
 
 
-@router.get("", response_model=PaginatedResponse[PatientResponse])
+@router.get(
+    "",
+    response_model=PaginatedResponse[PatientResponse],
+    openapi_extra={"x-privacy-data-use-point": "patients.mpi.search"},
+)
 def list_patients(
     search: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("patients:read")),
+    actor: User = Depends(RequirePermission("patients:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     query = db.query(Patient).filter(Patient.is_active == True)
@@ -163,18 +173,51 @@ def list_patients(
     query = query.order_by(Patient.id.desc())
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
+    decisions = [
+        evaluate_tenant_data_use(
+            db,
+            data_use_point="patients.mpi.search",
+            patient_id=patient.id,
+            actor_user_id=actor.id,
+            patient_age=calculate_patient_age(patient.date_of_birth),
+            commit_audit=False,
+        )
+        for patient in items
+    ]
+    db.commit()
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Privacy policy does not permit one or more patient disclosures.",
+        )
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-@router.get("/{patient_id}", response_model=PatientResponse)
+@router.get(
+    "/{patient_id}",
+    response_model=PatientResponse,
+    openapi_extra={"x-privacy-data-use-point": "patients.mpi.read"},
+)
 def get_patient(
     patient_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("patients:read")),
+    actor: User = Depends(RequirePermission("patients:read")),
 ):
     patient = db.get(Patient, patient_id)
     if not patient or not patient.is_active:
         raise HTTPException(status_code=404, detail="Active patient not found.")
+    decision = evaluate_tenant_data_use(
+        db,
+        data_use_point="patients.mpi.read",
+        patient_id=patient.id,
+        actor_user_id=actor.id,
+        patient_age=calculate_patient_age(patient.date_of_birth),
+    )
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Privacy policy does not permit this patient disclosure.",
+        )
     return patient
 
 
@@ -204,6 +247,7 @@ def update_patient(
         subdomain_slug=tenant.subdomain_slug,
         patient=patient,
         tenant_db=db,
+        actor_user_id=current_user.id,
     )
     return patient
 
@@ -296,16 +340,36 @@ def chart_patient_allergy(
         patient=patient,
         tenant_db=db,
         has_critical_allergies=is_crit,
+        actor_user_id=current_user.id,
     )
     return record
 
 
-@router.get("/{patient_id}/allergies", response_model=list[PatientAllergyResponse])
+@router.get(
+    "/{patient_id}/allergies",
+    response_model=list[PatientAllergyResponse],
+    openapi_extra={"x-privacy-data-use-point": "patients.allergies.read"},
+)
 def list_patient_allergies(
     patient_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("patients:read")),
+    actor: User = Depends(RequirePermission("patients:read")),
 ):
+    patient = db.get(Patient, patient_id)
+    decision = evaluate_tenant_data_use(
+        db,
+        data_use_point="patients.allergies.read",
+        patient_id=patient_id,
+        actor_user_id=actor.id,
+        patient_age=(
+            calculate_patient_age(patient.date_of_birth) if patient else None
+        ),
+    )
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Privacy policy does not permit this patient disclosure.",
+        )
     return (
         db.query(PatientAllergy)
         .options(joinedload(PatientAllergy.allergy))

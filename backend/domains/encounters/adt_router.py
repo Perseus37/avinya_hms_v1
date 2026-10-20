@@ -17,6 +17,7 @@ from backend.domains.encounters.schemas import BedTransferRequest, BedTransferRe
 from backend.domains.billing.services import auto_bill_ipd_bed_stay
 from backend.core.event_bus import publish_tenant_event
 from backend.domains.policies.router import get_or_create_policy
+from backend.domains.privacy.runtime import evaluate_tenant_patient_data_uses
 
 router = APIRouter(prefix="/api/adt", tags=["Admissions, Discharges & Transfers (ADT)"])
 
@@ -49,29 +50,53 @@ def create_encounter(
     return encounter
 
 
-@router.get("/encounters/active", response_model=PaginatedResponse[PatientEncounterResponse])
+@router.get(
+    "/encounters/active",
+    response_model=PaginatedResponse[PatientEncounterResponse],
+    openapi_extra={"x-privacy-data-use-point": "adt.encounters.active.read"},
+)
 def list_active_encounters(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read")),
+    actor: User = Depends(RequirePermission("adt:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     query = db.query(PatientEncounter).filter(PatientEncounter.status == EncounterStatusEnum.ACTIVE).order_by(PatientEncounter.id.desc())
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="adt.encounters.active.read",
+        patient_ids=[item.patient_id for item in items],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-@router.get("/encounters/{encounter_id}", response_model=PatientEncounterResponse)
+@router.get(
+    "/encounters/{encounter_id}",
+    response_model=PatientEncounterResponse,
+    openapi_extra={"x-privacy-data-use-point": "adt.encounters.read"},
+)
 def get_encounter(
     encounter_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read")),
+    actor: User = Depends(RequirePermission("adt:read")),
 ):
     encounter = db.get(PatientEncounter, encounter_id)
     if not encounter:
         raise HTTPException(status_code=404, detail="Encounter not found.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="adt.encounters.read",
+        patient_ids=[encounter.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     return encounter
 
 
@@ -172,13 +197,17 @@ def admit_patient(
         raise HTTPException(status_code=409, detail="Bed assignment failed. Bed is locked by a concurrent transaction.")
 
 
-@router.get("/admissions", response_model=PaginatedResponse[InpatientAdmissionResponse])
+@router.get(
+    "/admissions",
+    response_model=PaginatedResponse[InpatientAdmissionResponse],
+    openapi_extra={"x-privacy-data-use-point": "adt.admissions.search"},
+)
 def list_admissions(
     patient_id: Optional[int] = None,
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read")),
+    actor: User = Depends(RequirePermission("adt:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     query = db.query(InpatientAdmission)
@@ -188,18 +217,43 @@ def list_admissions(
 
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
+    patient_ids = [
+        item.encounter.patient_id
+        for item in items
+        if item.encounter is not None
+    ]
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="adt.admissions.search",
+        patient_ids=patient_ids,
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-@router.get("/admissions/{admission_id}", response_model=InpatientAdmissionResponse)
+@router.get(
+    "/admissions/{admission_id}",
+    response_model=InpatientAdmissionResponse,
+    openapi_extra={"x-privacy-data-use-point": "adt.admissions.read"},
+)
 def get_admission(
     admission_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read")),
+    actor: User = Depends(RequirePermission("adt:read")),
 ):
     admission = db.get(InpatientAdmission, admission_id)
     if not admission:
         raise HTTPException(status_code=404, detail="Admission not found.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="adt.admissions.read",
+        patient_ids=[admission.encounter.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     return admission
 
 
@@ -320,18 +374,32 @@ def transfer_patient_bed(
         db.rollback()
         raise HTTPException(status_code=409, detail="Transfer failed due to concurrent bed locks.")
 
-@router.get("/admissions/{admission_id}/transfers", response_model=PaginatedResponse[BedTransferResponse])
+@router.get(
+    "/admissions/{admission_id}/transfers",
+    response_model=PaginatedResponse[BedTransferResponse],
+    openapi_extra={"x-privacy-data-use-point": "adt.admission.transfers.read"},
+)
 def list_admission_transfers(
     admission_id: int,
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read")),
+    actor: User = Depends(RequirePermission("adt:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     query = db.query(BedTransferLog).filter(BedTransferLog.admission_id == admission_id).order_by(BedTransferLog.id.asc())
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
+    admission = db.get(InpatientAdmission, admission_id)
+    if admission is not None:
+        decisions = evaluate_tenant_patient_data_uses(
+            db,
+            data_use_point="adt.admission.transfers.read",
+            patient_ids=[admission.encounter.patient_id],
+            actor_user_id=actor.id,
+        )
+        if any(not decision.allowed for decision in decisions):
+            raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 

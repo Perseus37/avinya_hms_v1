@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "policy_code": "strict-synthetic",
+  "purposes": [
+    {
+      "code": "EXTERNAL_SHARING",
+      "display_name": "External sharing",
+      "description": "Synthetic test-only purpose.",
+      "consent_required": true,
+      "legal_basis": "Synthetic fixture only; not legal guidance.",
+      "required_before": ["disclose"],
+      "scope": "recipient",
+      "validity": "until_withdrawn",
+      "capture": ["WRITTEN", "OTP"],
+      "consenters": ["patient", "guardian"],
+      "default_when_no_record": "deny"
+    },
+    {
+      "code": "RESEARCH_IDENTIFIABLE",
+      "display_name": "Identifiable research",
+      "consent_required": true,
+      "legal_basis": "Synthetic fixture only; not legal guidance.",
+      "required_before": ["use"],
+      "scope": "study",
+      "validity": "fixed_term",
+      "capture": ["WRITTEN"],
+      "consenters": ["patient"],
+      "default_when_no_record": "deny"
+    }
+  ],
+  "data_use_points": {
+    "fhir.patient.read": "EXTERNAL_SHARING",
+    "federation.patient.discover": "EXTERNAL_SHARING"
+  },
+  "exceptions": [
+    {
+      "code": "EMERGENCY",
+      "covers": ["EXTERNAL_SHARING"],
+      "invoker_permission": "break_glass:request",
+      "reason_required": true,
+      "review_hours": 72
+    }
+  ],
+  "never_override": ["RESEARCH_IDENTIFIABLE"],
+  "groups": [
+    {
+      "code": "MINORS",
+      "status": "deferred"
+    }
+  ],
+  "withdrawal": {
+    "effective": "immediate",
+    "cancel_queued": true,
+    "cancel_in_flight": true,
+    "notify_prior_recipients": "contract_required",
+    "statutory_retention_continues": true,
+    "patient_notice": "Synthetic fixture; not an approved notice.",
+    "clinician_alert_purposes": ["EXTERNAL_SHARING"],
+    "does_not_affect_treatment": true
+  }
+}

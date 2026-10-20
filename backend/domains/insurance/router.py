@@ -27,6 +27,7 @@ from backend.core.database import resolve_tenant_context
 from fastapi import Request, Response
 import json
 import re
+from backend.domains.privacy.runtime import evaluate_tenant_patient_data_uses
 
 router = APIRouter(prefix="/api/insurance", tags=["Insurance, TPA, Plans, Tariffs & Claims"])
 
@@ -347,12 +348,24 @@ def create_patient_policy(
     return db.execute(stmt).scalar_one()
 
 
-@router.get("/patients/{patient_id}/policies", response_model=List[PatientInsurancePolicyResponse])
+@router.get(
+    "/patients/{patient_id}/policies",
+    response_model=List[PatientInsurancePolicyResponse],
+    openapi_extra={"x-privacy-data-use-point": "insurance.patient.policies.read"},
+)
 def list_patient_policies(
     patient_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("patients:read", "billing:read")),
+    actor: User = Depends(RequirePermission("patients:read", "billing:read")),
 ):
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="insurance.patient.policies.read",
+        patient_ids=[patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     stmt = (
         select(PatientInsurancePolicy)
         .options(joinedload(PatientInsurancePolicy.provider))
@@ -414,14 +427,17 @@ def submit_cashless_preauth(
     return preauth
 
 
-@router.get("/preauths/{preauth_id}/documents.pdf")
+@router.get(
+    "/preauths/{preauth_id}/documents.pdf",
+    openapi_extra={"x-privacy-data-use-point": "insurance.preauth.pdf"},
+)
 def download_preauth_document(
     preauth_id: int,
     request: Request,
     template_code: Optional[str] = None,
     print_mode: Optional[PrintModeEnum] = None,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("billing:read")),
+    actor: User = Depends(RequirePermission("billing:read")),
 ):
     preauth = db.execute(
         select(InsurancePreAuth)
@@ -438,6 +454,14 @@ def download_preauth_document(
 
     tenant = resolve_tenant_context(request)
     patient = preauth.encounter.patient
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="insurance.preauth.pdf",
+        patient_ids=[patient.id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     policy = preauth.policy
     diagnosis = preauth.primary_diagnosis
     provider = policy.provider
@@ -618,14 +642,17 @@ def submit_insurance_claim(
     return claim
 
 
-@router.get("/claims/{claim_id}/documents.pdf")
+@router.get(
+    "/claims/{claim_id}/documents.pdf",
+    openapi_extra={"x-privacy-data-use-point": "insurance.claim.pdf"},
+)
 def download_claim_document(
     claim_id: int,
     request: Request,
     template_code: Optional[str] = None,
     print_mode: Optional[PrintModeEnum] = None,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("billing:read")),
+    actor: User = Depends(RequirePermission("billing:read")),
 ):
     claim = db.execute(
         select(InsuranceClaim)
@@ -644,6 +671,14 @@ def download_claim_document(
     tenant = resolve_tenant_context(request)
     invoice = claim.invoice
     patient = invoice.patient
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="insurance.claim.pdf",
+        patient_ids=[patient.id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     policy = claim.policy
     provider = policy.provider
     profile = _invoice_document_profile(db)

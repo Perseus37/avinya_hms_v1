@@ -23,6 +23,10 @@ from backend.domains.federation.schemas import (
 )
 from backend.schemas.common import PaginatedResponse
 from backend.domains.patients.schemas import PatientResponse
+from backend.domains.privacy.runtime import (
+    calculate_patient_age,
+    evaluate_tenant_data_use,
+)
 
 router = APIRouter(prefix="/api/federation", tags=["Central Discovery & Multi-Hop Federation"])
 
@@ -51,11 +55,23 @@ def sync_patient_pointer(
     patient: Patient,
     has_critical_allergies: bool = False,
     tenant_db: Optional[Session] = None,
-) -> None:
+    actor_user_id: int | None = None,
+) -> bool | None:
     """
     Updates the Central Discovery Index whenever a hospital registers or updates a patient,
     while respecting both Patient-level Privacy Opt-Out and Hospital-level Federation Sovereignty.
     """
+    if tenant_db is not None:
+        decision = evaluate_tenant_data_use(
+            tenant_db,
+            data_use_point="federation.patient.publish_pointer",
+            patient_id=patient.id,
+            actor_user_id=actor_user_id,
+            patient_age=calculate_patient_age(patient.date_of_birth),
+        )
+        if not decision.allowed:
+            return False
+
     try:
         p_hash = normalize_phone_hash(patient.phone_number)
         stmt = select(GlobalPatientPointer).where(
@@ -102,6 +118,7 @@ def sync_patient_pointer(
             )
             control_db.add(pointer)
         control_db.commit()
+        return True
     except Exception:
         control_db.rollback()
 
@@ -200,19 +217,22 @@ def revoke_federated_branch_key(
 # -----------------------------------------------------------------------------
 # 2. Central Discovery Index & Multi-Hop Patient Aggregation (A -> B -> C)
 # -----------------------------------------------------------------------------
-@router.post("/patients/{patient_id}/publish-pointer", status_code=200)
+@router.post(
+    "/patients/{patient_id}/publish-pointer",
+    status_code=200,
+    openapi_extra={"x-privacy-data-use-point": "federation.patient.publish_pointer"},
+)
 def publish_local_patient_to_discovery_index(
     patient_id: int,
     request: Request,
     db: Session = Depends(get_db),
     control_db: Session = Depends(get_control_db),
-    _: User = Depends(RequirePermission("patients:write")),
+    actor: User = Depends(RequirePermission("patients:write")),
 ):
     tenant = resolve_tenant_context(request)
     patient = db.get(Patient, patient_id)
     if not patient or not patient.is_active:
         raise HTTPException(status_code=404, detail="Active patient not found.")
-
     crit_allergy = (
         db.query(PatientAllergy)
         .filter(
@@ -223,18 +243,27 @@ def publish_local_patient_to_discovery_index(
         .first()
         is not None
     )
-    sync_patient_pointer(
+    synced = sync_patient_pointer(
         control_db=control_db,
         branch_code=tenant.branch_code,
         subdomain_slug=tenant.subdomain_slug,
         patient=patient,
         has_critical_allergies=crit_allergy,
         tenant_db=db,
+        actor_user_id=actor.id,
     )
+    if synced is False:
+        raise HTTPException(
+            status_code=403, detail="Privacy policy does not permit sharing."
+        )
     return {"status": "success", "message": f"Patient pointer evaluated and synced for branch {tenant.branch_code}."}
 
 
-@router.get("/patients/discover", response_model=FederatedPatientSummaryResponse)
+@router.get(
+    "/patients/discover",
+    response_model=FederatedPatientSummaryResponse,
+    openapi_extra={"x-privacy-data-use-point": "federation.patient.discover"},
+)
 def discover_and_aggregate_patient_across_branches(
     phone_number: Optional[str] = Query(default=None, description="Patient registered phone number"),
     abha_number: Optional[str] = Query(default=None, description="National ABHA ID"),
@@ -291,7 +320,17 @@ def discover_and_aggregate_patient_across_branches(
             patient = branch_db.query(Patient).filter(Patient.mrn == ptr.source_mrn, Patient.is_active == True).first()
             if not patient or getattr(patient, "allow_network_sharing", True) is False:
                 return None
+            decision = evaluate_tenant_data_use(
+                branch_db,
+                data_use_point="federation.patient.discover",
+                patient_id=patient.id,
+                actor_user_id=None,
+                patient_age=calculate_patient_age(patient.date_of_birth),
+            )
+            if not decision.allowed:
+                return None
 
+            branch_db.refresh(patient)
             branch_db.expunge(patient)
             
             local_allergies = []
@@ -460,5 +499,6 @@ def import_federated_patient_locally(
         patient=new_patient,
         has_critical_allergies=has_crit,
         tenant_db=db,
+        actor_user_id=current_user.id,
     )
     return new_patient
