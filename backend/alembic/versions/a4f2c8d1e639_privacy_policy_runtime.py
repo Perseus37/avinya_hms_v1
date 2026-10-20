@@ -92,7 +92,7 @@ def upgrade() -> None:
             sa.Column("form_version", sa.String(length=100), nullable=True)
         )
         batch_op.create_foreign_key(
-            "fk_patient_consent_records_policy_revision_id_privacy_policy_revisions",
+            "fk_consent_policy_revision",
             "privacy_policy_revisions",
             ["policy_revision_id"],
             ["id"],
@@ -148,7 +148,7 @@ def downgrade() -> None:
     op.drop_table("privacy_decision_audits")
     with op.batch_alter_table("patient_consent_records") as batch_op:
         batch_op.drop_constraint(
-            "fk_patient_consent_records_policy_revision_id_privacy_policy_revisions",
+            "fk_consent_policy_revision",
             type_="foreignkey",
         )
         batch_op.drop_column("form_version")

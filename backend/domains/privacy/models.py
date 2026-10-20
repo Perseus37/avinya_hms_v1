@@ -41,7 +41,7 @@ class PatientConsentRecord(Base):
         String(20), nullable=False, default="patient", server_default="patient"
     )
     policy_revision_id: Mapped[int | None] = mapped_column(
-        ForeignKey("privacy_policy_revisions.id")
+        ForeignKey("privacy_policy_revisions.id", name="fk_consent_policy_revision")
     )
     form_version: Mapped[str | None] = mapped_column(String(100))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
