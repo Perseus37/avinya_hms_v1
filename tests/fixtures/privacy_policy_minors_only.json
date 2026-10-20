@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "policy_code": "minors-synthetic",
+  "purposes": [
+    {
+      "code": "EXTERNAL_SHARING",
+      "display_name": "External sharing",
+      "consent_required": true,
+      "legal_basis": "Synthetic fixture only; not legal guidance.",
+      "required_before": ["disclose"],
+      "scope": "patient",
+      "validity": "until_withdrawn",
+      "capture": ["GUARDIAN_SIGNATURE"],
+      "consenters": ["guardian"],
+      "default_when_no_record": "deny"
+    }
+  ],
+  "data_use_points": {
+    "fhir.patient.read": "EXTERNAL_SHARING"
+  },
+  "exceptions": [],
+  "never_override": [],
+  "groups": [
+    {
+      "code": "MINORS",
+      "status": "configured",
+      "condition": {"age_lt": 18},
+      "consenter": "guardian"
+    }
+  ],
+  "withdrawal": {
+    "effective": "immediate",
+    "cancel_queued": true,
+    "cancel_in_flight": true,
+    "notify_prior_recipients": "never",
+    "statutory_retention_continues": true,
+    "patient_notice": "Synthetic fixture; not an approved notice.",
+    "clinician_alert_purposes": [],
+    "does_not_affect_treatment": true
+  }
+}

@@ -40,6 +40,7 @@ from backend.domains.reports.templates import (
 from backend.domains.reports.pdf import render_html_pdf
 from backend.domains.policies.models import HospitalPolicySetting
 from backend.domains.reports.profiles import InvoiceDocumentProfile
+from backend.domains.privacy.runtime import evaluate_tenant_patient_data_uses
 
 router = APIRouter(tags=["Printable Clinical & Financial Reports & Template Designer"])
 
@@ -927,14 +928,18 @@ def preview_report_template(
 # =====================================================================
 
 # 1. OPD Appointment & Consultation Case Sheet (with BMI/Vitals & Blank Doctor Writing Space)
-@router.get("/api/opd/appointments/{appointment_id}/print", response_class=HTMLResponse)
+@router.get(
+    "/api/opd/appointments/{appointment_id}/print",
+    response_class=HTMLResponse,
+    openapi_extra={"x-privacy-data-use-point": "opd.appointment.print"},
+)
 def print_opd_appointment_case_sheet(
     appointment_id: int,
     request: Request,
     template_code: Optional[str] = Query(default=None),
     print_mode: Optional[PrintModeEnum] = Query(default=None),
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("opd:read", "adt:read")),
+    actor: User = Depends(RequirePermission("opd:read", "adt:read")),
 ):
     tenant = resolve_tenant_context(request)
     stmt = (
@@ -949,6 +954,14 @@ def print_opd_appointment_case_sheet(
     appt = db.execute(stmt).unique().scalar_one_or_none()
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="opd.appointment.print",
+        patient_ids=[appt.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
 
     patient = appt.patient
     doc = appt.doctor
@@ -1019,14 +1032,18 @@ def print_opd_appointment_case_sheet(
 
 
 # 2. Printable Tax Invoice & Payment Receipt
-@router.get("/api/billing/invoices/{invoice_id}/print", response_class=HTMLResponse)
+@router.get(
+    "/api/billing/invoices/{invoice_id}/print",
+    response_class=HTMLResponse,
+    openapi_extra={"x-privacy-data-use-point": "billing.invoices.print"},
+)
 def print_invoice_and_receipt(
     invoice_id: int,
     request: Request,
     template_code: Optional[str] = Query(default=None),
     print_mode: Optional[PrintModeEnum] = Query(default=None),
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("billing:read")),
+    actor: User = Depends(RequirePermission("billing:read")),
 ):
     tenant = resolve_tenant_context(request)
     stmt = (
@@ -1041,6 +1058,19 @@ def print_invoice_and_receipt(
     invoice = db.execute(stmt).unique().scalar_one_or_none()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found.")
+    data_use_point = (
+        "billing.invoices.pdf"
+        if request.url.path.endswith("/pdf")
+        else "billing.invoices.print"
+    )
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point=data_use_point,
+        patient_ids=[invoice.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
 
     balance_paise = invoice.net_amount_paise - invoice.amount_paid_paise
     claim = db.execute(select(InsuranceClaim).where(InsuranceClaim.invoice_id == invoice.id)).scalar_one_or_none()
@@ -1109,7 +1139,10 @@ def print_invoice_and_receipt(
     return HTMLResponse(content=html, status_code=200)
 
 
-@router.get("/api/billing/invoices/{invoice_id}/pdf")
+@router.get(
+    "/api/billing/invoices/{invoice_id}/pdf",
+    openapi_extra={"x-privacy-data-use-point": "billing.invoices.pdf"},
+)
 def download_invoice_pdf(
     invoice_id: int,
     request: Request,
@@ -1124,7 +1157,7 @@ def download_invoice_pdf(
         template_code=template_code,
         print_mode=print_mode,
         db=db,
-        _=current_user,
+        actor=current_user,
     )
     try:
         pdf = render_html_pdf(html_response.body.decode("utf-8"))
@@ -1139,14 +1172,18 @@ def download_invoice_pdf(
 
 
 # 3. Printable eRx Medical Prescription
-@router.get("/api/pharmacy/prescriptions/{prescription_id}/print", response_class=HTMLResponse)
+@router.get(
+    "/api/pharmacy/prescriptions/{prescription_id}/print",
+    response_class=HTMLResponse,
+    openapi_extra={"x-privacy-data-use-point": "pharmacy.prescription.print"},
+)
 def print_erx_prescription(
     prescription_id: int,
     request: Request,
     template_code: Optional[str] = Query(default=None),
     print_mode: Optional[PrintModeEnum] = Query(default=None),
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("pharmacy:read", "opd:read", "adt:read")),
+    actor: User = Depends(RequirePermission("pharmacy:read", "opd:read", "adt:read")),
 ):
     tenant = resolve_tenant_context(request)
     stmt = (
@@ -1167,6 +1204,14 @@ def print_erx_prescription(
         raise HTTPException(status_code=404, detail="Prescription not found.")
 
     patient = rx.encounter.patient
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="pharmacy.prescription.print",
+        patient_ids=[patient.id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     doc = rx.prescribing_doctor
     nmc_reg = doc.doctor_profile.medical_registration_number if doc.doctor_profile else "N/A"
 
@@ -1211,14 +1256,18 @@ def print_erx_prescription(
 
 
 # 4. Printable Verified Diagnostic Lab & Radiology Report
-@router.get("/api/diagnostics/orders/{order_id}/print", response_class=HTMLResponse)
+@router.get(
+    "/api/diagnostics/orders/{order_id}/print",
+    response_class=HTMLResponse,
+    openapi_extra={"x-privacy-data-use-point": "diagnostics.orders.print"},
+)
 def print_diagnostic_lab_report(
     order_id: int,
     request: Request,
     template_code: Optional[str] = Query(default=None),
     print_mode: Optional[PrintModeEnum] = Query(default=None),
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("diagnostics:read")),
+    actor: User = Depends(RequirePermission("diagnostics:read")),
 ):
     tenant = resolve_tenant_context(request)
     stmt = (
@@ -1241,6 +1290,14 @@ def print_diagnostic_lab_report(
     order = db.execute(stmt).unique().scalar_one_or_none()
     if not order:
         raise HTTPException(status_code=404, detail="Diagnostic order not found.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="diagnostics.orders.print",
+        patient_ids=[order.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
 
     unverified = [t for t in order.tasks if t.status != TaskStatusEnum.VERIFIED]
     if unverified:
@@ -1299,14 +1356,18 @@ def print_diagnostic_lab_report(
 
 
 # 5. Printable IPD Clinical Discharge Summary
-@router.get("/api/adt/admissions/{admission_id}/discharge-summary/print", response_class=HTMLResponse)
+@router.get(
+    "/api/adt/admissions/{admission_id}/discharge-summary/print",
+    response_class=HTMLResponse,
+    openapi_extra={"x-privacy-data-use-point": "adt.discharge_summary.print"},
+)
 def print_ipd_discharge_summary(
     admission_id: int,
     request: Request,
     template_code: Optional[str] = Query(default=None),
     print_mode: Optional[PrintModeEnum] = Query(default=None),
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read")),
+    actor: User = Depends(RequirePermission("adt:read")),
 ):
     tenant = resolve_tenant_context(request)
     stmt = (
@@ -1330,6 +1391,14 @@ def print_ipd_discharge_summary(
 
     enc = admission.encounter
     patient = enc.patient
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="adt.discharge_summary.print",
+        patient_ids=[patient.id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
 
     diag_stmt = (
         select(EncounterDiagnosis)

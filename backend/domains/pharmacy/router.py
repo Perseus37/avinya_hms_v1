@@ -17,6 +17,7 @@ from backend.domains.pharmacy.models import InventoryBatch, MedicationMaster, Pr
 from backend.schemas.common import PaginatedResponse
 from backend.domains.pharmacy.schemas import DispenseRequest, InventoryBatchCreate, InventoryBatchResponse, InventoryBatchUpdate, InventoryStockAdjustment, MedicationCreate, MedicationResponse, MedicationUpdate, PrescriptionCreate, PrescriptionResponse, PrescriptionUpdate, PharmacyReturnLogResponse, PharmacyReturnRequest
 from backend.domains.clinical.services import check_allergy_hard_stop
+from backend.domains.privacy.runtime import evaluate_tenant_patient_data_uses
 
 router = APIRouter(prefix="/api/pharmacy", tags=["Pharmacy & Inventory Management"])
 
@@ -280,7 +281,11 @@ def write_prescription(
     return prescription
 
 
-@router.get("/prescriptions", response_model=PaginatedResponse[PrescriptionResponse])
+@router.get(
+    "/prescriptions",
+    response_model=PaginatedResponse[PrescriptionResponse],
+    openapi_extra={"x-privacy-data-use-point": "pharmacy.prescriptions.search"},
+)
 def list_prescriptions(
     encounter_id: Optional[int] = None,
     status_filter: Optional[PrescriptionStatusEnum] = None,
@@ -289,7 +294,7 @@ def list_prescriptions(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("pharmacy:read")),
+    actor: User = Depends(RequirePermission("pharmacy:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     start_at, end_at = resolve_record_date_window(start_date, end_date)
@@ -306,14 +311,31 @@ def list_prescriptions(
 
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
+    patient_ids = [
+        item.encounter.patient_id
+        for item in items
+        if item.encounter is not None
+    ]
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="pharmacy.prescriptions.search",
+        patient_ids=patient_ids,
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-@router.get("/prescriptions/{prescription_id}", response_model=PrescriptionResponse)
+@router.get(
+    "/prescriptions/{prescription_id}",
+    response_model=PrescriptionResponse,
+    openapi_extra={"x-privacy-data-use-point": "pharmacy.prescriptions.read"},
+)
 def get_prescription(
     prescription_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("pharmacy:read")),
+    actor: User = Depends(RequirePermission("pharmacy:read")),
 ):
     rx = (
         db.query(Prescription)
@@ -323,6 +345,14 @@ def get_prescription(
     )
     if not rx:
         raise HTTPException(status_code=404, detail="Prescription not found.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="pharmacy.prescriptions.read",
+        patient_ids=[rx.encounter.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     return rx
 
 

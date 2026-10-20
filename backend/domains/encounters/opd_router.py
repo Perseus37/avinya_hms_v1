@@ -17,6 +17,7 @@ from backend.domains.billing.services import auto_bill_opd_consultation
 from backend.domains.diagnostics.models import ServiceCatalog
 from backend.domains.identity.models import Department
 from backend.core.event_bus import publish_tenant_event
+from backend.domains.privacy.runtime import evaluate_tenant_patient_data_uses
 
 router = APIRouter(prefix="/api/opd", tags=["Outpatient Scheduling (OPD), Tokens & Doctor Leaves"])
 
@@ -169,7 +170,11 @@ def book_appointment(
     return appointment
 
 
-@router.get("/appointments", response_model=PaginatedResponse[AppointmentResponse])
+@router.get(
+    "/appointments",
+    response_model=PaginatedResponse[AppointmentResponse],
+    openapi_extra={"x-privacy-data-use-point": "opd.appointments.search"},
+)
 def list_appointments(
     doctor_id: Optional[int] = None,
     patient_id: Optional[int] = None,
@@ -180,7 +185,7 @@ def list_appointments(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("opd:read")),
+    actor: User = Depends(RequirePermission("opd:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     window_start, window_end = resolve_record_date_window(start_date, end_date)
@@ -211,18 +216,38 @@ def list_appointments(
     query = query.order_by(Appointment.appointment_time.asc())
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="opd.appointments.search",
+        patient_ids=[item.patient_id for item in items],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-@router.get("/appointments/{appointment_id}", response_model=AppointmentResponse)
+@router.get(
+    "/appointments/{appointment_id}",
+    response_model=AppointmentResponse,
+    openapi_extra={"x-privacy-data-use-point": "opd.appointments.read"},
+)
 def get_appointment(
     appointment_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("opd:read")),
+    actor: User = Depends(RequirePermission("opd:read")),
 ):
     appointment = db.get(Appointment, appointment_id)
     if not appointment:
         raise HTTPException(status_code=404, detail="Appointment not found.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="opd.appointments.read",
+        patient_ids=[appointment.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     return appointment
 
 
@@ -388,14 +413,24 @@ def cancel_appointment(
 @router.get(
     "/appointments/{appointment_id}/status-history",
     response_model=list[AppointmentStatusHistoryResponse],
+    openapi_extra={"x-privacy-data-use-point": "opd.appointment.history.read"},
 )
 def list_appointment_status_history(
     appointment_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("opd:read")),
+    actor: User = Depends(RequirePermission("opd:read")),
 ):
-    if db.get(Appointment, appointment_id) is None:
+    appointment = db.get(Appointment, appointment_id)
+    if appointment is None:
         raise HTTPException(status_code=404, detail="Appointment not found.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="opd.appointment.history.read",
+        patient_ids=[appointment.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     return list(
         db.execute(
             select(AppointmentStatusHistory)
@@ -456,6 +491,7 @@ def create_appointment_waitlist_entry(
 @router.get(
     "/appointment-waitlist",
     response_model=PaginatedResponse[AppointmentWaitlistResponse],
+    openapi_extra={"x-privacy-data-use-point": "opd.waitlist.search"},
 )
 def list_appointment_waitlist(
     doctor_id: Optional[int] = None,
@@ -464,7 +500,7 @@ def list_appointment_waitlist(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("opd:read")),
+    actor: User = Depends(RequirePermission("opd:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     query = db.query(AppointmentWaitlistEntry)
@@ -481,6 +517,14 @@ def list_appointment_waitlist(
     )
     total = query.count()
     entries = query.offset((page - 1) * page_size).limit(page_size).all()
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="opd.waitlist.search",
+        patient_ids=[entry.patient_id for entry in entries],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
     return {
         "items": entries,
         "total": total,
@@ -625,14 +669,24 @@ def cancel_appointment_waitlist_entry(
 @router.get(
     "/appointment-waitlist/{entry_id}/history",
     response_model=list[AppointmentWaitlistHistoryResponse],
+    openapi_extra={"x-privacy-data-use-point": "opd.waitlist.history.read"},
 )
 def list_appointment_waitlist_history(
     entry_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("opd:read")),
+    actor: User = Depends(RequirePermission("opd:read")),
 ):
-    if db.get(AppointmentWaitlistEntry, entry_id) is None:
+    entry = db.get(AppointmentWaitlistEntry, entry_id)
+    if entry is None:
         raise HTTPException(status_code=404, detail="Waitlist entry not found.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="opd.waitlist.history.read",
+        patient_ids=[entry.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     return list(
         db.execute(
             select(AppointmentWaitlistHistory)
@@ -695,6 +749,7 @@ def create_service_demand_request(
 @router.get(
     "/service-demand",
     response_model=PaginatedResponse[ServiceDemandResponse],
+    openapi_extra={"x-privacy-data-use-point": "opd.service_demand.search"},
 )
 def list_service_demand_requests(
     start_date: Optional[date] = None,
@@ -705,7 +760,7 @@ def list_service_demand_requests(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("opd:read", "diagnostics:read")),
+    actor: User = Depends(RequirePermission("opd:read", "diagnostics:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     start_at, end_at = resolve_record_date_window(start_date, end_date)
@@ -726,6 +781,14 @@ def list_service_demand_requests(
     )
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="opd.service_demand.search",
+        patient_ids=[item.patient_id for item in items if item.patient_id is not None],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
@@ -815,16 +878,27 @@ def update_service_demand_request(
 @router.get(
     "/service-demand/{demand_id}/history",
     response_model=list[ServiceDemandStatusHistoryResponse],
+    openapi_extra={"x-privacy-data-use-point": "opd.service_demand.history.read"},
 )
 def list_service_demand_status_history(
     demand_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("opd:read", "diagnostics:read")),
+    actor: User = Depends(RequirePermission("opd:read", "diagnostics:read")),
 ):
-    if db.get(ServiceDemandRequest, demand_id) is None:
+    demand = db.get(ServiceDemandRequest, demand_id)
+    if demand is None:
         raise HTTPException(
             status_code=404, detail="Service demand request not found."
         )
+    if demand.patient_id is not None:
+        decisions = evaluate_tenant_patient_data_uses(
+            db,
+            data_use_point="opd.service_demand.history.read",
+            patient_ids=[demand.patient_id],
+            actor_user_id=actor.id,
+        )
+        if any(not decision.allowed for decision in decisions):
+            raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     return list(
         db.execute(
             select(ServiceDemandStatusHistory)

@@ -17,6 +17,7 @@ from backend.domains.patients.models import Patient
 from backend.domains.billing.schemas import InvoiceCreate, InvoiceLineItemCreate, InvoiceResponse, PaymentReceiptCreate, PaymentReceiptResponse, InvoiceDiscountRequest, ApplyDepositToInvoiceRequest, PatientDepositCreate, DepositRefundRequest, PatientDepositResponse, RefundVoucherResponse
 from backend.schemas.common import PaginatedResponse
 from backend.domains.billing.services import resolve_patient_service_price_paise
+from backend.domains.privacy.runtime import evaluate_tenant_patient_data_uses
 
 router = APIRouter(prefix="/api/billing", tags=["Enterprise Billing & Ledger"])
 
@@ -60,7 +61,11 @@ def create_invoice(
     return invoice
 
 
-@router.get("/invoices", response_model=PaginatedResponse[InvoiceResponse])
+@router.get(
+    "/invoices",
+    response_model=PaginatedResponse[InvoiceResponse],
+    openapi_extra={"x-privacy-data-use-point": "billing.invoices.search"},
+)
 def list_invoices(
     patient_id: Optional[int] = None,
     invoice_status: Optional[InvoiceStatusEnum] = None,
@@ -69,7 +74,7 @@ def list_invoices(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("billing:read")),
+    actor: User = Depends(RequirePermission("billing:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
     start_at, end_at = resolve_record_date_window(start_date, end_date)
@@ -84,14 +89,26 @@ def list_invoices(
 
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="billing.invoices.search",
+        patient_ids=[item.patient_id for item in items],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-@router.get("/invoices/{invoice_id}", response_model=InvoiceResponse)
+@router.get(
+    "/invoices/{invoice_id}",
+    response_model=InvoiceResponse,
+    openapi_extra={"x-privacy-data-use-point": "billing.invoices.read"},
+)
 def get_invoice(
     invoice_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("billing:read")),
+    actor: User = Depends(RequirePermission("billing:read")),
 ):
     invoice = (
         db.query(Invoice)
@@ -101,6 +118,14 @@ def get_invoice(
     )
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="billing.invoices.read",
+        patient_ids=[invoice.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     return invoice
 
 
@@ -345,12 +370,26 @@ def record_payment(
     return receipt
 
 
-@router.get("/invoices/{invoice_id}/payments", response_model=list[PaymentReceiptResponse])
+@router.get(
+    "/invoices/{invoice_id}/payments",
+    response_model=list[PaymentReceiptResponse],
+    openapi_extra={"x-privacy-data-use-point": "billing.payments.read"},
+)
 def list_invoice_payments(
     invoice_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("billing:read")),
+    actor: User = Depends(RequirePermission("billing:read")),
 ):
+    invoice = db.get(Invoice, invoice_id)
+    if invoice is not None:
+        decisions = evaluate_tenant_patient_data_uses(
+            db,
+            data_use_point="billing.payments.read",
+            patient_ids=[invoice.patient_id],
+            actor_user_id=actor.id,
+        )
+        if any(not decision.allowed for decision in decisions):
+            raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     return (
         db.query(PaymentReceipt)
         .filter(PaymentReceipt.invoice_id == invoice_id)
@@ -434,12 +473,24 @@ def collect_patient_advance_deposit(
     return deposit
 
 
-@router.get("/patients/{patient_id}/deposits", response_model=list[PatientDepositResponse])
+@router.get(
+    "/patients/{patient_id}/deposits",
+    response_model=list[PatientDepositResponse],
+    openapi_extra={"x-privacy-data-use-point": "billing.deposits.read"},
+)
 def list_patient_deposits(
     patient_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("billing:read")),
+    actor: User = Depends(RequirePermission("billing:read")),
 ):
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="billing.deposits.read",
+        patient_ids=[patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     stmt = (
         select(PatientDeposit)
         .where(PatientDeposit.patient_id == patient_id)
@@ -560,12 +611,24 @@ def refund_unused_patient_deposit(
     return voucher
 
 
-@router.get("/patients/{patient_id}/refunds", response_model=list[RefundVoucherResponse])
+@router.get(
+    "/patients/{patient_id}/refunds",
+    response_model=list[RefundVoucherResponse],
+    openapi_extra={"x-privacy-data-use-point": "billing.refunds.read"},
+)
 def list_patient_refund_vouchers(
     patient_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("billing:read")),
+    actor: User = Depends(RequirePermission("billing:read")),
 ):
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="billing.refunds.read",
+        patient_ids=[patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     stmt = (
         select(RefundVoucher)
         .where(RefundVoucher.patient_id == patient_id)

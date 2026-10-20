@@ -3,14 +3,18 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
+    false,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -29,6 +33,17 @@ class PatientConsentRecord(Base):
     decision: Mapped[str] = mapped_column(String(20), nullable=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False)
     evidence_reference: Mapped[str | None] = mapped_column(String(100))
+    scope_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="patient", server_default="patient"
+    )
+    scope_key: Mapped[str | None] = mapped_column(String(255))
+    consenter_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="patient", server_default="patient"
+    )
+    policy_revision_id: Mapped[int | None] = mapped_column(
+        ForeignKey("privacy_policy_revisions.id", name="fk_consent_policy_revision")
+    )
+    form_version: Mapped[str | None] = mapped_column(String(100))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     recorded_by_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id"), nullable=False
@@ -67,8 +82,17 @@ class PrivacyPolicyRevision(Base):
             name="ck_privacy_policy_revision_status",
         ),
         CheckConstraint(
-            "enforcement_mode = 'OFF'",
-            name="ck_privacy_policy_revision_mode_off",
+            "enforcement_mode IN ('OFF', 'AUDIT_ONLY')",
+            name="ck_privacy_policy_revision_mode",
+        ),
+        CheckConstraint(
+            "(is_active = false AND enforcement_mode = 'OFF') OR "
+            "(is_active = true AND status = 'APPROVED' "
+            "AND enforcement_mode = 'AUDIT_ONLY' "
+            "AND mode_set_by_user_id IS NOT NULL "
+            "AND mode_set_at IS NOT NULL "
+            "AND mode_approval_reference IS NOT NULL)",
+            name="ck_privacy_policy_revision_activation",
         ),
         CheckConstraint(
             "(status = 'DRAFT' AND approved_by_user_id IS NULL "
@@ -76,6 +100,13 @@ class PrivacyPolicyRevision(Base):
             "(status = 'APPROVED' AND approved_by_user_id IS NOT NULL "
             "AND approved_at IS NOT NULL AND approval_reference IS NOT NULL)",
             name="ck_privacy_policy_revision_approval",
+        ),
+        Index(
+            "uq_privacy_policy_revision_active",
+            "policy_type",
+            unique=True,
+            sqlite_where=text("is_active = 1"),
+            postgresql_where=text("is_active IS TRUE"),
         ),
     )
 
@@ -88,6 +119,9 @@ class PrivacyPolicyRevision(Base):
     enforcement_mode: Mapped[str] = mapped_column(
         String(20), nullable=False, default="OFF", server_default="OFF"
     )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     configured_by_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id"), nullable=False
     )
@@ -97,6 +131,27 @@ class PrivacyPolicyRevision(Base):
     approved_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     approval_reference: Mapped[str | None] = mapped_column(String(100))
+    mode_set_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    mode_set_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    mode_approval_reference: Mapped[str | None] = mapped_column(String(100))
+
+
+class PrivacyDecisionAudit(Base):
+    __tablename__ = "privacy_decision_audits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    policy_revision_id: Mapped[int | None] = mapped_column(
+        ForeignKey("privacy_policy_revisions.id")
+    )
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    data_use_point: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    purpose_code: Mapped[str | None] = mapped_column(String(64))
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    result: Mapped[str] = mapped_column(String(20), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
 
 
 class PrivacyLegalHold(Base):

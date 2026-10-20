@@ -1,21 +1,31 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from pydantic import BaseModel, Field, ValidationError, field_validator
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from backend.core.config import settings
 from backend.core.database import get_db
 from backend.core.dependencies import RequirePermission
 from backend.domains.identity.models import User
 from backend.domains.patients.models import Patient
+from backend.domains.privacy.data_use_points import DATA_USE_POINTS
+from backend.domains.privacy.decision_engine import counts_only_report
+from backend.domains.privacy.decision_engine import SOURCE_TO_CAPTURE
 from backend.domains.privacy.models import (
     PatientConsentRecord,
+    PrivacyDecisionAudit,
     PrivacyLegalHold,
     PrivacyPolicyRevision,
     PrivacyRetentionPolicy,
+)
+from backend.domains.privacy.policy_schema import validate_policy_document
+from backend.domains.privacy.retention_preview import (
+    preview_retention_counts,
+    retention_category_registry,
 )
 
 router = APIRouter(prefix="/api/privacy", tags=["Privacy Governance"])
@@ -29,7 +39,18 @@ ConsentType = Literal[
     "DATA_PROCESSING",
 ]
 ConsentDecision = Literal["GRANTED", "DECLINED", "WITHDRAWN"]
-ConsentSource = Literal["WRITTEN", "VERBAL", "DIGITAL", "GUARDIAN"]
+ConsentSource = Literal[
+    "WRITTEN",
+    "VERBAL",
+    "DIGITAL",
+    "GUARDIAN",
+    "E_SIGNATURE",
+    "OTP",
+    "DIGITAL_OPT_IN",
+    "WITNESSED_VERBAL",
+    "GUARDIAN_SIGNATURE",
+    "ABDM_ARTIFACT",
+]
 
 
 def _utc(value: datetime) -> datetime:
@@ -43,6 +64,12 @@ class ConsentRecordCreate(BaseModel):
     source: ConsentSource
     evidence_reference: str | None = Field(default=None, max_length=100)
     expires_at: datetime | None = None
+    scope_type: Literal[
+        "patient", "episode", "recipient", "study", "channel", "item"
+    ] = "patient"
+    scope_key: str | None = Field(default=None, min_length=1, max_length=255)
+    consenter_type: Literal["patient", "guardian", "representative"] = "patient"
+    form_version: str | None = Field(default=None, max_length=100)
 
     @field_validator("purpose", "evidence_reference")
     @classmethod
@@ -82,6 +109,14 @@ class PrivacyPolicyDraftCreate(BaseModel):
             raise ValueError("Policy document must not exceed 32 KiB.")
         return value
 
+    @field_validator("policy_document")
+    @classmethod
+    def validate_versioned_policy(cls, value: dict[str, Any], info):
+        policy_type = info.data.get("policy_type")
+        if policy_type is not None:
+            validate_policy_document(policy_type, value)
+        return value
+
 
 class PrivacyPolicyApproval(BaseModel):
     approval_reference: str = Field(min_length=3, max_length=100)
@@ -93,6 +128,23 @@ class PrivacyPolicyApproval(BaseModel):
         if not cleaned:
             raise ValueError("Approval reference cannot be blank.")
         return cleaned
+
+
+class PrivacyPolicyModeApproval(BaseModel):
+    approval_reference: str = Field(min_length=3, max_length=100)
+
+    @field_validator("approval_reference")
+    @classmethod
+    def normalize_mode_approval_reference(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Approval reference cannot be blank.")
+        return cleaned
+
+
+class RetentionDryRunRequest(BaseModel):
+    policy_revision_id: int = Field(gt=0)
+    categories: list[str] = Field(min_length=1, max_length=100)
 
 
 class PrivacyLegalHoldCreate(BaseModel):
@@ -167,6 +219,170 @@ def create_privacy_policy_draft(
     return revision
 
 
+@router.get("/data-use-points")
+def list_privacy_data_use_points(
+    _: User = Depends(RequirePermission("privacy:read")),
+):
+    return {
+        "items": [
+            {
+                "code": point.code,
+                "description": point.description,
+                "route": point.route,
+            }
+            for point in sorted(DATA_USE_POINTS.values(), key=lambda item: item.code)
+        ]
+    }
+
+
+@router.post("/policies/{revision_id}/activate-audit-only")
+def activate_privacy_policy_audit_only(
+    revision_id: int,
+    payload: PrivacyPolicyModeApproval,
+    db: Session = Depends(get_db),
+    actor: User = Depends(RequirePermission("privacy:approve")),
+):
+    if not settings.PRIVACY_ALLOW_AUDIT_ONLY:
+        raise HTTPException(
+            status_code=409,
+            detail="Audit-only mode is disabled by deployment configuration.",
+        )
+    if settings.ENVIRONMENT.strip().lower() in {"prod", "production"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Audit-only mode cannot be activated in production.",
+        )
+
+    revision = db.execute(
+        select(PrivacyPolicyRevision)
+        .where(PrivacyPolicyRevision.id == revision_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+    if revision is None:
+        raise HTTPException(status_code=404, detail="Privacy policy revision not found.")
+    if revision.policy_type != "CONSENT" or revision.status != "APPROVED":
+        raise HTTPException(
+            status_code=409,
+            detail="Only an approved consent policy can enter audit-only mode.",
+        )
+    if revision.configured_by_user_id == actor.id:
+        raise HTTPException(
+            status_code=409,
+            detail="A different user must authorize audit-only activation.",
+        )
+    try:
+        validate_policy_document(revision.policy_type, revision.policy_document)
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    for active in db.execute(
+        select(PrivacyPolicyRevision)
+        .where(PrivacyPolicyRevision.is_active.is_(True))
+        .with_for_update()
+    ).scalars():
+        active.is_active = False
+        active.enforcement_mode = "OFF"
+        active.mode_set_by_user_id = None
+        active.mode_set_at = None
+        active.mode_approval_reference = None
+
+    now = datetime.now(timezone.utc)
+    revision.is_active = True
+    revision.enforcement_mode = "AUDIT_ONLY"
+    revision.mode_set_by_user_id = actor.id
+    revision.mode_set_at = now
+    revision.mode_approval_reference = payload.approval_reference
+    db.add(
+        PrivacyDecisionAudit(
+            policy_revision_id=revision.id,
+            actor_user_id=actor.id,
+            data_use_point="privacy.policy.mode",
+            purpose_code=None,
+            mode="AUDIT_ONLY",
+            result="ALLOW",
+            reason_code="audit_only_activated",
+            occurred_at=now,
+        )
+    )
+    db.commit()
+    db.refresh(revision)
+    return revision
+
+
+@router.post("/policies/{revision_id}/deactivate")
+def deactivate_privacy_policy(
+    revision_id: int,
+    db: Session = Depends(get_db),
+    actor: User = Depends(RequirePermission("privacy:approve")),
+):
+    revision = db.execute(
+        select(PrivacyPolicyRevision)
+        .where(PrivacyPolicyRevision.id == revision_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+    if revision is None:
+        raise HTTPException(status_code=404, detail="Privacy policy revision not found.")
+    if revision.is_active:
+        revision.is_active = False
+        revision.enforcement_mode = "OFF"
+        revision.mode_set_by_user_id = None
+        revision.mode_set_at = None
+        revision.mode_approval_reference = None
+        db.add(
+            PrivacyDecisionAudit(
+                policy_revision_id=revision.id,
+                actor_user_id=actor.id,
+                data_use_point="privacy.policy.mode",
+                purpose_code=None,
+                mode="OFF",
+                result="ALLOW",
+                reason_code="audit_only_deactivated",
+                occurred_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+        db.refresh(revision)
+    return revision
+
+
+@router.get("/decision-audits")
+def list_privacy_decision_audit_counts(
+    since: datetime | None = None,
+    until: datetime | None = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("privacy:read")),
+):
+    now = datetime.now(timezone.utc)
+    until = until or now
+    since = since or until - timedelta(days=30)
+    if since.tzinfo is None or until.tzinfo is None or since > until:
+        raise HTTPException(
+            status_code=422,
+            detail="since and until must be timezone-aware and since must not exceed until.",
+        )
+    if until - since > timedelta(days=31):
+        raise HTTPException(status_code=422, detail="Report range must not exceed 31 days.")
+    rows = db.execute(
+        select(
+            PrivacyDecisionAudit.data_use_point,
+            PrivacyDecisionAudit.result,
+            PrivacyDecisionAudit.reason_code,
+            func.count(PrivacyDecisionAudit.id),
+        )
+        .where(
+            PrivacyDecisionAudit.occurred_at >= since,
+            PrivacyDecisionAudit.occurred_at <= until,
+            PrivacyDecisionAudit.data_use_point.in_(DATA_USE_POINTS),
+        )
+        .group_by(
+            PrivacyDecisionAudit.data_use_point,
+            PrivacyDecisionAudit.result,
+            PrivacyDecisionAudit.reason_code,
+        )
+    ).all()
+    return {"since": since, "until": until, "items": counts_only_report(rows)}
+
+
 @router.post("/policies/{revision_id}/approve")
 def approve_privacy_policy_draft(
     revision_id: int,
@@ -188,6 +404,13 @@ def approve_privacy_policy_draft(
             status_code=409,
             detail="A different user must approve the privacy policy draft.",
         )
+    try:
+        validate_policy_document(revision.policy_type, revision.policy_document)
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Privacy policy validation failed: {exc}",
+        ) from exc
 
     revision.status = "APPROVED"
     revision.approved_by_user_id = actor.id
@@ -290,6 +513,58 @@ def list_retention_policies(
     return {"items": items}
 
 
+@router.post("/retention/dry-run")
+def create_retention_dry_run(
+    payload: RetentionDryRunRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("privacy:approve")),
+):
+    if (
+        not settings.PRIVACY_ALLOW_RETENTION_DRY_RUN
+        or settings.ENVIRONMENT.strip().lower() in {"prod", "production"}
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Retention dry-run is disabled by deployment configuration.",
+        )
+    revision = db.get(PrivacyPolicyRevision, payload.policy_revision_id)
+    if (
+        revision is None
+        or revision.policy_type != "RETENTION"
+        or revision.status != "APPROVED"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="A second-person-approved retention policy is required.",
+        )
+    try:
+        policy = validate_policy_document("RETENTION", revision.policy_document)
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Approved retention policy cannot be validated: {exc}",
+        ) from exc
+    policy_categories = {item.code for item in policy.categories}
+    requested = set(payload.categories)
+    if not requested.issubset(policy_categories):
+        raise HTTPException(
+            status_code=422,
+            detail="Requested categories must be present in the approved policy.",
+        )
+    try:
+        items = preview_retention_counts(
+            retention_category_registry, requested
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "policy_revision_id": revision.id,
+        "generated_at": datetime.now(timezone.utc),
+        "items": items,
+        "destructive_action_performed": False,
+    }
+
+
 @router.post("/retention-policies", status_code=201)
 def create_retention_policy(
     payload: RetentionPolicyCreate,
@@ -340,18 +615,38 @@ def record_patient_consent(
         if payload.expires_at <= now:
             raise HTTPException(status_code=422, detail="expires_at must be in the future.")
 
-    latest = db.execute(
-        select(PatientConsentRecord)
-        .where(
-            PatientConsentRecord.patient_id == patient_id,
-            PatientConsentRecord.consent_type == payload.consent_type,
-            PatientConsentRecord.purpose == payload.purpose,
+    active_policy = db.execute(
+        select(PrivacyPolicyRevision).where(
+            PrivacyPolicyRevision.is_active.is_(True),
+            PrivacyPolicyRevision.policy_type == "CONSENT",
         )
-        .order_by(
+    ).scalar_one_or_none()
+    purpose_rule = None
+    policy_revision_id = None
+    if active_policy is not None:
+        policy = validate_policy_document("CONSENT", active_policy.policy_document)
+        purpose_rule = next(
+            (item for item in policy.purposes if item.code == payload.purpose), None
+        )
+        if purpose_rule is not None:
+            policy_revision_id = active_policy.id
+
+    latest_query = select(PatientConsentRecord).where(
+        PatientConsentRecord.patient_id == patient_id,
+        PatientConsentRecord.consent_type == payload.consent_type,
+        PatientConsentRecord.purpose == payload.purpose,
+        PatientConsentRecord.scope_type == payload.scope_type,
+        PatientConsentRecord.scope_key == payload.scope_key,
+    )
+    if policy_revision_id is not None:
+        latest_query = latest_query.where(
+            PatientConsentRecord.policy_revision_id == policy_revision_id
+        )
+    latest = db.execute(
+        latest_query.order_by(
             PatientConsentRecord.recorded_at.desc(),
             PatientConsentRecord.id.desc(),
-        )
-        .limit(1)
+        ).limit(1)
     ).scalar_one_or_none()
     if payload.decision == "WITHDRAWN" and (
         latest is None
@@ -371,9 +666,50 @@ def record_patient_consent(
             detail="A matching consent grant is already current.",
         )
 
+    if active_policy is not None and purpose_rule is not None:
+        if payload.scope_type != purpose_rule.scope:
+            raise HTTPException(
+                status_code=422,
+                detail="Consent scope does not match the active policy.",
+            )
+        if purpose_rule.scope != "patient" and payload.scope_key is None:
+            raise HTTPException(
+                status_code=422,
+                detail="scope_key is required for this consent scope.",
+            )
+        if payload.decision == "GRANTED":
+            if payload.consenter_type not in purpose_rule.consenters:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Consenter type is not allowed by the active policy.",
+                )
+            capture_method = SOURCE_TO_CAPTURE.get(payload.source)
+            if capture_method not in purpose_rule.capture:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Consent capture method is not allowed by the active policy.",
+                )
+            if not payload.evidence_reference:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Consent evidence_reference is required by the active policy.",
+                )
+            if purpose_rule.validity == "fixed_term" and payload.expires_at is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="expires_at is required by the active policy.",
+                )
+        if payload.decision == "WITHDRAWN":
+            if latest is None or latest.policy_revision_id != active_policy.id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Only a grant under the active policy can be withdrawn.",
+                )
+
     record = PatientConsentRecord(
         patient_id=patient_id,
         **payload.model_dump(),
+        policy_revision_id=policy_revision_id,
         recorded_by_user_id=actor.id,
     )
     db.add(record)
