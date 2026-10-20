@@ -12,6 +12,10 @@ from backend.core.database import get_db, resolve_tenant_context
 from backend.core.dependencies import RequirePermission
 from backend.domains.identity.models import GenderEnum, User
 from backend.domains.patients.models import Patient
+from backend.domains.privacy.runtime import (
+    calculate_patient_age,
+    evaluate_tenant_data_use,
+)
 
 router = APIRouter(prefix="/api/fhir/R4", tags=["FHIR R4"])
 
@@ -118,13 +122,16 @@ def _patient_resource(patient: Patient, tenant_slug: str) -> dict:
     return resource
 
 
-@router.get("/Patient/{patient_id}")
+@router.get(
+    "/Patient/{patient_id}",
+    openapi_extra={"x-privacy-data-use-point": "fhir.patient.read"},
+)
 def read_patient(
     patient_id: int,
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("patients:read")),
+    actor: User = Depends(RequirePermission("patients:read")),
 ):
     patient = db.get(Patient, patient_id)
     if not patient or not patient.is_active:
@@ -142,12 +149,37 @@ def read_patient(
                 ],
             },
         )
+    decision = evaluate_tenant_data_use(
+        db,
+        data_use_point="fhir.patient.read",
+        patient_id=patient.id,
+        actor_user_id=actor.id,
+        patient_age=calculate_patient_age(patient.date_of_birth),
+    )
+    if not decision.allowed:
+        return JSONResponse(
+            status_code=403,
+            media_type="application/fhir+json",
+            content={
+                "resourceType": "OperationOutcome",
+                "issue": [
+                    {
+                        "severity": "error",
+                        "code": "forbidden",
+                        "diagnostics": "Privacy policy does not permit this disclosure.",
+                    }
+                ],
+            },
+        )
     response.media_type = "application/fhir+json"
     tenant = resolve_tenant_context(request)
     return _patient_resource(patient, tenant.subdomain_slug)
 
 
-@router.get("/Patient")
+@router.get(
+    "/Patient",
+    openapi_extra={"x-privacy-data-use-point": "fhir.patient.search"},
+)
 def search_patients(
     request: Request,
     response: Response,
@@ -161,7 +193,7 @@ def search_patients(
     count: int = Query(default=20, alias="_count", ge=1, le=100),
     offset: int = Query(default=0, alias="_offset", ge=0),
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("patients:read")),
+    actor: User = Depends(RequirePermission("patients:read")),
 ):
     statement = select(Patient).where(Patient.is_active.is_(True))
     if patient_id:
@@ -203,6 +235,16 @@ def search_patients(
     patients = db.execute(
         statement.order_by(Patient.id).offset(offset).limit(count)
     ).scalars().all()
+    for patient in patients:
+        evaluate_tenant_data_use(
+            db,
+            data_use_point="fhir.patient.search",
+            patient_id=patient.id,
+            actor_user_id=actor.id,
+            patient_age=calculate_patient_age(patient.date_of_birth),
+            commit_audit=False,
+        )
+    db.commit()
     tenant = resolve_tenant_context(request)
     current_url = f"{settings.tenant_url(tenant.subdomain_slug)}{request.url.path}"
     query_items = list(request.query_params.multi_items())

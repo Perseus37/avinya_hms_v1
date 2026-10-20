@@ -1,5 +1,5 @@
 from typing import Optional
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     CONTROL_PLANE_ACCESS_TOKEN_MINUTES: int = Field(default=15, ge=5, le=60)
     LOGIN_LOCKOUT_MINUTES: int = Field(default=15, ge=1, le=1440)
     MFA_REQUIRED_FOR_PRIVILEGED: bool = True
+    PRIVACY_ALLOW_AUDIT_ONLY: bool = False
+    PRIVACY_ALLOW_RETENTION_DRY_RUN: bool = False
     TRUSTED_PROXY_IPS: str = ""
     WS_MAX_CONNECTIONS: int = Field(default=100, ge=1, le=10000)
     WS_MAX_WAITING_ROOM_CONNECTIONS: int = Field(default=25, ge=1, le=10000)
@@ -100,6 +102,20 @@ class Settings(BaseSettings):
         return normalized
 
     BACKUP_ENCRYPTION_SALT: str
+
+    @model_validator(mode="after")
+    def block_privacy_audit_mode_in_production(self):
+        if (
+            self.ENVIRONMENT.strip().lower() in {"production", "prod"}
+            and (
+                self.PRIVACY_ALLOW_AUDIT_ONLY
+                or self.PRIVACY_ALLOW_RETENTION_DRY_RUN
+            )
+        ):
+            raise ValueError(
+                "Privacy audit-only and retention dry-run must be disabled in production."
+            )
+        return self
 
     # Payment keys
     STRIPE_SECRET_KEY: Optional[str] = None

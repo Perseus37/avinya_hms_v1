@@ -19,6 +19,7 @@ from backend.domains.service_ops.models import (
     MortuaryCase,
     ServiceWorkflowEvent,
 )
+from backend.domains.privacy.runtime import evaluate_tenant_patient_data_uses
 
 ambulance_router = APIRouter(prefix="/api/ambulance", tags=["Ambulance Operations"])
 dietary_router = APIRouter(prefix="/api/dietary", tags=["Dietary Services"])
@@ -221,17 +222,29 @@ def dispatch_ambulance(
     return dispatch
 
 
-@ambulance_router.get("/dispatches")
+@ambulance_router.get(
+    "/dispatches",
+    openapi_extra={"x-privacy-data-use-point": "ambulance.dispatches.read"},
+)
 def list_ambulance_dispatches(
     dispatch_status: Optional[str] = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("ambulance:read")),
+    actor: User = Depends(RequirePermission("ambulance:read")),
 ):
     statement = select(AmbulanceDispatch).order_by(AmbulanceDispatch.id.desc())
     if dispatch_status:
         statement = statement.where(AmbulanceDispatch.status == dispatch_status.upper())
-    return {"items": db.execute(statement.limit(limit)).scalars().all()}
+    items = db.execute(statement.limit(limit)).scalars().all()
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="ambulance.dispatches.read",
+        patient_ids=[item.patient_id for item in items if item.patient_id is not None],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
+    return {"items": items}
 
 
 @ambulance_router.patch("/dispatches/{dispatch_id}/status")
@@ -276,14 +289,27 @@ def transition_ambulance_dispatch(
     return dispatch
 
 
-@ambulance_router.get("/dispatches/{dispatch_id}/history")
+@ambulance_router.get(
+    "/dispatches/{dispatch_id}/history",
+    openapi_extra={"x-privacy-data-use-point": "ambulance.dispatch.history.read"},
+)
 def ambulance_dispatch_history(
     dispatch_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("ambulance:read")),
+    actor: User = Depends(RequirePermission("ambulance:read")),
 ):
-    if not db.get(AmbulanceDispatch, dispatch_id):
+    dispatch = db.get(AmbulanceDispatch, dispatch_id)
+    if not dispatch:
         raise HTTPException(status_code=404, detail="Ambulance dispatch not found.")
+    if dispatch.patient_id is not None:
+        decisions = evaluate_tenant_patient_data_uses(
+            db,
+            data_use_point="ambulance.dispatch.history.read",
+            patient_ids=[dispatch.patient_id],
+            actor_user_id=actor.id,
+        )
+        if any(not decision.allowed for decision in decisions):
+            raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     return {"items": _list_events(db, "ambulance", dispatch_id)}
 
 
@@ -319,17 +345,29 @@ def create_dietary_order(
     return order
 
 
-@dietary_router.get("/orders")
+@dietary_router.get(
+    "/orders",
+    openapi_extra={"x-privacy-data-use-point": "dietary.orders.read"},
+)
 def list_dietary_orders(
     order_status: Optional[str] = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("dietary:read")),
+    actor: User = Depends(RequirePermission("dietary:read")),
 ):
     statement = select(DietaryOrder).order_by(DietaryOrder.scheduled_for, DietaryOrder.id)
     if order_status:
         statement = statement.where(DietaryOrder.status == order_status.upper())
-    return {"items": db.execute(statement.limit(limit)).scalars().all()}
+    items = db.execute(statement.limit(limit)).scalars().all()
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="dietary.orders.read",
+        patient_ids=[item.patient_id for item in items],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
+    return {"items": items}
 
 
 @dietary_router.patch("/orders/{order_id}/status")
@@ -364,14 +402,26 @@ def transition_dietary_order(
     return order
 
 
-@dietary_router.get("/orders/{order_id}/history")
+@dietary_router.get(
+    "/orders/{order_id}/history",
+    openapi_extra={"x-privacy-data-use-point": "dietary.order.history.read"},
+)
 def dietary_order_history(
     order_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("dietary:read")),
+    actor: User = Depends(RequirePermission("dietary:read")),
 ):
-    if not db.get(DietaryOrder, order_id):
+    order = db.get(DietaryOrder, order_id)
+    if not order:
         raise HTTPException(status_code=404, detail="Dietary order not found.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="dietary.order.history.read",
+        patient_ids=[order.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     return {"items": _list_events(db, "dietary", order_id)}
 
 
@@ -505,17 +555,29 @@ def receive_mortuary_case(
     return case
 
 
-@mortuary_router.get("/cases")
+@mortuary_router.get(
+    "/cases",
+    openapi_extra={"x-privacy-data-use-point": "mortuary.cases.read"},
+)
 def list_mortuary_cases(
     case_status: Optional[str] = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("mortuary:read")),
+    actor: User = Depends(RequirePermission("mortuary:read")),
 ):
     statement = select(MortuaryCase).order_by(MortuaryCase.id.desc())
     if case_status:
         statement = statement.where(MortuaryCase.status == case_status.upper())
-    return {"items": db.execute(statement.limit(limit)).scalars().all()}
+    items = db.execute(statement.limit(limit)).scalars().all()
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="mortuary.cases.read",
+        patient_ids=[item.patient_id for item in items if item.patient_id is not None],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
+    return {"items": items}
 
 
 @mortuary_router.post("/cases/{case_id}/release")
@@ -548,12 +610,25 @@ def release_mortuary_case(
     return case
 
 
-@mortuary_router.get("/cases/{case_id}/history")
+@mortuary_router.get(
+    "/cases/{case_id}/history",
+    openapi_extra={"x-privacy-data-use-point": "mortuary.case.history.read"},
+)
 def mortuary_case_history(
     case_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("mortuary:read")),
+    actor: User = Depends(RequirePermission("mortuary:read")),
 ):
-    if not db.get(MortuaryCase, case_id):
+    case = db.get(MortuaryCase, case_id)
+    if not case:
         raise HTTPException(status_code=404, detail="Mortuary case not found.")
+    if case.patient_id is not None:
+        decisions = evaluate_tenant_patient_data_uses(
+            db,
+            data_use_point="mortuary.case.history.read",
+            patient_ids=[case.patient_id],
+            actor_user_id=actor.id,
+        )
+        if any(not decision.allowed for decision in decisions):
+            raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
     return {"items": _list_events(db, "mortuary", case_id)}

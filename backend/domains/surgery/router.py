@@ -21,6 +21,7 @@ from backend.domains.reports.router import (
 )
 from backend.domains.surgery.schemas import OperationTheatreCreate, OperationTheatreResponse, OperativeRecordResponse, OperativeRecordUpsert, SurgeryStatusUpdateRequest, SurgicalImplantCreate, SurgicalImplantResponse, SurgicalScheduleCreate, SurgicalScheduleResponse, WHOChecklistResponse, WHOChecklistUpsert
 from backend.domains.billing.services import auto_bill_completed_surgery
+from backend.domains.privacy.runtime import evaluate_tenant_patient_data_uses
 
 router = APIRouter(prefix="/api/ot", tags=["Operation Theatre (OT), Surgical Safety & Implants"])
 
@@ -297,13 +298,17 @@ def update_surgery_status(
     return surgery
 
 
-@router.get("/surgeries/{surgery_id}/print", response_class=HTMLResponse)
+@router.get(
+    "/surgeries/{surgery_id}/print",
+    response_class=HTMLResponse,
+    openapi_extra={"x-privacy-data-use-point": "ot.surgery.print"},
+)
 def print_surgical_operative_note(
     surgery_id: int,
     request: Request,
     print_mode: Optional[PrintModeEnum] = Query(default=None),
     db: Session = Depends(get_db),
-    _: User = Depends(RequirePermission("adt:read", "opd:read")),
+    actor: User = Depends(RequirePermission("adt:read", "opd:read")),
 ):
     tenant = resolve_tenant_context(request)
     stmt = (
@@ -323,6 +328,14 @@ def print_surgical_operative_note(
         raise HTTPException(status_code=404, detail="Surgical schedule not found.")
     if surgery.status != SurgeryStatusEnum.COMPLETED or not surgery.operative_record:
         raise HTTPException(status_code=400, detail="Operative note can only be printed for COMPLETED surgeries.")
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="ot.surgery.print",
+        patient_ids=[surgery.patient_id],
+        actor_user_id=actor.id,
+    )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit this patient disclosure.")
 
     rec = surgery.operative_record
     context = {

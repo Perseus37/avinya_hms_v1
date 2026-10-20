@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "policy_code": "retention-synthetic",
+  "categories": [
+    {
+      "code": "synthetic-attachments",
+      "system_of_record": "Synthetic test fixture",
+      "locations": ["synthetic_demo_records"],
+      "retention_days": 365,
+      "clock_start": "creation",
+      "action": "delete",
+      "legal_hold_triggers": ["synthetic-test"],
+      "backup_treatment": "Synthetic fixture only.",
+      "export_treatment": "Synthetic fixture only."
+    }
+  ]
+}

@@ -33,19 +33,32 @@ data use.
 
 ### Privacy foundation boundary
 
-Policy-neutral scaffolding now supports opaque consent/retention policy drafts,
-independent approval metadata, and patient/category-scoped legal holds. Every
-policy revision is constrained to enforcement mode `OFF`; approval records a
-second user and reference but does not prove legal sign-off or activate policy.
-No existing consent or retention rows are reinterpreted. Legal holds are not
-yet consumed by a purge workflow, and no deletion/anonymisation path or
-retention dry-run exists. A dry run remains deferred until a reviewed,
-hospital-approved data-category and table/clock inventory exists; any future
-preview must be counts-only by default and must not expose patient identifiers.
+Privacy scaffolding now includes versioned consent/retention policy drafts,
+schema validation, structured JSON import, independent approval, a decision
+engine, a data-use registry, and counts-only audit reports. Policy revisions
+can be OFF or explicitly activated in AUDIT_ONLY only in non-production when
+`PRIVACY_ALLOW_AUDIT_ONLY=true`; production rejects that setting.
+`PRIVACY_ALLOW_RETENTION_DRY_RUN` is also required for a non-production
+retention preview and is rejected in production. ENFORCE is not activatable.
+Audit hooks now cover FHIR/federation, patient-index and selected clinical
+records, ADT/admissions, OPD, nursing/ER, statutory registries, billing,
+pharmacy prescriptions, diagnostic orders/reports, insurance patient
+documents, ambulance/dietary/mortuary records, break-glass patient access,
+and operative-note printing. CI requires every API GET path to be either a
+registered data-use point or a route in an explicit non-patient/deferred
+allowlist. Analytics outputs are aggregate and remain deferred because the
+engine lacks cohort-level consent filtering and small-cell privacy controls.
+POST/PUT/PATCH response coverage and non-GET exports still need review; this
+is not end-to-end policy enforcement. Audit records omit patient identifiers.
+No existing
+consent or retention rows are reinterpreted. The counts-only retention preview
+requires a second-person-approved policy and reviewed code adapters; no tenant
+inventory adapters are configured. Legal holds are not consumed by a purge
+workflow, and no deletion/anonymisation path exists.
 
 | Prospect | Input needed before implementation or exercise | Boundary until then |
 | --- | --- | --- |
-| Hospital-specific consent and retention enforcement | Hospital-approved consent purposes and exceptions; record categories and retention periods; legal holds; deletion/anonymisation rules; backup, export, and integration treatment; and a complete data-use map. | Current APIs are governance records only. Do not claim they gate data use or automatically delete/anonymise records. Obtain privacy/legal approval and satisfy applicable P0 sign-off before live patient data. |
+| Hospital-specific consent and retention enforcement | Hospital-approved consent purposes and exceptions; record categories and retention periods; legal holds; deletion/anonymisation rules; backup, export, and integration treatment; and a complete data-use map. | Audit-only is non-production and response-preserving. Enforcement remains unavailable; do not claim consent-gated data use or automated deletion/anonymisation. Complete route coverage, approvals, staging validation, and applicable P0 sign-off before any production behavior change. |
 | Broader FHIR/ABDM interoperability | Named integration partner and target FHIR version/profile; required resources and operations; identifier/terminology mappings; authorization and consent requirements; and partner sandbox/test cases. | Describe only read-only FHIR R4 Patient search/read. Do not advertise complete FHIR interoperability, ABDM compliance, or a live ABDM connection. |
 | Staging capacity test and invoice OCR validation | For k6: staging-owner approval, HTTPS staging URL, test credentials, test window, and synthetic-data plan. For OCR: production-readiness/frontend trigger, representative synthetic or approved redacted invoices, and agreed extraction-quality measures. | The guarded k6 script is a preliminary patient-list read baseline, not a multi-tenant workload or capacity certification. Do not run it against production. OCR validation remains deferred; extraction is advisory and manual review remains necessary. |
 

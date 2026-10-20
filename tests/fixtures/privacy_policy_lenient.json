@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "policy_code": "lenient-synthetic",
+  "purposes": [
+    {
+      "code": "EXTERNAL_SHARING",
+      "display_name": "External sharing",
+      "consent_required": false,
+      "legal_basis": "Synthetic fixture only; not legal guidance."
+    }
+  ],
+  "data_use_points": {
+    "fhir.patient.read": "EXTERNAL_SHARING"
+  },
+  "exceptions": [],
+  "never_override": [],
+  "groups": [],
+  "withdrawal": {
+    "effective": "immediate",
+    "cancel_queued": true,
+    "cancel_in_flight": true,
+    "notify_prior_recipients": "never",
+    "statutory_retention_continues": true,
+    "patient_notice": "Synthetic fixture; not an approved notice.",
+    "clinician_alert_purposes": [],
+    "does_not_affect_treatment": true
+  }
+}
