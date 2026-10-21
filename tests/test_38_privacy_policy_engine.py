@@ -27,8 +27,7 @@ from backend.domains.privacy.retention_preview import (
 from backend.core.config import Settings, settings
 from backend.domains.identity.models import User
 from backend.domains.patients.models import GenderEnum, Patient
-from backend.domains.privacy.models import PatientConsentRecord, PrivacyDecisionAudit, PrivacyPolicyRevision
-from sqlalchemy import update
+from backend.domains.privacy.models import PatientConsentRecord, PrivacyDecisionAudit, PrivacyPolicyRevision, PrivacyLegalHold
 from sqlalchemy.orm import Session
 from backend.main import app, v1_app
 
@@ -1038,3 +1037,230 @@ def test_list_patients_filters_denied_rows_instead_of_failing_page(
     returned_ids = [item["id"] for item in items]
     assert denied_patient_id not in returned_ids
     assert len(items) == 9
+
+
+def test_enforce_mode_without_policy_fails_closed():
+    # F-08: Under enforcement mode, missing policy must fail closed (allowed=False)
+    decision = evaluate_data_use(
+        None,
+        data_use_point="fhir.patient.read",
+        mode="ENFORCE",
+    )
+    assert decision.allowed is False
+    assert decision.reason_code == "enforcement_policy_missing_or_invalid"
+
+
+def test_expired_consent_is_explicitly_denied():
+    # F-09: Expired consent record must be explicitly denied (consent_expired)
+    strict = _policy("strict")
+    past = datetime.now(timezone.utc) - timedelta(days=1)
+    expired_evidence = [
+        ConsentEvidence(
+            id=1,
+            decision="GRANTED",
+            source="WRITTEN",
+            evidence_reference="DOC-REF-001",
+            expires_at=past,
+            recorded_at=past - timedelta(days=10),
+            scope_type="recipient",
+            scope_key=None,
+            policy_revision_id=1,
+            consenter_type="patient",
+        )
+    ]
+    decision = evaluate_data_use(
+        strict,
+        data_use_point="fhir.patient.read",
+        mode="ENFORCE",
+        consents=expired_evidence,
+        policy_revision_id=1,
+    )
+    assert decision.allowed is False
+    assert decision.reason_code == "consent_expired"
+
+
+def test_approved_policy_document_is_immutable(multi_tenant_env):
+    # F-17: Policy document cannot be edited once APPROVED
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    with Session(engine) as db:
+        doctor = db.query(User).filter_by(email="doctor@default.com").one()
+        admin = db.query(User).filter_by(email="admin@default.com").one()
+        doc = {
+            "schema_version": 1,
+            "policy_code": "immutability-test",
+            "purposes": [
+                {
+                    "code": "TEST_P",
+                    "display_name": "Test P",
+                    "consent_required": False,
+                    "legal_basis": "Basis",
+                }
+            ],
+            "data_use_points": {},
+            "exceptions": [],
+            "never_override": [],
+            "groups": [],
+            "withdrawal": {
+                "effective": "immediate",
+                "cancel_queued": True,
+                "cancel_in_flight": True,
+                "notify_prior_recipients": "never",
+                "statutory_retention_continues": True,
+                "patient_notice": "Notice",
+                "clinician_alert_purposes": [],
+                "does_not_affect_treatment": True,
+            },
+        }
+        rev = PrivacyPolicyRevision(
+            policy_type="CONSENT",
+            policy_document=doc,
+            status="APPROVED",
+            configured_by_user_id=doctor.id,
+            approved_by_user_id=admin.id,
+            approved_at=datetime.now(timezone.utc),
+            approval_reference="IMMUTABLE-APP-001",
+        )
+        db.add(rev)
+        db.commit()
+
+        # Attempt to modify the approved policy document
+        rev.policy_document = {"schema_version": 1, "policy_code": "tampered"}
+        with pytest.raises(ValueError, match="Approved privacy policy documents are immutable"):
+            db.commit()
+        db.rollback()
+
+
+def test_retention_execution_deletes_and_anonymizes_honoring_legal_holds(
+    client, multi_tenant_env, superuser_headers
+):
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    now = datetime.now(timezone.utc)
+    old_date = now - timedelta(days=400)
+
+    with Session(engine) as db:
+        doctor = db.query(User).filter_by(email="doctor@default.com").one()
+
+        # 1. Setup inactive patients: one normal, one with active legal hold
+        p_normal = Patient(
+            mrn="RET-NORM-01",
+            full_name="Normal Inactive Patient",
+            gender=GenderEnum.FEMALE,
+            phone_number="+919876543999",
+            date_of_birth=old_date,
+            is_active=False,
+            updated_at=old_date,
+        )
+        p_held = Patient(
+            mrn="RET-HELD-01",
+            full_name="Held Inactive Patient",
+            gender=GenderEnum.FEMALE,
+            phone_number="+919876543888",
+            date_of_birth=old_date,
+            is_active=False,
+            updated_at=old_date,
+        )
+        db.add_all([p_normal, p_held])
+        db.flush()
+
+        # Add legal hold on p_held
+        db.add(
+            PrivacyLegalHold(
+                patient_id=p_held.id,
+                data_category="patients",
+                reason="Pending litigation hold",
+                hold_reference="HOLD-LIT-001",
+                created_by_user_id=doctor.id,
+            )
+        )
+
+        # 2. Setup privacy decision audits: old allow (should be deleted), old deny (kept or handled)
+        db.add(
+            PrivacyDecisionAudit(
+                actor_user_id=doctor.id,
+                data_use_point="patients.mpi.search",
+                purpose_code="CARE",
+                mode="AUDIT_ONLY",
+                result="ALLOW",
+                reason_code="routine_read",
+                occurred_at=old_date,
+            )
+        )
+        db.commit()
+        p_norm_id = p_normal.id
+        p_held_id = p_held.id
+
+    # Create & approve retention policy
+    retention_doc = {
+        "schema_version": 1,
+        "policy_code": "retention-exec-test",
+        "categories": [
+            {
+                "code": "patients",
+                "system_of_record": "Tenant Database",
+                "locations": ["patients"],
+                "retention_days": 365,
+                "clock_start": "last_activity",
+                "action": "anonymise",
+                "legal_hold_triggers": ["court_order"],
+                "backup_treatment": "Retain backup snapshots.",
+                "export_treatment": "Exclude from exports.",
+            },
+            {
+                "code": "privacy-decision-audits",
+                "system_of_record": "Audit Ledger",
+                "locations": ["privacy_decision_audits"],
+                "retention_days": 90,
+                "clock_start": "creation",
+                "action": "delete",
+                "legal_hold_triggers": [],
+                "backup_treatment": "Purged from backups upon cycle.",
+                "export_treatment": "Exclude.",
+            },
+        ],
+    }
+    create_res = client.post(
+        "/v1/api/privacy/policies",
+        headers=superuser_headers,
+        json={"policy_type": "RETENTION", "policy_document": retention_doc},
+    )
+    assert create_res.status_code == 201
+    rev_id = create_res.json()["id"]
+
+    with Session(engine) as db:
+        rev = db.get(PrivacyPolicyRevision, rev_id)
+        doctor = db.query(User).filter_by(email="doctor@default.com").one()
+        rev.configured_by_user_id = doctor.id
+        db.commit()
+
+    appr_res = client.post(
+        f"/v1/api/privacy/policies/{rev_id}/approve",
+        headers=superuser_headers,
+        json={"approval_reference": "RET-EXEC-APPROVAL"},
+    )
+    assert appr_res.status_code == 200
+
+    # Execute retention run
+    exec_payload = {
+        "policy_revision_id": rev_id,
+        "categories": ["patients", "privacy-decision-audits"],
+        "approval_reference": "EXEC-RUN-001",
+        "dry_run": False,
+    }
+    exec_res = client.post(
+        "/v1/api/privacy/retention/execute",
+        headers=superuser_headers,
+        json=exec_payload,
+    )
+    assert exec_res.status_code == 200, exec_res.text
+    exec_data = exec_res.json()
+    assert exec_data["total_affected"] >= 2  # p_normal anonymized + audit deleted
+    assert exec_data["total_held"] >= 1      # p_held protected
+
+    # Verify database state after retention execution
+    with Session(engine) as db:
+        p_norm_after = db.get(Patient, p_norm_id)
+        assert p_norm_after.full_name == "ANONYMIZED"
+        assert p_norm_after.phone_number == "0000000000"
+
+        p_held_after = db.get(Patient, p_held_id)
+        assert p_held_after.full_name == "Held Inactive Patient"  # UNTOUCHED due to legal hold!
