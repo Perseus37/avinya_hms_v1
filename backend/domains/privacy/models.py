@@ -82,13 +82,13 @@ class PrivacyPolicyRevision(Base):
             name="ck_privacy_policy_revision_status",
         ),
         CheckConstraint(
-            "enforcement_mode IN ('OFF', 'AUDIT_ONLY')",
+            "enforcement_mode IN ('OFF', 'AUDIT_ONLY', 'ENFORCE')",
             name="ck_privacy_policy_revision_mode",
         ),
         CheckConstraint(
             "(is_active = false AND enforcement_mode = 'OFF') OR "
             "(is_active = true AND status = 'APPROVED' "
-            "AND enforcement_mode = 'AUDIT_ONLY' "
+            "AND enforcement_mode IN ('AUDIT_ONLY', 'ENFORCE') "
             "AND mode_set_by_user_id IS NOT NULL "
             "AND mode_set_at IS NOT NULL "
             "AND mode_approval_reference IS NOT NULL)",

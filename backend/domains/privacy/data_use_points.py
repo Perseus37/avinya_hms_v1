@@ -419,3 +419,52 @@ DATA_USE_POINTS = {
 def validate_data_use_point_registry(policy_data_use_points: dict[str, str]) -> list[str]:
     """Return configured policy points that have no implementation registry entry."""
     return sorted(set(policy_data_use_points) - set(DATA_USE_POINTS))
+
+
+CARE_FLOW_DATA_USE_POINTS: set[str] = {
+    "patients.allergies.read",
+    "clinical.encounter.vitals.read",
+    "clinical.encounter.notes.read",
+    "clinical.encounter.diagnoses.read",
+    "clinical.patient.comorbidities.read",
+    "clinical.encounter.physical_exams.read",
+    "adt.encounters.active.read",
+    "adt.encounters.read",
+    "adt.admissions.search",
+    "adt.admissions.read",
+    "adt.admission.transfers.read",
+    "adt.discharge_summary.print",
+    "nursing.emar.read",
+    "nursing.fluid_balance.read",
+    "er.triage_queue.read",
+    "ot.surgery.print",
+    "pharmacy.prescriptions.search",
+    "pharmacy.prescriptions.read",
+    "diagnostics.orders.search",
+    "diagnostics.orders.read",
+    "diagnostics.order.tasks.read",
+    "diagnostics.tasks.pending.read",
+    "diagnostics.tasks.panic.read",
+    "diagnostics.study.read",
+}
+
+
+def check_policy_point_coverage(
+    policy_data_use_points: dict[str, str],
+    ungated_points: set[str] | list[str] | None = None,
+) -> dict[str, list[str]]:
+    """
+    Returns a dictionary summarizing policy data-use point coverage:
+    - 'mapped': data-use points mapped to a purpose
+    - 'ungated': data-use points explicitly declared ungated
+    - 'unmapped': data-use points neither mapped nor ungated
+    """
+    mapped = set(policy_data_use_points)
+    ungated = set(ungated_points or [])
+    all_points = set(DATA_USE_POINTS)
+    unmapped = sorted(all_points - mapped - ungated)
+    return {
+        "mapped": sorted(mapped),
+        "ungated": sorted(ungated),
+        "unmapped": unmapped,
+    }

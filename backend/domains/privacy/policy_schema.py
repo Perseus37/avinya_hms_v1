@@ -5,6 +5,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.domains.privacy.data_use_points import (
+    CARE_FLOW_DATA_USE_POINTS,
+    check_policy_point_coverage,
     validate_data_use_point_registry,
 )
 
@@ -133,6 +135,8 @@ class ConsentPolicyV1(StrictPolicyModel):
     policy_code: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,63}$")
     purposes: list[PurposeRule] = Field(min_length=1, max_length=100)
     data_use_points: dict[str, str] = Field(default_factory=dict, max_length=200)
+    ungated_points: list[str] = Field(default_factory=list, max_length=200)
+    allow_care_flow_consent_gating: bool = Field(default=False)
     exceptions: list[ExceptionRule] = Field(default_factory=list, max_length=50)
     never_override: list[str] = Field(default_factory=list, max_length=100)
     groups: list[PatientGroupRule] = Field(default_factory=list, max_length=100)
@@ -182,6 +186,35 @@ class ConsentPolicyV1(StrictPolicyModel):
             )
         if len(self.groups) != len({item.code for item in self.groups}):
             raise ValueError("patient group codes must be unique")
+
+        unsupported_ungated = validate_data_use_point_registry(dict.fromkeys(self.ungated_points, ""))
+        if unsupported_ungated:
+            raise ValueError(
+                "unsupported ungated data-use points: "
+                + ", ".join(unsupported_ungated)
+            )
+        overlap_mapped_ungated = set(self.data_use_points).intersection(self.ungated_points)
+        if overlap_mapped_ungated:
+            raise ValueError(
+                "data_use_points cannot also be marked ungated: "
+                + ", ".join(sorted(overlap_mapped_ungated))
+            )
+
+        if not self.allow_care_flow_consent_gating:
+            purpose_map = {p.code: p for p in self.purposes}
+            gated_care_points = []
+            for point, purpose_code in self.data_use_points.items():
+                if point in CARE_FLOW_DATA_USE_POINTS:
+                    purpose = purpose_map.get(purpose_code)
+                    if purpose and purpose.consent_required:
+                        gated_care_points.append(f"{point} -> {purpose_code}")
+            if gated_care_points:
+                raise ValueError(
+                    "care-flow / treatment data-use points cannot be mapped to consent-required purposes "
+                    "without explicit acknowledgement (allow_care_flow_consent_gating): "
+                    + ", ".join(sorted(gated_care_points))
+                )
+
         for purpose in self.purposes:
             if purpose.consent_required and (
                 purpose.code not in self.never_override
@@ -191,6 +224,18 @@ class ConsentPolicyV1(StrictPolicyModel):
                     f"purpose {purpose.code}: a valid no-record behavior is required"
                 )
         return self
+
+    def check_coverage(self) -> dict[str, list[str]]:
+        return check_policy_point_coverage(self.data_use_points, self.ungated_points)
+
+    def validate_for_enforcement(self) -> None:
+        """Ensure all registered data-use points are explicitly mapped or ungated before enforcement."""
+        coverage = self.check_coverage()
+        if coverage["unmapped"]:
+            raise ValueError(
+                "Policy cannot be enforced with unmapped data-use points: "
+                + ", ".join(coverage["unmapped"])
+            )
 
 
 class RetentionCategoryRule(StrictPolicyModel):
