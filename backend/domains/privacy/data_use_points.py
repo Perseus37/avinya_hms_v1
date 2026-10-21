@@ -25,6 +25,36 @@ DATA_USE_POINTS = {
             "GET /api/fhir/R4/Patient",
         ),
         DataUsePoint(
+            "fhir.encounter.read",
+            "Read one encounter through FHIR R4",
+            "GET /api/fhir/R4/Encounter/{encounter_id}",
+        ),
+        DataUsePoint(
+            "fhir.encounter.search",
+            "Search encounters through FHIR R4",
+            "GET /api/fhir/R4/Encounter",
+        ),
+        DataUsePoint(
+            "fhir.observation.read",
+            "Read one observation through FHIR R4",
+            "GET /api/fhir/R4/Observation/{observation_id}",
+        ),
+        DataUsePoint(
+            "fhir.observation.search",
+            "Search observations through FHIR R4",
+            "GET /api/fhir/R4/Observation",
+        ),
+        DataUsePoint(
+            "fhir.condition.read",
+            "Read one condition through FHIR R4",
+            "GET /api/fhir/R4/Condition/{condition_id}",
+        ),
+        DataUsePoint(
+            "fhir.condition.search",
+            "Search conditions through FHIR R4",
+            "GET /api/fhir/R4/Condition",
+        ),
+        DataUsePoint(
             "patients.mpi.search",
             "Search or list records in the tenant patient index",
             "GET /api/patients",
