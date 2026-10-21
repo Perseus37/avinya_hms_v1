@@ -186,12 +186,13 @@ def list_patients(
         commit_audit=False,
     )
     commit_without_expiring(db)
-    if any(not decision.allowed for decision in decisions.values()):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Privacy policy does not permit one or more patient disclosures.",
-        )
-    return {"items": items, "total": total, "page": page, "page_size": page_size}
+    allowed_items = [
+        patient
+        for patient in items
+        if decisions.get(patient.id) is None or decisions[patient.id].allowed
+    ]
+    adjusted_total = max(0, total - (len(items) - len(allowed_items)))
+    return {"items": allowed_items, "total": adjusted_total, "page": page, "page_size": page_size}
 
 
 @router.get(

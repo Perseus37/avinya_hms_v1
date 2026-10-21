@@ -285,7 +285,7 @@ def search_patients(
     patients = db.execute(
         statement.order_by(Patient.id).offset(offset).limit(count)
     ).scalars().all()
-    evaluate_tenant_data_use_for_patients(
+    decisions = evaluate_tenant_data_use_for_patients(
         db,
         data_use_point="fhir.patient.search",
         patient_ages={
@@ -296,6 +296,12 @@ def search_patients(
         commit_audit=False,
     )
     commit_without_expiring(db)
+    allowed_patients = [
+        patient
+        for patient in patients
+        if decisions.get(patient.id) is None or decisions[patient.id].allowed
+    ]
+    adjusted_total = max(0, total - (len(patients) - len(allowed_patients)))
     tenant = resolve_tenant_context(request)
     current_url = f"{settings.tenant_url(tenant.subdomain_slug)}{request.url.path}"
     query_items = list(request.query_params.multi_items())
@@ -321,7 +327,7 @@ def search_patients(
     return {
         "resourceType": "Bundle",
         "type": "searchset",
-        "total": total,
+        "total": adjusted_total,
         "link": links,
         "entry": [
             {
@@ -329,7 +335,7 @@ def search_patients(
                 "resource": _patient_resource(patient, tenant.subdomain_slug),
                 "search": {"mode": "match"},
             }
-            for patient in patients
+            for patient in allowed_patients
         ],
     }
 
@@ -416,7 +422,7 @@ def read_encounter(
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
-    actor: User = Depends(RequirePermission("patients:read")),
+    actor: User = Depends(RequirePermission("adt:read")),
 ):
     encounter = db.get(PatientEncounter, encounter_id)
     if not encounter:
@@ -492,7 +498,7 @@ def search_encounters(
     count: int = Query(default=20, alias="_count", ge=1, le=100),
     offset: int = Query(default=0, alias="_offset", ge=0),
     db: Session = Depends(get_db),
-    actor: User = Depends(RequirePermission("patients:read")),
+    actor: User = Depends(RequirePermission("adt:read")),
 ):
     statement = (
         select(PatientEncounter)
@@ -537,7 +543,7 @@ def search_encounters(
         else []
     )
     patient_ages = {p.id: calculate_patient_age(p.date_of_birth) for p in patients}
-    evaluate_tenant_data_use_for_patients(
+    decisions = evaluate_tenant_data_use_for_patients(
         db,
         data_use_point="fhir.encounter.search",
         patient_ages=patient_ages,
@@ -545,6 +551,12 @@ def search_encounters(
         commit_audit=False,
     )
     commit_without_expiring(db)
+    allowed_encounters = [
+        enc
+        for enc in encounters
+        if decisions.get(enc.patient_id) is None or decisions[enc.patient_id].allowed
+    ]
+    adjusted_total = max(0, total - (len(encounters) - len(allowed_encounters)))
 
     tenant = resolve_tenant_context(request)
     current_url = f"{settings.tenant_url(tenant.subdomain_slug)}{request.url.path}"
@@ -569,7 +581,7 @@ def search_encounters(
     return {
         "resourceType": "Bundle",
         "type": "searchset",
-        "total": total,
+        "total": adjusted_total,
         "link": links,
         "entry": [
             {
@@ -577,7 +589,7 @@ def search_encounters(
                 "resource": _encounter_resource(enc, tenant.subdomain_slug),
                 "search": {"mode": "match"},
             }
-            for enc in encounters
+            for enc in allowed_encounters
         ],
     }
 
@@ -821,7 +833,7 @@ def read_observation(
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
-    actor: User = Depends(RequirePermission("patients:read")),
+    actor: User = Depends(RequirePermission("adt:read")),
 ):
     vital = db.get(EncounterVital, observation_id)
     if not vital:
@@ -913,7 +925,7 @@ def search_observations(
     count: int = Query(default=20, alias="_count", ge=1, le=100),
     offset: int = Query(default=0, alias="_offset", ge=0),
     db: Session = Depends(get_db),
-    actor: User = Depends(RequirePermission("patients:read")),
+    actor: User = Depends(RequirePermission("adt:read")),
 ):
     statement = (
         select(EncounterVital, PatientEncounter.patient_id)
@@ -953,7 +965,7 @@ def search_observations(
         else []
     )
     patient_ages = {p.id: calculate_patient_age(p.date_of_birth) for p in patients}
-    evaluate_tenant_data_use_for_patients(
+    decisions = evaluate_tenant_data_use_for_patients(
         db,
         data_use_point="fhir.observation.search",
         patient_ages=patient_ages,
@@ -961,6 +973,12 @@ def search_observations(
         commit_audit=False,
     )
     commit_without_expiring(db)
+    allowed_rows = [
+        row
+        for row in rows
+        if decisions.get(row[1]) is None or decisions[row[1]].allowed
+    ]
+    adjusted_total = max(0, total - (len(rows) - len(allowed_rows)))
 
     tenant = resolve_tenant_context(request)
     current_url = f"{settings.tenant_url(tenant.subdomain_slug)}{request.url.path}"
@@ -985,7 +1003,7 @@ def search_observations(
     return {
         "resourceType": "Bundle",
         "type": "searchset",
-        "total": total,
+        "total": adjusted_total,
         "link": links,
         "entry": [
             {
@@ -993,7 +1011,7 @@ def search_observations(
                 "resource": _observation_resource(vital, pat_id, tenant.subdomain_slug),
                 "search": {"mode": "match"},
             }
-            for vital, pat_id in rows
+            for vital, pat_id in allowed_rows
         ],
     }
 
@@ -1074,7 +1092,7 @@ def read_condition(
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
-    actor: User = Depends(RequirePermission("patients:read")),
+    actor: User = Depends(RequirePermission("adt:read")),
 ):
     diagnosis = db.get(EncounterDiagnosis, condition_id)
     if not diagnosis:
@@ -1167,7 +1185,7 @@ def search_conditions(
     count: int = Query(default=20, alias="_count", ge=1, le=100),
     offset: int = Query(default=0, alias="_offset", ge=0),
     db: Session = Depends(get_db),
-    actor: User = Depends(RequirePermission("patients:read")),
+    actor: User = Depends(RequirePermission("adt:read")),
 ):
     statement = (
         select(EncounterDiagnosis, DiagnosisMaster, PatientEncounter.patient_id)
@@ -1208,7 +1226,7 @@ def search_conditions(
         else []
     )
     patient_ages = {p.id: calculate_patient_age(p.date_of_birth) for p in patients}
-    evaluate_tenant_data_use_for_patients(
+    decisions = evaluate_tenant_data_use_for_patients(
         db,
         data_use_point="fhir.condition.search",
         patient_ages=patient_ages,
@@ -1216,6 +1234,12 @@ def search_conditions(
         commit_audit=False,
     )
     commit_without_expiring(db)
+    allowed_rows = [
+        row
+        for row in rows
+        if decisions.get(row[2]) is None or decisions[row[2]].allowed
+    ]
+    adjusted_total = max(0, total - (len(rows) - len(allowed_rows)))
 
     tenant = resolve_tenant_context(request)
     current_url = f"{settings.tenant_url(tenant.subdomain_slug)}{request.url.path}"
@@ -1240,7 +1264,7 @@ def search_conditions(
     return {
         "resourceType": "Bundle",
         "type": "searchset",
-        "total": total,
+        "total": adjusted_total,
         "link": links,
         "entry": [
             {
@@ -1248,6 +1272,6 @@ def search_conditions(
                 "resource": _condition_resource(diag, d_master, pat_id, tenant.subdomain_slug),
                 "search": {"mode": "match"},
             }
-            for diag, d_master, pat_id in rows
+            for diag, d_master, pat_id in allowed_rows
         ],
     }

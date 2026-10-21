@@ -27,7 +27,8 @@ from backend.domains.privacy.retention_preview import (
 from backend.core.config import Settings, settings
 from backend.domains.identity.models import User
 from backend.domains.patients.models import GenderEnum, Patient
-from backend.domains.privacy.models import PrivacyDecisionAudit, PrivacyPolicyRevision
+from backend.domains.privacy.models import PatientConsentRecord, PrivacyDecisionAudit, PrivacyPolicyRevision
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 from backend.main import app, v1_app
 
@@ -641,6 +642,7 @@ def test_audit_only_activation_is_guarded_and_fhir_remains_allowed(
             "clinical.patient.comorbidities.read": "INTERNAL_USE",
         }
     )
+    policy_doc["allow_care_flow_consent_gating"] = True
     created = client.post(
         "/v1/api/privacy/policies",
         headers=superuser_headers,
@@ -835,3 +837,204 @@ def test_retention_dry_run_requires_approved_policy_and_returns_counts_only(
     ]
     assert report.json()["destructive_action_performed"] is False
     assert "patient_id" not in report.text
+
+
+def test_care_flow_points_cannot_be_mapped_to_consent_required_without_acknowledgement():
+    base = {
+        "schema_version": 1,
+        "policy_code": "care-flow-guard-test",
+        "purposes": [
+            {
+                "code": "EXTERNAL_SHARING",
+                "display_name": "External Sharing",
+                "consent_required": True,
+                "legal_basis": "Consent required test purpose.",
+                "required_before": ["disclose"],
+                "scope": "patient",
+                "validity": "until_withdrawn",
+                "capture": ["WRITTEN"],
+                "consenters": ["patient"],
+                "default_when_no_record": "deny",
+            }
+        ],
+        "data_use_points": {
+            "clinical.encounter.notes.read": "EXTERNAL_SHARING"
+        },
+        "exceptions": [],
+        "never_override": [],
+        "groups": [],
+        "withdrawal": {
+            "effective": "immediate",
+            "cancel_queued": True,
+            "cancel_in_flight": True,
+            "notify_prior_recipients": "never",
+            "statutory_retention_continues": True,
+            "patient_notice": "Notice text.",
+            "clinician_alert_purposes": [],
+            "does_not_affect_treatment": True,
+        },
+    }
+    with pytest.raises(ValidationError) as exc_info:
+        validate_policy_document("CONSENT", base)
+    assert "care-flow / treatment data-use points cannot be mapped" in str(exc_info.value)
+
+    # When explicit acknowledgement is set, it passes validation
+    base["allow_care_flow_consent_gating"] = True
+    validated = validate_policy_document("CONSENT", base)
+    assert validated.allow_care_flow_consent_gating is True
+
+
+def test_policy_coverage_check_and_enforcement_validation():
+    base = {
+        "schema_version": 1,
+        "policy_code": "coverage-test",
+        "purposes": [
+            {
+                "code": "STANDARD_TREATMENT",
+                "display_name": "Standard Treatment",
+                "consent_required": False,
+                "legal_basis": "Direct clinical care.",
+            }
+        ],
+        "data_use_points": {
+            "fhir.patient.read": "STANDARD_TREATMENT"
+        },
+        "exceptions": [],
+        "never_override": [],
+        "groups": [],
+        "withdrawal": {
+            "effective": "immediate",
+            "cancel_queued": True,
+            "cancel_in_flight": True,
+            "notify_prior_recipients": "never",
+            "statutory_retention_continues": True,
+            "patient_notice": "Notice text.",
+            "clinician_alert_purposes": [],
+            "does_not_affect_treatment": True,
+        },
+    }
+    policy = validate_policy_document("CONSENT", base)
+    coverage = policy.check_coverage()
+    assert "fhir.patient.read" in coverage["mapped"]
+    assert len(coverage["unmapped"]) > 0
+
+    with pytest.raises(ValueError) as exc:
+        policy.validate_for_enforcement()
+    assert "Policy cannot be enforced with unmapped data-use points" in str(exc.value)
+
+    # Mark remaining points as ungated
+    base["ungated_points"] = coverage["unmapped"]
+    policy_full = validate_policy_document("CONSENT", base)
+    policy_full.validate_for_enforcement()
+    assert len(policy_full.check_coverage()["unmapped"]) == 0
+
+
+def test_list_patients_filters_denied_rows_instead_of_failing_page(
+    client, multi_tenant_env, superuser_headers
+):
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    with Session(engine) as db:
+        patients = []
+        for i in range(10):
+            p = Patient(
+                mrn=f"FILTER-MPI-{i:03d}",
+                full_name=f"Patient Filter {i}",
+                date_of_birth=datetime(1990, 1, 1 + i, tzinfo=timezone.utc),
+                gender=GenderEnum.FEMALE if i % 2 == 0 else GenderEnum.MALE,
+                phone_number=f"+919876543{i:03d}",
+                is_active=True,
+            )
+            db.add(p)
+            patients.append(p)
+        db.commit()
+        for p in patients:
+            db.refresh(p)
+        denied_patient_id = patients[0].id
+
+        policy_doc = {
+            "schema_version": 1,
+            "policy_code": "row-filtering-mpi",
+            "purposes": [
+                {
+                    "code": "MPI_PURPOSE",
+                    "display_name": "MPI Access",
+                    "consent_required": True,
+                    "legal_basis": "Testing row filtering.",
+                    "required_before": ["use"],
+                    "scope": "patient",
+                    "validity": "until_withdrawn",
+                    "capture": ["WRITTEN"],
+                    "consenters": ["patient"],
+                    "default_when_no_record": "allow",
+                }
+            ],
+            "data_use_points": {
+                "patients.mpi.search": "MPI_PURPOSE",
+            },
+            "exceptions": [],
+            "never_override": [],
+            "groups": [],
+            "withdrawal": {
+                "effective": "immediate",
+                "cancel_queued": True,
+                "cancel_in_flight": True,
+                "notify_prior_recipients": "never",
+                "statutory_retention_continues": True,
+                "patient_notice": "Notice text.",
+                "clinician_alert_purposes": [],
+                "does_not_affect_treatment": True,
+            },
+        }
+        res = client.post(
+            "/v1/api/privacy/policies",
+            headers=superuser_headers,
+            json={"policy_type": "CONSENT", "policy_document": policy_doc},
+        )
+        assert res.status_code == 201
+        rev_id = res.json()["id"]
+
+        doctor = db.query(User).filter_by(email="doctor@default.com").one()
+        rev = db.get(PrivacyPolicyRevision, rev_id)
+        rev.configured_by_user_id = doctor.id
+        db.commit()
+
+        appr = client.post(
+            f"/v1/api/privacy/policies/{rev_id}/approve",
+            headers=superuser_headers,
+            json={"approval_reference": "FILTER-APPROVE-REF"},
+        )
+        assert appr.status_code == 200
+
+        # Activate in AUDIT_ONLY mode, and set enforcement_mode = 'ENFORCE' directly in DB for testing
+        rev = db.get(PrivacyPolicyRevision, rev_id)
+        rev.status = 'APPROVED'
+        rev.mode_set_by_user_id = doctor.id
+        rev.mode_set_at = datetime.now(timezone.utc)
+        rev.mode_approval_reference = 'FILTER-APP-001'
+        rev.is_active = True
+        rev.enforcement_mode = "ENFORCE"
+        # Add a DECLINED consent record for the first patient
+        db.add(
+            PatientConsentRecord(
+                policy_revision_id=rev_id,
+                patient_id=denied_patient_id,
+                recorded_by_user_id=doctor.id,
+                consent_type="CARE",
+                purpose="MPI_PURPOSE",
+                decision="DECLINED",
+                source="WRITTEN",
+                recorded_at=datetime.now(timezone.utc),
+                scope_type="patient",
+                consenter_type="patient",
+            )
+        )
+        db.commit()
+
+    # Now call list_patients
+    res = client.get("/v1/api/patients?search=Filter", headers=superuser_headers)
+    assert res.status_code == 200
+    data = res.json()
+    items = data["items"]
+    returned_ids = [item["id"] for item in items]
+    assert denied_patient_id not in returned_ids
+    assert len(items) == 9
