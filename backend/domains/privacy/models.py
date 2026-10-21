@@ -2,6 +2,8 @@ from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
+    event,
+    inspect,
     JSON,
     Boolean,
     CheckConstraint,
@@ -187,3 +189,20 @@ class PrivacyLegalHold(Base):
     released_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     release_reference: Mapped[str | None] = mapped_column(String(100))
+
+
+
+@event.listens_for(PrivacyPolicyRevision, "before_update")
+def guard_approved_policy_immutability(mapper, connection, target):
+    """Blocks direct modifications to policy_document once a revision has been APPROVED."""
+    state = inspect(target)
+    history = state.get_history("policy_document", True)
+    if history.has_changes():
+        status_hist = state.get_history("status", True)
+        was_approved = (target.status == "APPROVED") or (
+            status_hist.deleted and status_hist.deleted[0] == "APPROVED"
+        )
+        if was_approved:
+            raise ValueError(
+                "Approved privacy policy documents are immutable and cannot be updated."
+            )
