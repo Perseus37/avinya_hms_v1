@@ -23,6 +23,9 @@ from backend.domains.privacy.models import (
     PrivacyRetentionPolicy,
 )
 from backend.domains.privacy.policy_schema import validate_policy_document
+from backend.domains.privacy.retention_service import (
+    execute_retention_policy_revision,
+)
 from backend.domains.privacy.retention_preview import (
     preview_retention_counts,
     retention_category_registry,
@@ -141,6 +144,21 @@ class PrivacyPolicyModeApproval(BaseModel):
             raise ValueError("Approval reference cannot be blank.")
         return cleaned
 
+
+
+class RetentionExecutionRequest(BaseModel):
+    policy_revision_id: int = Field(gt=0)
+    categories: list[str] = Field(min_length=1, max_length=100)
+    approval_reference: str = Field(min_length=3, max_length=100)
+    dry_run: bool = Field(default=False)
+
+    @field_validator("approval_reference")
+    @classmethod
+    def normalize_approval_reference(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Approval reference cannot be blank.")
+        return cleaned
 
 class RetentionDryRunRequest(BaseModel):
     policy_revision_id: int = Field(gt=0)
@@ -563,6 +581,40 @@ def create_retention_dry_run(
         "items": items,
         "destructive_action_performed": False,
     }
+
+
+@router.post("/retention/execute")
+def execute_retention_run(
+    payload: RetentionExecutionRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(RequirePermission("privacy:approve")),
+):
+    revision = db.get(PrivacyPolicyRevision, payload.policy_revision_id)
+    if revision is None:
+        raise HTTPException(status_code=404, detail="Privacy policy revision not found.")
+    if revision.policy_type != "RETENTION" or revision.status != "APPROVED":
+        raise HTTPException(status_code=409, detail="Only an approved retention policy can be executed.")
+    if revision.configured_by_user_id == actor.id:
+        raise HTTPException(status_code=409, detail="A different user must authorize retention execution.")
+    try:
+        policy = validate_policy_document("RETENTION", revision.policy_document)
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=f"Approved retention policy cannot be validated: {exc}") from exc
+
+    policy_categories = {item.code for item in policy.categories}
+    requested = set(payload.categories)
+    if not requested.issubset(policy_categories):
+        raise HTTPException(status_code=422, detail="Requested categories must be present in the approved policy.")
+
+    return execute_retention_policy_revision(
+        db,
+        revision=revision,
+        category_codes=payload.categories,
+        actor=actor,
+        approval_reference=payload.approval_reference,
+        dry_run=payload.dry_run,
+    )
+
 
 
 @router.post("/retention-policies", status_code=201)

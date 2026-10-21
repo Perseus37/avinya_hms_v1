@@ -60,8 +60,12 @@ def evaluate_data_use(
     patient_age: int | None = None,
 ) -> ConsentDecision:
     """Evaluate a single data-use request; audit-only never denies the caller."""
-    if mode == "OFF" or policy is None:
+    if mode == "OFF":
         return ConsentDecision(True, "policy_off", None, "OFF")
+    if policy is None:
+        if mode == "ENFORCE":
+            return ConsentDecision(False, "enforcement_policy_missing_or_invalid", None, mode, True)
+        return ConsentDecision(True, "policy_off", None, mode)
     if mode not in {"AUDIT_ONLY", "ENFORCE"}:
         return ConsentDecision(True, "unsupported_mode", None, mode, True)
 
@@ -137,16 +141,17 @@ def evaluate_data_use(
                 if expiry.tzinfo is None
                 else expiry
             )
-        if expiry is None or expiry > now:
-            if (
-                (purpose.validity != "fixed_term" or expiry is not None)
-                and SOURCE_TO_CAPTURE.get(latest.source) in purpose.capture
-                and bool(latest.evidence_reference)
-                and latest.consenter_type in purpose.consenters
-                and required_group_consenters.issubset({latest.consenter_type})
-            ):
-                return _result(True, "valid_consent", purpose_code, mode)
-            return _result(False, "consent_record_invalid", purpose_code, mode)
+        if expiry is not None and expiry <= now:
+            return _result(False, "consent_expired", purpose_code, mode)
+        if (
+            (purpose.validity != "fixed_term" or expiry is not None)
+            and SOURCE_TO_CAPTURE.get(latest.source) in purpose.capture
+            and bool(latest.evidence_reference)
+            and latest.consenter_type in purpose.consenters
+            and required_group_consenters.issubset({latest.consenter_type})
+        ):
+            return _result(True, "valid_consent", purpose_code, mode)
+        return _result(False, "consent_record_invalid", purpose_code, mode)
 
     if purpose.default_when_no_record == "allow":
         return _result(True, "no_record_default_allow", purpose_code, mode)
