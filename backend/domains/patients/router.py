@@ -28,7 +28,9 @@ from backend.domains.patients.schemas import (
 )
 from backend.domains.privacy.runtime import (
     calculate_patient_age,
+    commit_without_expiring,
     evaluate_tenant_data_use,
+    evaluate_tenant_data_use_for_patients,
 )
 
 router = APIRouter(prefix="/api/patients", tags=["Master Patient Index (MPI)"])
@@ -173,19 +175,18 @@ def list_patients(
     query = query.order_by(Patient.id.desc())
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
-    decisions = [
-        evaluate_tenant_data_use(
-            db,
-            data_use_point="patients.mpi.search",
-            patient_id=patient.id,
-            actor_user_id=actor.id,
-            patient_age=calculate_patient_age(patient.date_of_birth),
-            commit_audit=False,
-        )
-        for patient in items
-    ]
-    db.commit()
-    if any(not decision.allowed for decision in decisions):
+    decisions = evaluate_tenant_data_use_for_patients(
+        db,
+        data_use_point="patients.mpi.search",
+        patient_ages={
+            patient.id: calculate_patient_age(patient.date_of_birth)
+            for patient in items
+        },
+        actor_user_id=actor.id,
+        commit_audit=False,
+    )
+    commit_without_expiring(db)
+    if any(not decision.allowed for decision in decisions.values()):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Privacy policy does not permit one or more patient disclosures.",

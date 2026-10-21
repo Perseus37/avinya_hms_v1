@@ -14,7 +14,9 @@ from backend.domains.identity.models import GenderEnum, User
 from backend.domains.patients.models import Patient
 from backend.domains.privacy.runtime import (
     calculate_patient_age,
+    commit_without_expiring,
     evaluate_tenant_data_use,
+    evaluate_tenant_data_use_for_patients,
 )
 
 router = APIRouter(prefix="/api/fhir/R4", tags=["FHIR R4"])
@@ -235,16 +237,17 @@ def search_patients(
     patients = db.execute(
         statement.order_by(Patient.id).offset(offset).limit(count)
     ).scalars().all()
-    for patient in patients:
-        evaluate_tenant_data_use(
-            db,
-            data_use_point="fhir.patient.search",
-            patient_id=patient.id,
-            actor_user_id=actor.id,
-            patient_age=calculate_patient_age(patient.date_of_birth),
-            commit_audit=False,
-        )
-    db.commit()
+    evaluate_tenant_data_use_for_patients(
+        db,
+        data_use_point="fhir.patient.search",
+        patient_ages={
+            patient.id: calculate_patient_age(patient.date_of_birth)
+            for patient in patients
+        },
+        actor_user_id=actor.id,
+        commit_audit=False,
+    )
+    commit_without_expiring(db)
     tenant = resolve_tenant_context(request)
     current_url = f"{settings.tenant_url(tenant.subdomain_slug)}{request.url.path}"
     query_items = list(request.query_params.multi_items())
