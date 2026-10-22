@@ -445,3 +445,11 @@ def test_admin_can_unlock_locked_user(client, multi_tenant_env, superuser_header
         assert updated_doc.status == UserStatusEnum.ACTIVE
         assert updated_doc.failed_login_attempts == 0
         assert updated_doc.locked_until is None
+
+    # N-08: Attempting to unlock an already active (non-locked) user must return 400
+    active_unlock = client.post(
+        f"/v1/api/auth/users/{doctor_id}/unlock",
+        headers=superuser_headers,
+    )
+    assert active_unlock.status_code == 400
+    assert "not currently locked" in active_unlock.json()["message"]

@@ -206,3 +206,27 @@ def guard_approved_policy_immutability(mapper, connection, target):
             raise ValueError(
                 "Approved privacy policy documents are immutable and cannot be updated."
             )
+
+
+
+class PrivacyRetentionRunLedger(Base):
+    """Permanent, tamper-evident audit ledger for retention execution runs (N-06)."""
+    __tablename__ = "privacy_retention_run_ledgers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    policy_revision_id: Mapped[int] = mapped_column(
+        ForeignKey("privacy_policy_revisions.id"), nullable=False, index=True
+    )
+    categories: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    dry_run: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    candidate_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    held_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    affected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    approval_reference: Mapped[str] = mapped_column(String(100), nullable=False)
+    executed_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    executed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )

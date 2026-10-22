@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+from backend.security.envelope import _get_master_key
 import contextvars
 import logging
 import re
@@ -197,10 +199,18 @@ def register_exception_handlers(target_app: FastAPI) -> None:
 # -----------------------------------------------------------------------------
 # Application Assembly
 # -----------------------------------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # N-10: Eagerly validate cryptographic master key and salt on application startup
+    _get_master_key()
+    yield
+
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
     description="Enterprise-grade, ACID-compliant Hospital Management System Backend.",
+    lifespan=lifespan,
 )
 
 v1_app = FastAPI(
