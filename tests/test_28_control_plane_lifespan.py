@@ -149,3 +149,52 @@ def test_invalid_trusted_proxy_configuration_blocks_auth_requests(monkeypatch):
     with pytest.raises(HTTPException) as exc_info:
         RateLimiter(scope="auth_login", max_requests=1)(request, MemoryRedis())
     assert exc_info.value.status_code == 503
+
+
+def test_sandbox_scrub_anonymizes_patient_and_staff_data(multi_tenant_env):
+    """Audit F-02 regression: _scrub_sandbox_tenant_data scrubs patient PII/PHI and user details."""
+    from backend.control_plane.api.routers.fleet_ops import _scrub_sandbox_tenant_data
+    from backend.domains.patients.models import Patient
+    from backend.domains.identity.models import User
+    from backend.core.database import tenant_engine_pool
+    from sqlalchemy.orm import Session
+    from datetime import date, datetime
+
+    # Create a patient and non-admin staff in tenant DB
+    engine = tenant_engine_pool.get_engine("hms_apollo")
+    with Session(bind=engine) as session:
+        p = Patient(
+            mrn="REAL-MRN-999",
+            full_name="Real Secret Patient",
+            phone_number="9876543210",
+            email="real@patient.com",
+            address="123 Real Confidential St",
+            date_of_birth=date(1985, 6, 15),
+            gender="MALE",
+            blood_group="O+",
+            emergency_contact_name="Emergency Relative",
+            emergency_contact_phone="9876500000",
+            allow_network_sharing=True,
+            is_active=True,
+        )
+        session.add(p)
+        session.commit()
+        session.refresh(p)
+        p_id = p.id
+
+    # Run the scrubber on hospital_a
+    _scrub_sandbox_tenant_data("hms_apollo")
+
+    # Verify patient data is sanitized
+    with Session(bind=engine) as session:
+        scrubbed_p = session.get(Patient, p_id)
+        assert scrubbed_p is not None
+        assert scrubbed_p.full_name == f"Sandbox Patient {p_id}"
+        assert scrubbed_p.mrn == f"SBX-{p_id}"
+        assert scrubbed_p.phone_number == "9000000000"
+        assert scrubbed_p.email == f"patient_{p_id}@sandbox.local"
+        assert scrubbed_p.emergency_contact_name is None
+        assert scrubbed_p.emergency_contact_phone is None
+        assert scrubbed_p.blood_group is None
+        assert scrubbed_p.allow_network_sharing is False
+        assert scrubbed_p.date_of_birth == datetime(1985, 1, 1)

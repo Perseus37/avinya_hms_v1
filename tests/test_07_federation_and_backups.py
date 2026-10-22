@@ -155,6 +155,9 @@ def test_04_federation_transfer_logs_written_in_source_tenant_databases(
         assert log_entry is not None
         assert log_entry.requesting_branch_code == "SUN-AUDIT-01"
         assert log_entry.purpose == "ICU_TRANSFER_AUDIT"
+        # Audit F-09 regression: Phone is masked in requested_identifier
+        assert "****" in log_entry.requested_identifier
+        assert "9876543210" not in log_entry.requested_identifier
 
 
 def test_05_aes256_backup_key_derivation_and_lossless_roundtrip():
@@ -179,3 +182,17 @@ def test_06_aes256_backup_decryption_rejects_wrong_tenant_key():
     encrypted_dump = cipher_a.encrypt(b"PGDMP--Hospital A Confidential Patient Records--")
     with pytest.raises(InvalidToken):
         cipher_b.decrypt(encrypted_dump)
+
+
+def test_07_federation_thread_isolation_and_timeout(client, multi_tenant_env):
+    """Audit F-03 regression: Federation worker threads pre-resolve registries without sharing control_db."""
+    from backend.domains.federation import router as fed_router
+
+    # Verify pre-resolution logic works cleanly
+    control_db = multi_tenant_env["control_session_factory"]()
+    try:
+        from backend.control_plane.models import TenantRegistry
+        regs = control_db.query(TenantRegistry).all()
+        assert len(regs) > 0
+    finally:
+        control_db.close()

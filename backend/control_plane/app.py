@@ -18,7 +18,7 @@ from backend.control_plane.api.routers.ui_console import router as ui_console_ro
 from backend.control_plane.api.routers.network import router as control_plane_network_router
 from backend.control_plane.services.auth import (
     authenticate_operator_token,
-    control_plane_actor,
+    control_plane_actor, control_plane_operator_role,
     create_operator_auth_router,
 )
 
@@ -114,14 +114,15 @@ async def operator_session_middleware(request: Request, call_next):
     request.state.operator_email = identity["email"] if identity else None
     request.state.operator_id = identity["id"] if identity else None
     request.state.operator_token_id = identity["token_id"] if identity else None
-    actor_context = (
-        control_plane_actor.set(str(identity["email"])) if identity else None
-    )
+    actor_token = control_plane_actor.set(str(identity["email"])) if identity else None
+    role_token = control_plane_operator_role.set(str(identity.get("role", "superadmin"))) if identity else None
     try:
         return await call_next(request)
     finally:
-        if actor_context is not None:
-            control_plane_actor.reset(actor_context)
+        if actor_token is not None:
+            control_plane_actor.reset(actor_token)
+        if role_token is not None:
+            control_plane_operator_role.reset(role_token)
 
 # -------------------------------------------------------------------------
 # GLOBAL EXCEPTION HANDLERS

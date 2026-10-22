@@ -99,12 +99,49 @@ def _fast_cached_hash(secret: str, *args, **kwargs) -> str:
 class FakeRedis:
     def __init__(self):
         self.store: dict[str, str] = {}
+        self._ttls: dict[str, int] = {}
 
     def get(self, key: str):
         return self.store.get(key)
 
     def set(self, key: str, value: str, ex: int | None = None):
         self.store[key] = value
+        if ex is not None:
+            self._ttls[key] = ex
+
+    def incr(self, key: str) -> int:
+        val = int(self.store.get(key, 0)) + 1
+        self.store[key] = str(val)
+        return val
+
+    def expire(self, key: str, ttl: int) -> bool:
+        if key in self.store:
+            self._ttls[key] = ttl
+            return True
+        return False
+
+    def ttl(self, key: str) -> int:
+        if key not in self.store:
+            return -2
+        return self._ttls.get(key, -1)
+
+    def pipeline(self):
+        fake = self
+        class _FakePipe:
+            def __init__(self):
+                self._calls = []
+            def incr(self, k):
+                self._calls.append(lambda: fake.incr(k))
+                return self
+            def ttl(self, k):
+                self._calls.append(lambda: fake.ttl(k))
+                return self
+            def expire(self, k, t):
+                self._calls.append(lambda: fake.expire(k, t))
+                return self
+            def execute(self):
+                return [fn() for fn in self._calls]
+        return _FakePipe()
 
     def setex(self, key: str, ttl: int, value: str):
         self.store[key] = value
@@ -137,6 +174,7 @@ class FakeRedis:
 
     def clear(self):
         self.store.clear()
+        self._ttls.clear()
 
 
 @pytest.fixture()
