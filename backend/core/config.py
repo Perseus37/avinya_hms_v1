@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     HL7_TLS_CERT_FILE: Optional[str] = None
     HL7_TLS_KEY_FILE: Optional[str] = None
     HL7_CLIENT_IDLE_TIMEOUT_SECONDS: int = Field(default=300, ge=1, le=3600)
+    HL7_LISTEN_HOST: str = "127.0.0.1"
+    HL7_PORT: int = Field(default=2575, gt=0, le=65535)
     TENANT_URL_TEMPLATE: Optional[str] = None
     API_PORT: int = Field(gt=0, le=65535)
     API_SERVICE_HOST: str

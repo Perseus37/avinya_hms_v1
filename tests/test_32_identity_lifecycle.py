@@ -409,3 +409,39 @@ def test_mfa_failure_rate_limit_is_per_account_and_only_charges_failures():
     with pytest.raises(HTTPException) as exc_info:
         limiter.check_actor(request, redis, "user:1")
     assert exc_info.value.status_code == 429
+
+
+def test_admin_can_unlock_locked_user(client, multi_tenant_env, superuser_headers, nurse_headers):
+    # F-13: Dedicated admin unlock endpoint clears lockout and resets attempts
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    from backend.domains.identity.models import User, UserStatusEnum
+
+    with Session(engine) as db:
+        doctor = db.query(User).filter_by(email="doctor@default.com").one()
+        doctor.status = UserStatusEnum.LOCKED
+        doctor.failed_login_attempts = 5
+        doctor.locked_until = datetime.now(timezone.utc) + timedelta(minutes=30)
+        db.commit()
+        doctor_id = doctor.id
+
+    # Nurse (non-admin active user without iam:write) trying to unlock should fail with 403
+    unauthorized = client.post(
+        f"/v1/api/auth/users/{doctor_id}/unlock",
+        headers=nurse_headers,
+    )
+    assert unauthorized.status_code == 403
+
+    # Admin with iam:write permission unlocks doctor
+    unlock_res = client.post(
+        f"/v1/api/auth/users/{doctor_id}/unlock",
+        headers=superuser_headers,
+    )
+    assert unlock_res.status_code == 200, unlock_res.text
+    assert unlock_res.json()["status"] == "success"
+
+    # Verify user state in database
+    with Session(engine) as db:
+        updated_doc = db.get(User, doctor_id)
+        assert updated_doc.status == UserStatusEnum.ACTIVE
+        assert updated_doc.failed_login_attempts == 0
+        assert updated_doc.locked_until is None
