@@ -113,3 +113,30 @@ def test_10_rate_limiter_blocks_excessive_login_attempts(client):
     )
     assert blocked_res.status_code == 429
     assert "rate limit exceeded" in blocked_res.json()["message"].lower()
+
+
+def test_rate_limiter_restores_missing_ttl_atomic(client, fake_redis):
+    """Audit F-06 regression: Rate limiter recovers and enforces TTL if a key has lost its expiration (TTL -1)."""
+    from backend.core.dependencies import RateLimiter
+    from starlette.requests import Request
+
+    limiter = RateLimiter(scope="test_ttl_recovery", max_requests=5, window_seconds=60)
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/test",
+        "headers": [],
+        "client": ("192.168.1.100", 12345),
+        "server": ("localhost", 80),
+    }
+    req = Request(scope)
+
+    # Simulate an orphaned key with NO expiration (ttl == -1)
+    key = "rl:test_ttl_recovery:default:192.168.1.100"
+    fake_redis.store[key] = "2"
+    assert fake_redis.ttl(key) == -1
+
+    # Next check should detect missing TTL and restore the 60s expiration window
+    limiter(req, redis_client=fake_redis)
+    assert fake_redis.store[key] == "3"
+    assert fake_redis.ttl(key) == 60

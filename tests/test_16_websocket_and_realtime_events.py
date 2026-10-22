@@ -234,3 +234,17 @@ def test_03_event_bus_publishes_tenant_namespaced_messages(monkeypatch, fake_red
     assert published_msg["event_type"] == "CRITICAL_PANIC_VALUE_ALERT"
     assert published_msg["tenant_slug"] == "apollo"
     assert published_msg["payload"]["result_value"] == "7.1 mEq/L"
+
+
+def test_websocket_rejects_unregistered_tenant_slug(client, multi_tenant_env, monkeypatch):
+    """Audit F-11 regression: Connecting to waiting room with unknown tenant slug closes with WS_1008."""
+    from backend.domains.realtime import router as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "ControlSessionLocal", multi_tenant_env["control_session_factory"]
+    )
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect("/v1/ws/waiting_room?tenant_slug=nonexistent_hospital"):
+            pass
+    from fastapi import status
+    assert exc_info.value.code == status.WS_1008_POLICY_VIOLATION

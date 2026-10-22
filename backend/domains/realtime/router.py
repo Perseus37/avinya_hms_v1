@@ -29,6 +29,24 @@ STREAM_PERMISSIONS = {
 }
 
 
+def _validate_tenant_slug(tenant_slug: str) -> bool:
+    """F-11: Verifies that the requested tenant exists and is active in the control plane."""
+    normalized_slug = tenant_slug.strip().lower()
+    if normalized_slug == settings.DEFAULT_TENANT_SLUG:
+        return True
+    try:
+        with ControlSessionLocal() as control_db:
+            return bool(
+                control_db.query(TenantRegistry)
+                .filter(
+                    TenantRegistry.subdomain_slug == normalized_slug,
+                    TenantRegistry.is_active == True,
+                )
+                .first()
+            )
+    except Exception:
+        return False
+
 def _authenticate_ws(token: Optional[str], tenant_slug: str, stream: str) -> bool:
     """Verifies the JWT, active account, tenant, and requested event-stream access."""
     if not token:
@@ -118,6 +136,11 @@ async def websocket_event_stream(
     await connection_limit.acquire()
     pubsub = None
     try:
+        # F-11: Validate tenant existence to prevent unbounded subscriptions to non-existent tenants
+        is_valid_tenant = await asyncio.to_thread(_validate_tenant_slug, tenant_slug)
+        if not is_valid_tenant:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
         # Browser WebSocket clients pass credentials through the handshake
         # subprotocol header instead of a URL that can be recorded in logs.
         offered_protocols = websocket.scope.get("subprotocols", [])
@@ -173,8 +196,11 @@ async def websocket_event_stream(
                                 )
                                 return
                             next_auth_check = now + 30
-                    message = pubsub.get_message(
-                        ignore_subscribe_messages=True, timeout=0.0
+                    # F-11: Offload synchronous Redis socket polling to avoid blocking the asyncio event loop
+                    message = await asyncio.to_thread(
+                        pubsub.get_message,
+                        ignore_subscribe_messages=True,
+                        timeout=0.0,
                     )
                     if message and message.get("data"):
                         raw_data = message["data"]

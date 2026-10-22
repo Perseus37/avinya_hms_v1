@@ -261,10 +261,25 @@ class RateLimiter:
                 )
             if not increment:
                 return
-            if hasattr(redis_client, "incr"):
+            # F-06: Atomic / pipelined rate limit increment with guaranteed TTL recovery.
+            # If the process was previously interrupted between INCR and EXPIRE, or if the key
+            # has lost its TTL (ttl == -1), the expiration window is immediately restored.
+            if hasattr(redis_client, "pipeline"):
+                pipe = redis_client.pipeline()
+                pipe.incr(key)
+                pipe.ttl(key)
+                results = pipe.execute()
+                count = results[0]
+                key_ttl = results[1]
+                if count == 1 or key_ttl == -1:
+                    if hasattr(redis_client, "expire"):
+                        redis_client.expire(key, self.window_seconds)
+            elif hasattr(redis_client, "incr"):
                 count = redis_client.incr(key)
-                if count == 1 and hasattr(redis_client, "expire"):
-                    redis_client.expire(key, self.window_seconds)
+                key_ttl = redis_client.ttl(key) if hasattr(redis_client, "ttl") else -1
+                if count == 1 or key_ttl == -1:
+                    if hasattr(redis_client, "expire"):
+                        redis_client.expire(key, self.window_seconds)
             else:
                 new_val = int(current or 0) + 1
                 redis_client.set(key, str(new_val), ex=self.window_seconds)
