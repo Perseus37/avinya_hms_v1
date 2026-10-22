@@ -27,6 +27,7 @@ from backend.domains.privacy.retention_service import (
     execute_retention_policy_revision,
 )
 from backend.domains.privacy.retention_preview import (
+    get_allowed_retention_categories,
     preview_retention_counts,
     retention_category_registry,
 )
@@ -135,6 +136,8 @@ class PrivacyPolicyApproval(BaseModel):
 
 class PrivacyPolicyModeApproval(BaseModel):
     approval_reference: str = Field(min_length=3, max_length=100)
+    carry_over_from_revision_id: int | None = Field(default=None, gt=0)
+    carry_over_purposes: list[str] | None = None
 
     @field_validator("approval_reference")
     @classmethod
@@ -172,7 +175,22 @@ class PrivacyLegalHoldCreate(BaseModel):
     hold_reference: str = Field(min_length=3, max_length=100)
     expires_at: datetime | None = None
 
-    @field_validator("data_category", "reason", "hold_reference")
+    @field_validator("data_category")
+    @classmethod
+    def normalize_and_validate_data_category(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip().lower()
+        if not cleaned:
+            raise ValueError("Value cannot be blank.")
+        allowed = get_allowed_retention_categories()
+        if cleaned not in allowed:
+            raise ValueError(
+                f"data_category '{cleaned}' is not a recognized retention category. Allowed: {sorted(allowed)}"
+            )
+        return cleaned
+
+    @field_validator("reason", "hold_reference")
     @classmethod
     def normalize_hold_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -310,6 +328,53 @@ def activate_privacy_policy_audit_only(
     revision.mode_set_by_user_id = actor.id
     revision.mode_set_at = now
     revision.mode_approval_reference = payload.approval_reference
+
+    # Carry over active consents from prior revision if requested (F-05)
+    if payload.carry_over_from_revision_id:
+        prior_revision = db.get(PrivacyPolicyRevision, payload.carry_over_from_revision_id)
+        if prior_revision is None:
+            raise HTTPException(status_code=404, detail="Prior policy revision for carry-over not found.")
+        validate_policy_document("CONSENT", prior_revision.policy_document)
+        new_policy = validate_policy_document("CONSENT", revision.policy_document)
+        new_purpose_codes = {p.code for p in new_policy.purposes}
+
+        allowed_purposes = (
+            set(payload.carry_over_purposes)
+            if payload.carry_over_purposes is not None
+            else new_purpose_codes
+        )
+        eligible_purposes = allowed_purposes.intersection(new_purpose_codes)
+
+        prior_consents = db.execute(
+            select(PatientConsentRecord).where(
+                PatientConsentRecord.policy_revision_id == prior_revision.id,
+                PatientConsentRecord.decision == "GRANTED",
+                PatientConsentRecord.purpose.in_(eligible_purposes),
+            )
+        ).scalars().all()
+
+        for old_c in prior_consents:
+            if old_c.expires_at is not None and old_c.expires_at <= now:
+                continue
+            db.add(
+                PatientConsentRecord(
+                    patient_id=old_c.patient_id,
+                    consent_type=old_c.consent_type,
+                    purpose=old_c.purpose,
+                    decision="GRANTED",
+                    source=old_c.source,
+                    evidence_reference=f"CARRYOVER:{old_c.evidence_reference or 'LEGACY'}",
+                    scope_type=old_c.scope_type,
+                    scope_key=old_c.scope_key,
+                    consenter_type=old_c.consenter_type,
+                    policy_revision_id=revision.id,
+                    form_version=old_c.form_version,
+                    expires_at=old_c.expires_at,
+                    recorded_by_user_id=actor.id,
+                    recorded_at=now,
+                )
+            )
+
     db.add(
         PrivacyDecisionAudit(
             policy_revision_id=revision.id,

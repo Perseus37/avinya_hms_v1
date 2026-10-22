@@ -37,11 +37,11 @@ from backend.domains.identity.models import (
 )
 from backend.domains.identity.passwords import pwd_context
 from backend.schemas.common import PaginatedResponse
-from backend.domains.identity.schemas import DepartmentCreate, DepartmentResponse, DepartmentUpdate, PermissionResponse, RoleCreate, RoleResponse, RoleUpdate, TokenResponse, UserCreate, UserLogin, UserMeResponse, UserUpdate
+from backend.domains.identity.schemas import DepartmentCreate, DepartmentResponse, DepartmentUpdate, PermissionResponse, RoleCreate, RoleResponse, RoleUpdate, UserCreate, UserLogin, UserMeResponse, UserUpdate
 
 from backend.security.envelope import decrypt_tenant_secret, encrypt_tenant_secret
 from backend.domains.policies.router import get_or_create_policy
-from backend.security.totp import matching_totp_counter, totp_code as _totp_code
+from backend.security.totp import matching_totp_counter, totp_code as _totp_code  # noqa: F401
 
 router = APIRouter(prefix="/api/auth", tags=["IAM & Auth"])
 _mfa_failure_limiter = RateLimiter(
@@ -221,6 +221,16 @@ def _record_mfa_failure(db: Session, user: User) -> None:
             minutes=settings.LOGIN_LOCKOUT_MINUTES
         )
         _revoke_user_sessions(db, user.id)
+        if user.email:
+            try:
+                send_email(
+                    user.email,
+                    "Security Alert: Your Avinya HMS account has been temporarily locked",
+                    f"Your account {user.email} was locked following repeated invalid MFA authentication attempts.\n"
+                    f"The lock will automatically expire in {settings.LOGIN_LOCKOUT_MINUTES} minutes, or contact an administrator to request an immediate unlock.",
+                )
+            except Exception:
+                pass
     db.commit()
 
 
@@ -821,6 +831,25 @@ def update_user_status(
     return {"status": "success", "message": f"User {user.email} status updated to {new_status.value}"}
 
 
+@router.post("/users/{user_id}/unlock", status_code=200)
+def unlock_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("iam:write")),
+):
+    """Explicit administrative unlock endpoint to clear account lockouts (F-13)."""
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.is_superuser and not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Cannot unlock a superuser account.")
+    user.status = UserStatusEnum.ACTIVE
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    db.commit()
+    return {"status": "success", "message": f"User {user.email} has been unlocked."}
+
+
 @router.post("/users/{user_id}/departments", status_code=200)
 def assign_user_department(
     user_id: int,
@@ -1071,7 +1100,7 @@ def list_departments(
     _: User = Depends(RequirePermission("mdm:read", "iam:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
-    query = db.query(Department).filter(Department.is_active == True).order_by(Department.id.asc())
+    query = db.query(Department).filter(Department.is_active.is_(True)).order_by(Department.id.asc())
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
     return {"items": items, "total": total, "page": page, "page_size": page_size}

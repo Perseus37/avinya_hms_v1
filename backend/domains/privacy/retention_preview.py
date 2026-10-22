@@ -56,3 +56,20 @@ def preview_retention_counts(
             }
         )
     return report
+
+
+STANDARD_RETENTION_CATEGORIES: set[str] = {
+    "patients",
+    "inactive-patients",
+    "privacy-decision-audits",
+    "synthetic-attachments",
+    "encounters",
+    "clinical-notes",
+    "orders",
+    "billing-invoices",
+}
+
+
+def get_allowed_retention_categories() -> set[str]:
+    """Return set of recognized standard and custom registered retention categories."""
+    return STANDARD_RETENTION_CATEGORIES | set(retention_category_registry.codes())
