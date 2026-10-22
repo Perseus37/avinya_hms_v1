@@ -2,9 +2,19 @@ name: Release gates
 
 on:
   push:
-    branches: [main, dev, "release/**"]
+    branches: [main, "release/**"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "LICENSE"
   pull_request:
     branches: [main, dev, "release/**"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "LICENSE"
   workflow_dispatch:
 
 permissions:
@@ -120,6 +130,14 @@ jobs:
     name: Build production API image
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Heavy image build and Trivy CVE scans run for main/release branches and dispatches,
+    # keeping dev pull requests fast and lightweight.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/heads/release/') ||
+      github.base_ref == 'main' ||
+      startsWith(github.base_ref, 'release/')
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
