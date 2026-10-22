@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     MFA_REQUIRED_FOR_PRIVILEGED: bool = True
     PRIVACY_ALLOW_AUDIT_ONLY: bool = False
     PRIVACY_ALLOW_RETENTION_DRY_RUN: bool = False
+    PRIVACY_ALLOW_RETENTION_EXECUTE: bool = False
     TRUSTED_PROXY_IPS: str = ""
     WS_MAX_CONNECTIONS: int = Field(default=100, ge=1, le=10000)
     WS_MAX_WAITING_ROOM_CONNECTIONS: int = Field(default=25, ge=1, le=10000)
@@ -112,6 +113,7 @@ class Settings(BaseSettings):
             and (
                 self.PRIVACY_ALLOW_AUDIT_ONLY
                 or self.PRIVACY_ALLOW_RETENTION_DRY_RUN
+                or self.PRIVACY_ALLOW_RETENTION_EXECUTE
             )
         ):
             raise ValueError(

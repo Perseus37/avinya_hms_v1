@@ -15,11 +15,13 @@ from backend.domains.privacy.models import (
     PrivacyDecisionAudit,
     PrivacyLegalHold,
     PrivacyPolicyRevision,
+    PrivacyRetentionRunLedger,
 )
 from backend.domains.privacy.policy_schema import (
     RetentionPolicyV1,
     validate_policy_document,
 )
+from backend.domains.privacy.retention_preview import canonicalize_category
 
 
 def get_active_legal_holds(
@@ -37,9 +39,10 @@ def get_active_legal_holds(
 def is_category_on_hold(
     holds: list[PrivacyLegalHold], category_code: str
 ) -> bool:
-    """Return True if an entire category is subject to an active legal hold."""
+    """Return True if an entire category is subject to an active legal hold (comparing canonical categories - N-02)."""
+    canon_exec = canonicalize_category(category_code)
     return any(
-        hold.data_category == category_code and hold.patient_id is None
+        canonicalize_category(hold.data_category) == canon_exec and hold.patient_id is None
         for hold in holds
     )
 
@@ -47,12 +50,17 @@ def is_category_on_hold(
 def get_held_patient_ids(
     holds: list[PrivacyLegalHold], category_code: str | None = None
 ) -> set[int]:
-    """Return set of patient IDs protected by active legal holds."""
+    """Return set of patient IDs protected by active legal holds (comparing canonical categories - N-02)."""
+    canon_exec = canonicalize_category(category_code) if category_code else None
     return {
         hold.patient_id
         for hold in holds
         if hold.patient_id is not None
-        and (category_code is None or hold.data_category in (category_code, None))
+        and (
+            canon_exec is None
+            or hold.data_category is None
+            or canonicalize_category(hold.data_category) == canon_exec
+        )
     }
 
 
@@ -73,8 +81,9 @@ def execute_retention_category(
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(days=retention_days)
     holds = get_active_legal_holds(db, now)
+    canon_category = canonicalize_category(category_code) or category_code
 
-    # 1. If entire category is on legal hold, skip completely
+    # 1. If entire category is on legal hold, skip completely (N-02 canonical check)
     if is_category_on_hold(holds, category_code):
         return {
             "category_code": category_code,
@@ -90,11 +99,13 @@ def execute_retention_category(
     affected_count = 0
 
     # Category Handler: Privacy Decision Audits (Audit log retention)
-    if category_code in ("privacy-decision-audits", "privacy_audits"):
+    if canon_category == "privacy-decision-audits":
         if action == "delete":
+            # N-06: Never delete retention execution audit proofs
             candidate_stmt = select(func.count(PrivacyDecisionAudit.id)).where(
                 PrivacyDecisionAudit.occurred_at < cutoff,
                 PrivacyDecisionAudit.result == "ALLOW",
+                PrivacyDecisionAudit.data_use_point != "privacy.retention.execute",
             )
             candidate_count = db.execute(candidate_stmt).scalar_one() or 0
 
@@ -102,6 +113,7 @@ def execute_retention_category(
                 del_stmt = delete(PrivacyDecisionAudit).where(
                     PrivacyDecisionAudit.occurred_at < cutoff,
                     PrivacyDecisionAudit.result == "ALLOW",
+                    PrivacyDecisionAudit.data_use_point != "privacy.retention.execute",
                 )
                 res = db.execute(del_stmt)
                 affected_count = res.rowcount
@@ -118,11 +130,17 @@ def execute_retention_category(
                 "status": "SUCCESS",
             }
 
-    # Category Handler: Inactive Patients (Patient Record Retention / Anonymization)
-    elif category_code in ("inactive-patients", "patients"):
+    # Category Handler: Patients (Patient Record Retention / Anonymization)
+    elif canon_category == "patients":
+        # N-07: Respect clock_start parameter
+        if clock_start in ("creation", "created_at"):
+            clock_filter = Patient.created_at < cutoff
+        else:
+            clock_filter = Patient.updated_at < cutoff
+
         query = select(Patient).where(
             Patient.is_active.is_(False),
-            Patient.updated_at < cutoff,
+            clock_filter,
         )
         if held_patient_ids:
             query = query.where(Patient.id.not_in(held_patient_ids))
@@ -132,8 +150,10 @@ def execute_retention_category(
 
         if action == "anonymise":
             if not dry_run:
+                # N-01: Full anonymisation of all identifying fields
                 for patient in candidates:
                     patient.full_name = "ANONYMIZED"
+                    patient.mrn = f"ANON-{patient.id}"
                     patient.phone_number = "0000000000"
                     patient.email = None
                     patient.address = None
@@ -143,15 +163,46 @@ def execute_retention_category(
                     patient.state = None
                     patient.pincode = None
                     patient.abha_number = None
+                    patient.emergency_contact_name = None
+                    patient.emergency_contact_phone = None
+                    patient.blood_group = None
+                    if patient.date_of_birth is not None:
+                        patient.date_of_birth = datetime(
+                            patient.date_of_birth.year, 1, 1, tzinfo=timezone.utc
+                        )
+                    if hasattr(patient, "allow_network_sharing"):
+                        patient.allow_network_sharing = False
                 affected_count = candidate_count
             else:
                 affected_count = candidate_count
 
         elif action == "delete":
+            # N-03: Hard delete safety guard.
+            # Refuse deletion for patients with clinical encounters or invoices
             if not dry_run and candidates:
-                patient_ids = [p.id for p in candidates]
-                db.execute(delete(Patient).where(Patient.id.in_(patient_ids)))
-                affected_count = len(patient_ids)
+                from backend.domains.encounters.models import PatientEncounter
+                from backend.domains.billing.models import Invoice
+
+                deletable_ids = []
+                for p in candidates:
+                    has_encounters = (
+                        db.execute(
+                            select(func.count(PatientEncounter.id)).where(PatientEncounter.patient_id == p.id)
+                        ).scalar_one()
+                        > 0
+                    )
+                    has_invoices = (
+                        db.execute(
+                            select(func.count(Invoice.id)).where(Invoice.patient_id == p.id)
+                        ).scalar_one()
+                        > 0
+                    )
+                    if not has_encounters and not has_invoices:
+                        deletable_ids.append(p.id)
+
+                if deletable_ids:
+                    db.execute(delete(Patient).where(Patient.id.in_(deletable_ids)))
+                affected_count = len(deletable_ids)
             else:
                 affected_count = candidate_count
 
@@ -222,6 +273,21 @@ def execute_retention_policy_revision(
         results.append(res)
 
     if not dry_run:
+        # N-06: Permanent tamper-evident retention run ledger entry
+        db.add(
+            PrivacyRetentionRunLedger(
+                policy_revision_id=revision.id,
+                categories=category_codes,
+                action="execute",
+                dry_run=False,
+                candidate_count=sum(r.get("candidate_count", 0) for r in results),
+                held_count=total_held,
+                affected_count=total_affected,
+                approval_reference=approval_reference,
+                executed_by_user_id=actor.id,
+                executed_at=now,
+            )
+        )
         # Record audit entry for the retention execution
         db.add(
             PrivacyDecisionAudit(
@@ -246,4 +312,3 @@ def execute_retention_policy_revision(
         "total_held": total_held,
         "categories": results,
     }
-

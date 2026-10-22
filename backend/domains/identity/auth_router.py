@@ -215,23 +215,27 @@ def _complete_login(user: User, tenant, db: Session) -> dict[str, str]:
 def _record_mfa_failure(db: Session, user: User) -> None:
     user.failed_login_attempts += 1
     policy = get_or_create_policy(db)
+    user_locked = False
     if user.failed_login_attempts >= policy.max_failed_login_attempts:
         user.status = UserStatusEnum.LOCKED
         user.locked_until = datetime.now(timezone.utc) + timedelta(
             minutes=settings.LOGIN_LOCKOUT_MINUTES
         )
         _revoke_user_sessions(db, user.id)
-        if user.email:
-            try:
-                send_email(
-                    user.email,
-                    "Security Alert: Your Avinya HMS account has been temporarily locked",
-                    f"Your account {user.email} was locked following repeated invalid MFA authentication attempts.\n"
-                    f"The lock will automatically expire in {settings.LOGIN_LOCKOUT_MINUTES} minutes, or contact an administrator to request an immediate unlock.",
-                )
-            except Exception:
-                pass
+        user_locked = True
     db.commit()
+
+    # N-09: Send email AFTER transaction commit succeeds
+    if user_locked and user.email:
+        try:
+            send_email(
+                user.email,
+                "Security Alert: Your Avinya HMS account has been temporarily locked",
+                f"Your account {user.email} was locked following repeated invalid MFA authentication attempts.\n"
+                f"The lock will automatically expire in {settings.LOGIN_LOCKOUT_MINUTES} minutes, or contact an administrator to request an immediate unlock.",
+            )
+        except Exception:
+            pass
 
 
 def _check_mfa_failure_limit(
@@ -835,18 +839,26 @@ def update_user_status(
 def unlock_user(
     user_id: int,
     db: Session = Depends(get_db),
+    redis_client=Depends(get_redis),
     current_user: User = Depends(RequirePermission("iam:write")),
 ):
-    """Explicit administrative unlock endpoint to clear account lockouts (F-13)."""
+    """Explicit administrative unlock endpoint to clear account lockouts (F-13, N-08)."""
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     if user.is_superuser and not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Cannot unlock a superuser account.")
+    if user.status != UserStatusEnum.LOCKED:
+        raise HTTPException(status_code=400, detail="User account is not currently locked.")
     user.status = UserStatusEnum.ACTIVE
     user.failed_login_attempts = 0
     user.locked_until = None
     db.commit()
+    if redis_client:
+        try:
+            redis_client.delete(f"auth_mfa_failure:user:{user.id}")
+        except Exception:
+            pass
     return {"status": "success", "message": f"User {user.email} has been unlocked."}
 
 

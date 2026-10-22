@@ -237,7 +237,7 @@ def publish_local_patient_to_discovery_index(
         db.query(PatientAllergy)
         .filter(
             PatientAllergy.patient_id == patient.id,
-            PatientAllergy.is_active == True,
+            PatientAllergy.is_active.is_(True),
             PatientAllergy.severity.in_([AllergySeverityEnum.SEVERE, AllergySeverityEnum.ANAPHYLACTIC]),
         )
         .first()
@@ -299,7 +299,7 @@ def discover_and_aggregate_patient_across_branches(
 
     def _fetch_branch_data(ptr):
         tenant_reg = control_db.query(TenantRegistry).filter(
-            TenantRegistry.branch_code == ptr.branch_code, TenantRegistry.is_active == True
+            TenantRegistry.branch_code == ptr.branch_code, TenantRegistry.is_active.is_(True)
         ).first()
         if not tenant_reg:
             return None
@@ -314,10 +314,10 @@ def discover_and_aggregate_patient_across_branches(
             if policy.federation_sharing_mode == FederationPolicyEnum.CORPORATE_GROUP_ONLY:
                 if ptr.branch_code.split("-")[0].strip().upper() != calling_node.branch_code.split("-")[0].strip().upper():
                     return None
-            if policy.federation_sharing_mode == FederationPolicyEnum.EMERGENCY_ALLERGIES_ONLY and "EMERGENCY" not in purpose.upper():
+            if policy.federation_sharing_mode == FederationPolicyEnum.EMERGENCY_ALLERGIES_ONLY and purpose.strip().upper() not in {"EMERGENCY", "EMERGENCY_CARE", "EMERGENCY_TREATMENT"}:
                 return None
 
-            patient = branch_db.query(Patient).filter(Patient.mrn == ptr.source_mrn, Patient.is_active == True).first()
+            patient = branch_db.query(Patient).filter(Patient.mrn == ptr.source_mrn, Patient.is_active.is_(True)).first()
             if not patient or getattr(patient, "allow_network_sharing", True) is False:
                 return None
             decision = evaluate_tenant_data_use(
@@ -338,7 +338,7 @@ def discover_and_aggregate_patient_across_branches(
                 alg_stmt = (
                     select(PatientAllergy, AllergyMaster)
                     .join(AllergyMaster, PatientAllergy.allergy_id == AllergyMaster.id)
-                    .where(PatientAllergy.patient_id == patient.id, PatientAllergy.is_active == True)
+                    .where(PatientAllergy.patient_id == patient.id, PatientAllergy.is_active.is_(True))
                 )
                 for pa, master in branch_db.execute(alg_stmt).all():
                     rx_note = pa.reaction_description or "Adverse reaction"
@@ -402,7 +402,7 @@ def discover_and_aggregate_patient_across_branches(
                 for alg_data in result["allergies"]:
                     if alg_data["key"] not in merged_allergies:
                         merged_allergies[alg_data["key"]] = alg_data["summary"]
-        except Exception as e:
+        except Exception:
             pass  # Node timed out or failed circuit breaker
 
     if not latest_demographics:
