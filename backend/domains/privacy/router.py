@@ -15,8 +15,11 @@ from backend.domains.patients.models import Patient
 from backend.domains.privacy.data_use_points import DATA_USE_POINTS
 from backend.domains.privacy.decision_engine import counts_only_report
 from backend.domains.privacy.decision_engine import SOURCE_TO_CAPTURE
+import secrets
 from backend.domains.privacy.models import (
     PatientConsentRecord,
+    PatientDataRightsRequest,
+    PrivacyDataBreachIncident,
     PrivacyDecisionAudit,
     PrivacyLegalHold,
     PrivacyPolicyRevision,
@@ -871,3 +874,348 @@ def record_patient_consent(
     db.commit()
     db.refresh(record)
     return record
+
+
+# =========================================================================
+# DPDP ACT 2023: PATIENT DATA RIGHTS LIFECYCLE (M-03)
+# =========================================================================
+
+DataRightsType = Literal["ACCESS", "CORRECTION", "ERASURE", "GRIEVANCE", "NOMINATION"]
+DataRightsStatus = Literal["SUBMITTED", "IN_REVIEW", "FULFILLED", "REJECTED"]
+
+
+class DataRightsRequestCreate(BaseModel):
+    patient_id: int
+    request_type: DataRightsType
+    details: dict[str, Any] = Field(default_factory=dict)
+    sla_days: int = Field(default=30, ge=1, le=90)
+
+
+class DataRightsStatusUpdate(BaseModel):
+    status: Literal["IN_REVIEW", "FULFILLED", "REJECTED"]
+    response_notes: str | None = None
+    rejection_reason: str | None = None
+
+
+class DataRightsRequestResponse(BaseModel):
+    id: int
+    patient_id: int
+    request_type: str
+    status: str
+    details: dict[str, Any]
+    sla_deadline: datetime
+    response_notes: str | None
+    rejection_reason: str | None
+    handled_by_user_id: int | None
+    fulfilled_at: datetime | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+@router.post(
+    "/data-rights/requests",
+    response_model=DataRightsRequestResponse,
+    status_code=201,
+    dependencies=[Depends(RequirePermission("privacy:write"))],
+)
+def create_data_rights_request(
+    payload: DataRightsRequestCreate,
+    db: Session = Depends(get_db),
+    actor: User = Depends(RequirePermission("privacy:write")),
+):
+    patient = db.get(Patient, payload.patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found.")
+
+    sla_deadline = datetime.now(timezone.utc) + timedelta(days=payload.sla_days)
+    request_row = PatientDataRightsRequest(
+        patient_id=payload.patient_id,
+        request_type=payload.request_type,
+        status="SUBMITTED",
+        details=payload.details,
+        sla_deadline=sla_deadline,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(request_row)
+    db.commit()
+    db.refresh(request_row)
+    return request_row
+
+
+@router.get(
+    "/data-rights/requests",
+    response_model=list[DataRightsRequestResponse],
+    dependencies=[Depends(RequirePermission("privacy:read"))],
+)
+def list_data_rights_requests(
+    patient_id: int | None = Query(default=None),
+    request_type: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    query = select(PatientDataRightsRequest)
+    if patient_id is not None:
+        query = query.where(PatientDataRightsRequest.patient_id == patient_id)
+    if request_type:
+        query = query.where(PatientDataRightsRequest.request_type == request_type.upper())
+    if status:
+        query = query.where(PatientDataRightsRequest.status == status.upper())
+
+    query = query.order_by(PatientDataRightsRequest.created_at.desc()).limit(limit)
+    return db.execute(query).scalars().all()
+
+
+@router.get(
+    "/data-rights/requests/{request_id}",
+    response_model=DataRightsRequestResponse,
+    dependencies=[Depends(RequirePermission("privacy:read"))],
+)
+def get_data_rights_request(request_id: int, db: Session = Depends(get_db)):
+    req = db.get(PatientDataRightsRequest, request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Data rights request not found.")
+    return req
+
+
+@router.patch(
+    "/data-rights/requests/{request_id}/status",
+    response_model=DataRightsRequestResponse,
+    dependencies=[Depends(RequirePermission("privacy:write"))],
+)
+def update_data_rights_request_status(
+    request_id: int,
+    payload: DataRightsStatusUpdate,
+    db: Session = Depends(get_db),
+    actor: User = Depends(RequirePermission("privacy:write")),
+):
+    req = db.get(PatientDataRightsRequest, request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Data rights request not found.")
+
+    req.status = payload.status
+    req.handled_by_user_id = actor.id
+    if payload.response_notes:
+        req.response_notes = payload.response_notes
+
+    if payload.status == "FULFILLED":
+        req.fulfilled_at = datetime.now(timezone.utc)
+        req.rejection_reason = None
+    elif payload.status == "REJECTED":
+        if not payload.rejection_reason:
+            raise HTTPException(
+                status_code=422,
+                detail="A valid rejection_reason must be provided when rejecting a DPDP data-rights request.",
+            )
+        req.rejection_reason = payload.rejection_reason
+
+    db.commit()
+    db.refresh(req)
+    return req
+
+
+@router.get(
+    "/data-rights/patients/{patient_id}/summary",
+    dependencies=[Depends(RequirePermission("privacy:read"))],
+)
+def get_patient_data_access_summary(
+    patient_id: int,
+    db: Session = Depends(get_db),
+):
+    """Generates the DPDP Act Right to Access summary dossier for a patient."""
+    patient = db.get(Patient, patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found.")
+
+    consents = db.execute(
+        select(PatientConsentRecord)
+        .where(PatientConsentRecord.patient_id == patient_id)
+        .order_by(PatientConsentRecord.recorded_at.desc())
+    ).scalars().all()
+
+    requests = db.execute(
+        select(PatientDataRightsRequest)
+        .where(PatientDataRightsRequest.patient_id == patient_id)
+        .order_by(PatientDataRightsRequest.created_at.desc())
+    ).scalars().all()
+
+    return {
+        "patient_id": patient.id,
+        "mrn": patient.mrn,
+        "name": patient.full_name,
+        "phone_masked": f"{patient.phone_number[:3]}****{patient.phone_number[-4:]}" if patient.phone_number and len(patient.phone_number) >= 7 else "****",
+        "gender": getattr(patient, "gender", None),
+        "date_of_birth": patient.date_of_birth.isoformat() if getattr(patient, "date_of_birth", None) else None,
+        "allow_network_sharing": getattr(patient, "allow_network_sharing", False),
+        "is_active": patient.is_active,
+        "active_consents": [
+            {
+                "id": c.id,
+                "purpose": c.purpose,
+                "consent_type": c.consent_type,
+                "decision": c.decision,
+                "recorded_at": c.recorded_at.isoformat(),
+            }
+            for c in consents
+        ],
+        "data_rights_history": [
+            {
+                "id": r.id,
+                "request_type": r.request_type,
+                "status": r.status,
+                "sla_deadline": r.sla_deadline.isoformat(),
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in requests
+        ],
+    }
+
+
+# =========================================================================
+# PERSONAL DATA BREACH REGISTER & INCIDENT WORKFLOW (M-04)
+# =========================================================================
+
+BreachSeverity = Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+BreachStatus = Literal["REPORTED", "INVESTIGATING", "CONTAINED", "RESOLVED", "CLOSED"]
+BreachType = Literal[
+    "UNAUTHORIZED_ACCESS",
+    "EXFILTRATION",
+    "RANSOMWARE",
+    "ACCIDENTAL_DISCLOSURE",
+    "LOST_DEVICE",
+]
+
+
+class BreachIncidentCreate(BaseModel):
+    title: str = Field(min_length=3, max_length=255)
+    description: str = Field(min_length=5)
+    severity: BreachSeverity
+    breach_type: BreachType
+    affected_data_categories: list[str] = Field(min_length=1)
+    estimated_affected_subjects: int = Field(default=0, ge=0)
+
+
+class BreachIncidentUpdate(BaseModel):
+    status: BreachStatus | None = None
+    severity: BreachSeverity | None = None
+    contained: bool | None = None
+    reported_to_authority: bool | None = None
+    notified_subjects_count: int | None = Field(default=None, ge=0)
+    resolution_summary: str | None = None
+
+
+class BreachIncidentResponse(BaseModel):
+    id: int
+    incident_code: str
+    title: str
+    description: str
+    severity: str
+    status: str
+    breach_type: str
+    affected_data_categories: list[str]
+    estimated_affected_subjects: int
+    contained_at: datetime | None
+    reported_to_authority_at: datetime | None
+    notified_subjects_count: int
+    resolution_summary: str | None
+    reported_by_user_id: int
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+@router.post(
+    "/breach-incidents",
+    response_model=BreachIncidentResponse,
+    status_code=201,
+    dependencies=[Depends(RequirePermission("privacy:write"))],
+)
+def report_data_breach_incident(
+    payload: BreachIncidentCreate,
+    db: Session = Depends(get_db),
+    actor: User = Depends(RequirePermission("privacy:write")),
+):
+    code = f"BREACH-{datetime.now(timezone.utc).year}-{secrets.token_hex(3).upper()}"
+    incident = PrivacyDataBreachIncident(
+        incident_code=code,
+        title=payload.title,
+        description=payload.description,
+        severity=payload.severity,
+        status="REPORTED",
+        breach_type=payload.breach_type,
+        affected_data_categories=payload.affected_data_categories,
+        estimated_affected_subjects=payload.estimated_affected_subjects,
+        reported_by_user_id=actor.id,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(incident)
+    db.commit()
+    db.refresh(incident)
+    return incident
+
+
+@router.get(
+    "/breach-incidents",
+    response_model=list[BreachIncidentResponse],
+    dependencies=[Depends(RequirePermission("privacy:read"))],
+)
+def list_data_breach_incidents(
+    severity: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    query = select(PrivacyDataBreachIncident)
+    if severity:
+        query = query.where(PrivacyDataBreachIncident.severity == severity.upper())
+    if status:
+        query = query.where(PrivacyDataBreachIncident.status == status.upper())
+
+    query = query.order_by(PrivacyDataBreachIncident.created_at.desc()).limit(limit)
+    return db.execute(query).scalars().all()
+
+
+@router.get(
+    "/breach-incidents/{incident_id}",
+    response_model=BreachIncidentResponse,
+    dependencies=[Depends(RequirePermission("privacy:read"))],
+)
+def get_data_breach_incident(incident_id: int, db: Session = Depends(get_db)):
+    incident = db.get(PrivacyDataBreachIncident, incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Breach incident record not found.")
+    return incident
+
+
+@router.patch(
+    "/breach-incidents/{incident_id}",
+    response_model=BreachIncidentResponse,
+    dependencies=[Depends(RequirePermission("privacy:write"))],
+)
+def update_data_breach_incident(
+    incident_id: int,
+    payload: BreachIncidentUpdate,
+    db: Session = Depends(get_db),
+    actor: User = Depends(RequirePermission("privacy:write")),
+):
+    incident = db.get(PrivacyDataBreachIncident, incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Breach incident record not found.")
+
+    if payload.status:
+        incident.status = payload.status
+    if payload.severity:
+        incident.severity = payload.severity
+    if payload.contained is True and incident.contained_at is None:
+        incident.contained_at = datetime.now(timezone.utc)
+    if payload.reported_to_authority is True and incident.reported_to_authority_at is None:
+        incident.reported_to_authority_at = datetime.now(timezone.utc)
+    if payload.notified_subjects_count is not None:
+        incident.notified_subjects_count = payload.notified_subjects_count
+    if payload.resolution_summary:
+        incident.resolution_summary = payload.resolution_summary
+
+    db.commit()
+    db.refresh(incident)
+    return incident

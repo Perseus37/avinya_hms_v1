@@ -230,3 +230,42 @@ class PrivacyRetentionRunLedger(Base):
     executed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )
+
+
+
+class PatientDataRightsRequest(Base):
+    """Lifecycle tracking for patient data rights under India's DPDP Act 2023 (M-03)."""
+    __tablename__ = "patient_data_rights_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False, index=True)
+    request_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="SUBMITTED", server_default="SUBMITTED", index=True)
+    details: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    sla_deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    response_notes: Mapped[str | None] = mapped_column(Text)
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
+    handled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+
+class PrivacyDataBreachIncident(Base):
+    """Personal data breach register and incident lifecycle tracking under DPDP / CERT-In (M-04)."""
+    __tablename__ = "privacy_data_breach_incidents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    incident_code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="REPORTED", server_default="REPORTED", index=True)
+    breach_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    affected_data_categories: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    estimated_affected_subjects: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    contained_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reported_to_authority_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    notified_subjects_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    resolution_summary: Mapped[str | None] = mapped_column(Text)
+    reported_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
