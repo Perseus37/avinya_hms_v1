@@ -319,3 +319,36 @@ def test_legal_hold_requires_scope_and_independent_release(
     assert released.json()["released_by_user_id"]
     assert released.json()["release_reference"] == "HOLD-RELEASE-002"
     assert client.get(base_url, headers=superuser_headers).json()["items"] == []
+
+
+def test_legal_hold_data_category_validation_and_normalization(
+    client, superuser_headers
+):
+    # F-18: Validate against retention category registry and normalize
+    base_url = "/v1/api/privacy/legal-holds"
+
+    # 1. Invalid / unrecognized retention category should return 422
+    invalid_category = client.post(
+        base_url,
+        headers=superuser_headers,
+        json={
+            "data_category": "unrecognized_arbitrary_category",
+            "reason": "Pending audit verification",
+            "hold_reference": "HOLD-CAT-001",
+        },
+    )
+    assert invalid_category.status_code == 422
+
+    # 2. Valid retention category with extra whitespace and mixed case should normalize
+    valid_category = client.post(
+        base_url,
+        headers=superuser_headers,
+        json={
+            "data_category": "  PATIENTS  ",
+            "reason": "Pending litigation hold on patients category",
+            "hold_reference": "HOLD-CAT-002",
+        },
+    )
+    assert valid_category.status_code == 201, valid_category.text
+    hold_data = valid_category.json()
+    assert hold_data["data_category"] == "patients"

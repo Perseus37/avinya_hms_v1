@@ -1264,3 +1264,130 @@ def test_retention_execution_deletes_and_anonymizes_honoring_legal_holds(
 
         p_held_after = db.get(Patient, p_held_id)
         assert p_held_after.full_name == "Held Inactive Patient"  # UNTOUCHED due to legal hold!
+
+
+def test_consent_carry_over_on_policy_activation(
+    client, multi_tenant_env, superuser_headers, monkeypatch
+):
+    monkeypatch.setattr(settings, "PRIVACY_ALLOW_AUDIT_ONLY", True)
+    monkeypatch.setattr(settings, "ENVIRONMENT", "testing")
+    # F-05: Activating v2 with carry_over_from_revision_id copies valid grants to v2
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    now = datetime.now(timezone.utc)
+
+    # 1. Create a patient and revision 1 with consent grant
+    with Session(engine) as db:
+        p = Patient(
+            mrn="CARRY-01",
+            full_name="Carry Over Patient",
+            gender=GenderEnum.FEMALE,
+            date_of_birth=now - timedelta(days=10000),
+            is_active=True,
+        )
+        db.add(p)
+        db.commit()
+        db.refresh(p)
+        patient_id = p.id
+
+    # Create v1 policy
+    v1_doc = json.loads(
+        (FIXTURES / "privacy_policy_strict.json").read_text(encoding="utf-8")
+    )
+    v1_doc["allow_care_flow_consent_gating"] = True
+    c1 = client.post(
+        "/v1/api/privacy/policies",
+        headers=superuser_headers,
+        json={"policy_type": "CONSENT", "policy_document": v1_doc},
+    )
+    assert c1.status_code == 201
+    rev1_id = c1.json()["id"]
+
+    with Session(engine) as db:
+        doctor = db.query(User).filter_by(email="doctor@default.com").one()
+        r1 = db.get(PrivacyPolicyRevision, rev1_id)
+        r1.configured_by_user_id = doctor.id
+        db.commit()
+
+    a1 = client.post(
+        f"/v1/api/privacy/policies/{rev1_id}/approve",
+        headers=superuser_headers,
+        json={"approval_reference": "V1-APP"},
+    )
+    assert a1.status_code == 200
+
+    act1 = client.post(
+        f"/v1/api/privacy/policies/{rev1_id}/activate-audit-only",
+        headers=superuser_headers,
+        json={"approval_reference": "V1-ACT"},
+    )
+    assert act1.status_code == 200
+
+    # Record consent under v1
+    c_res = client.post(
+        f"/v1/api/privacy/patients/{patient_id}/consents",
+        headers=superuser_headers,
+        json={
+            "consent_type": "DATA_SHARING",
+            "purpose": "EXTERNAL_SHARING",
+            "decision": "GRANTED",
+            "source": "WRITTEN",
+            "evidence_reference": "PAPER-CONSENT-FORM-01",
+            "scope_type": "recipient",
+            "scope_key": "partner-lab-01",
+            "consenter_type": "patient",
+        },
+    )
+    assert c_res.status_code == 201
+
+    # Create v2 policy
+    v2_doc = json.loads(
+        (FIXTURES / "privacy_policy_strict.json").read_text(encoding="utf-8")
+    )
+    v2_doc["policy_code"] = "strict-v2"
+    v2_doc["allow_care_flow_consent_gating"] = True
+    c2 = client.post(
+        "/v1/api/privacy/policies",
+        headers=superuser_headers,
+        json={"policy_type": "CONSENT", "policy_document": v2_doc},
+    )
+    assert c2.status_code == 201
+    rev2_id = c2.json()["id"]
+
+    with Session(engine) as db:
+        doctor = db.query(User).filter_by(email="doctor@default.com").one()
+        r2 = db.get(PrivacyPolicyRevision, rev2_id)
+        r2.configured_by_user_id = doctor.id
+        db.commit()
+
+    a2 = client.post(
+        f"/v1/api/privacy/policies/{rev2_id}/approve",
+        headers=superuser_headers,
+        json={"approval_reference": "V2-APP"},
+    )
+    assert a2.status_code == 200
+
+    # Activate v2 WITH carry-over from v1
+    act2 = client.post(
+        f"/v1/api/privacy/policies/{rev2_id}/activate-audit-only",
+        headers=superuser_headers,
+        json={
+            "approval_reference": "V2-ACT-CARRYOVER",
+            "carry_over_from_revision_id": rev1_id,
+        },
+    )
+    assert act2.status_code == 200
+
+    # Verify that patient now has active consent under rev2!
+    with Session(engine) as db:
+        carried = (
+            db.query(PatientConsentRecord)
+            .filter_by(
+                patient_id=patient_id,
+                policy_revision_id=rev2_id,
+                decision="GRANTED",
+            )
+            .first()
+        )
+        assert carried is not None
+        assert carried.purpose == "EXTERNAL_SHARING"
+        assert "CARRYOVER" in carried.evidence_reference

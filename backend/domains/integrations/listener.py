@@ -262,7 +262,9 @@ async def handle_mllp_client(reader: asyncio.StreamReader, writer: asyncio.Strea
         await writer.wait_closed()
 
 
-async def start_hl7_server(host="0.0.0.0", port=2575):
+async def start_hl7_server(host=None, port=None):
+    host = host or getattr(settings, "HL7_LISTEN_HOST", "127.0.0.1")
+    port = port or getattr(settings, "HL7_PORT", 2575)
     if not settings.HL7_TLS_CERT_FILE or not settings.HL7_TLS_KEY_FILE:
         raise RuntimeError("HL7 TLS certificate and key must be configured before starting the listener.")
     tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
