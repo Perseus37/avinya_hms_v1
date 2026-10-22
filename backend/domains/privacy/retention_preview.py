@@ -73,3 +73,36 @@ STANDARD_RETENTION_CATEGORIES: set[str] = {
 def get_allowed_retention_categories() -> set[str]:
     """Return set of recognized standard and custom registered retention categories."""
     return STANDARD_RETENTION_CATEGORIES | set(retention_category_registry.codes())
+
+
+CATEGORY_ALIASES: dict[str, str] = {
+    "patients": "patients",
+    "inactive-patients": "patients",
+    "inactive_patients": "patients",
+    "patient": "patients",
+    "privacy-decision-audits": "privacy-decision-audits",
+    "privacy_decision_audits": "privacy-decision-audits",
+    "privacy-audits": "privacy-decision-audits",
+    "privacy_audits": "privacy-decision-audits",
+    "synthetic-attachments": "synthetic-attachments",
+    "synthetic_attachments": "synthetic-attachments",
+    "encounters": "encounters",
+    "clinical-encounters": "encounters",
+    "clinical_encounters": "encounters",
+    "clinical-notes": "clinical-notes",
+    "clinical_notes": "clinical-notes",
+    "orders": "orders",
+    "diagnostic-orders": "orders",
+    "diagnostic_orders": "orders",
+    "billing-invoices": "billing-invoices",
+    "billing_invoices": "billing-invoices",
+    "invoices": "billing-invoices",
+}
+
+
+def canonicalize_category(category: str | None) -> str | None:
+    """Return the canonical category code for a given category or alias (N-02)."""
+    if category is None:
+        return None
+    cleaned = category.strip().lower()
+    return CATEGORY_ALIASES.get(cleaned, cleaned)

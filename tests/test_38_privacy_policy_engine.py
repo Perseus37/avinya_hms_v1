@@ -1131,8 +1131,10 @@ def test_approved_policy_document_is_immutable(multi_tenant_env):
 
 
 def test_retention_execution_deletes_and_anonymizes_honoring_legal_holds(
-    client, multi_tenant_env, superuser_headers
+    client, multi_tenant_env, superuser_headers, monkeypatch
 ):
+    monkeypatch.setattr(settings, 'PRIVACY_ALLOW_RETENTION_EXECUTE', True)
+    monkeypatch.setattr(settings, 'ENVIRONMENT', 'testing')
     engine = multi_tenant_env["tenant_engines"]["hms_default"]
     now = datetime.now(timezone.utc)
     old_date = now - timedelta(days=400)
@@ -1245,6 +1247,7 @@ def test_retention_execution_deletes_and_anonymizes_honoring_legal_holds(
         "categories": ["patients", "privacy-decision-audits"],
         "approval_reference": "EXEC-RUN-001",
         "dry_run": False,
+        "confirm_destructive_execution": True,
     }
     exec_res = client.post(
         "/v1/api/privacy/retention/execute",
@@ -1260,7 +1263,14 @@ def test_retention_execution_deletes_and_anonymizes_honoring_legal_holds(
     with Session(engine) as db:
         p_norm_after = db.get(Patient, p_norm_id)
         assert p_norm_after.full_name == "ANONYMIZED"
+        assert p_norm_after.mrn.startswith("ANON-")
         assert p_norm_after.phone_number == "0000000000"
+        assert p_norm_after.emergency_contact_name is None
+        assert p_norm_after.emergency_contact_phone is None
+        assert p_norm_after.blood_group is None
+        assert p_norm_after.allow_network_sharing is False
+        assert p_norm_after.date_of_birth.month == 1
+        assert p_norm_after.date_of_birth.day == 1
 
         p_held_after = db.get(Patient, p_held_id)
         assert p_held_after.full_name == "Held Inactive Patient"  # UNTOUCHED due to legal hold!
@@ -1391,3 +1401,346 @@ def test_consent_carry_over_on_policy_activation(
         assert carried is not None
         assert carried.purpose == "EXTERNAL_SHARING"
         assert "CARRYOVER" in carried.evidence_reference
+
+
+
+def test_legal_hold_alias_matching_stops_retention_under_any_alias(
+    client, multi_tenant_env, superuser_headers, monkeypatch
+):
+    # N-02: A hold on 'patients' must protect when running retention as 'inactive-patients'
+    monkeypatch.setattr(settings, "PRIVACY_ALLOW_RETENTION_EXECUTE", True)
+    monkeypatch.setattr(settings, "ENVIRONMENT", "testing")
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    now = datetime.now(timezone.utc)
+    old_date = now - timedelta(days=400)
+
+    with Session(engine) as db:
+        doctor = db.query(User).filter_by(email="doctor@default.com").one()
+        p = Patient(
+            mrn="ALIAS-HELD-01",
+            full_name="Alias Protected Patient",
+            gender=GenderEnum.FEMALE,
+            phone_number="+919876543111",
+            date_of_birth=old_date,
+            is_active=False,
+            updated_at=old_date,
+        )
+        db.add(p)
+        db.commit()
+        db.refresh(p)
+        p_id = p.id
+
+        # Place hold using canonical 'patients' category
+        db.add(
+            PrivacyLegalHold(
+                patient_id=p_id,
+                data_category="patients",
+                reason="Litigation hold on patients",
+                hold_reference="HOLD-ALIAS-001",
+                created_by_user_id=doctor.id,
+            )
+        )
+        db.commit()
+
+    retention_doc = {
+        "schema_version": 1,
+        "policy_code": "retention-alias-test",
+        "categories": [
+            {
+                "code": "inactive-patients",
+                "system_of_record": "Tenant Database",
+                "locations": ["patients"],
+                "retention_days": 365,
+                "clock_start": "last_activity",
+                "action": "anonymise",
+                "legal_hold_triggers": ["court_order"],
+                "backup_treatment": "Retain backup snapshots.",
+                "export_treatment": "Exclude from exports.",
+            }
+        ],
+    }
+    c_res = client.post(
+        "/v1/api/privacy/policies",
+        headers=superuser_headers,
+        json={"policy_type": "RETENTION", "policy_document": retention_doc},
+    )
+    rev_id = c_res.json()["id"]
+
+    with Session(engine) as db:
+        doctor = db.query(User).filter_by(email="doctor@default.com").one()
+        r = db.get(PrivacyPolicyRevision, rev_id)
+        r.configured_by_user_id = doctor.id
+        db.commit()
+
+    client.post(
+        f"/v1/api/privacy/policies/{rev_id}/approve",
+        headers=superuser_headers,
+        json={"approval_reference": "ALIAS-APP"},
+    )
+
+    # Execute retention as 'inactive-patients'
+    exec_res = client.post(
+        "/v1/api/privacy/retention/execute",
+        headers=superuser_headers,
+        json={
+            "policy_revision_id": rev_id,
+            "categories": ["inactive-patients"],
+            "approval_reference": "EXEC-ALIAS-001",
+            "dry_run": False,
+            "confirm_destructive_execution": True,
+        },
+    )
+    assert exec_res.status_code == 200, exec_res.text
+    res_data = exec_res.json()
+    assert res_data["total_held"] >= 1
+
+    # Verify patient was NOT anonymized because the hold on 'patients' protected them
+    with Session(engine) as db:
+        pat_after = db.get(Patient, p_id)
+        assert pat_after.full_name == "Alias Protected Patient"
+
+
+def test_retention_hard_delete_refuses_patients_with_clinical_encounters(
+    client, multi_tenant_env, superuser_headers, monkeypatch
+):
+    # N-03: Hard delete must refuse to delete patients who have clinical encounter dependencies
+    from backend.domains.encounters.models import (
+        PatientEncounter,
+        EncounterTypeEnum,
+        EncounterStatusEnum,
+    )
+    from backend.domains.identity.models import Department
+
+    monkeypatch.setattr(settings, "PRIVACY_ALLOW_RETENTION_EXECUTE", True)
+    monkeypatch.setattr(settings, "ENVIRONMENT", "testing")
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    now = datetime.now(timezone.utc)
+    old_date = now - timedelta(days=500)
+
+    with Session(engine) as db:
+        doctor = db.query(User).filter_by(email="doctor@default.com").one()
+        dept = db.query(Department).first()
+
+        p_with_enc = Patient(
+            mrn="HARD-DEL-ENC",
+            full_name="Patient With Clinical Encounter",
+            gender=GenderEnum.MALE,
+            date_of_birth=old_date,
+            is_active=False,
+            updated_at=old_date,
+        )
+        p_empty = Patient(
+            mrn="HARD-DEL-EMPTY",
+            full_name="Empty Inactive Patient",
+            gender=GenderEnum.FEMALE,
+            date_of_birth=old_date,
+            is_active=False,
+            updated_at=old_date,
+        )
+        db.add_all([p_with_enc, p_empty])
+        db.commit()
+        db.refresh(p_with_enc)
+        db.refresh(p_empty)
+
+        enc = PatientEncounter(
+            patient_id=p_with_enc.id,
+            encounter_type=EncounterTypeEnum.OPD,
+            status=EncounterStatusEnum.DISCHARGED,
+            start_time=old_date,
+            end_time=old_date,
+            primary_doctor_id=doctor.id,
+            department_id=dept.id,
+        )
+        db.add(enc)
+        db.commit()
+        p_enc_id = p_with_enc.id
+        p_empty_id = p_empty.id
+
+    retention_doc = {
+        "schema_version": 1,
+        "policy_code": "retention-delete-safety",
+        "categories": [
+            {
+                "code": "patients",
+                "system_of_record": "Tenant Database",
+                "locations": ["patients"],
+                "retention_days": 365,
+                "clock_start": "last_activity",
+                "action": "delete",
+                "legal_hold_triggers": [],
+                "backup_treatment": "Exclude.",
+                "export_treatment": "Exclude.",
+            }
+        ],
+    }
+    c_res = client.post(
+        "/v1/api/privacy/policies",
+        headers=superuser_headers,
+        json={"policy_type": "RETENTION", "policy_document": retention_doc},
+    )
+    rev_id = c_res.json()["id"]
+
+    with Session(engine) as db:
+        doctor = db.query(User).filter_by(email="doctor@default.com").one()
+        r = db.get(PrivacyPolicyRevision, rev_id)
+        r.configured_by_user_id = doctor.id
+        db.commit()
+
+    client.post(
+        f"/v1/api/privacy/policies/{rev_id}/approve",
+        headers=superuser_headers,
+        json={"approval_reference": "DEL-SAFE-APP"},
+    )
+
+    exec_res = client.post(
+        "/v1/api/privacy/retention/execute",
+        headers=superuser_headers,
+        json={
+            "policy_revision_id": rev_id,
+            "categories": ["patients"],
+            "approval_reference": "DEL-SAFE-EXEC",
+            "dry_run": False,
+            "confirm_destructive_execution": True,
+        },
+    )
+    assert exec_res.status_code == 200
+
+    # Verify: Patient with encounter is NOT deleted; Patient without encounter IS deleted!
+    with Session(engine) as db:
+        assert db.get(Patient, p_enc_id) is not None
+        assert db.get(Patient, p_empty_id) is None
+
+
+def test_consent_carry_over_does_not_resurrect_withdrawn_consent(
+    client, multi_tenant_env, superuser_headers, monkeypatch
+):
+    # N-04: Withdrawn consent under v1 must NOT be carried over to v2 as granted
+    monkeypatch.setattr(settings, "PRIVACY_ALLOW_AUDIT_ONLY", True)
+    monkeypatch.setattr(settings, "ENVIRONMENT", "testing")
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    now = datetime.now(timezone.utc)
+
+    with Session(engine) as db:
+        p_withdrawn = Patient(
+            mrn="WITHDRAWN-01",
+            full_name="Withdrawn Patient",
+            gender=GenderEnum.FEMALE,
+            date_of_birth=now - timedelta(days=10000),
+            is_active=True,
+        )
+        p_granted = Patient(
+            mrn="GRANTED-01",
+            full_name="Granted Patient",
+            gender=GenderEnum.MALE,
+            date_of_birth=now - timedelta(days=10000),
+            is_active=True,
+        )
+        db.add_all([p_withdrawn, p_granted])
+        db.commit()
+        db.refresh(p_withdrawn)
+        db.refresh(p_granted)
+        p_w_id = p_withdrawn.id
+        p_g_id = p_granted.id
+
+    v1_doc = json.loads((FIXTURES / "privacy_policy_strict.json").read_text(encoding="utf-8"))
+    v1_doc["allow_care_flow_consent_gating"] = True
+    c1 = client.post(
+        "/v1/api/privacy/policies",
+        headers=superuser_headers,
+        json={"policy_type": "CONSENT", "policy_document": v1_doc},
+    )
+    rev1_id = c1.json()["id"]
+
+    with Session(engine) as db:
+        doctor = db.query(User).filter_by(email="doctor@default.com").one()
+        r1 = db.get(PrivacyPolicyRevision, rev1_id)
+        r1.configured_by_user_id = doctor.id
+        db.commit()
+
+    client.post(f"/v1/api/privacy/policies/{rev1_id}/approve", headers=superuser_headers, json={"approval_reference": "V1-APP"})
+    client.post(f"/v1/api/privacy/policies/{rev1_id}/activate-audit-only", headers=superuser_headers, json={"approval_reference": "V1-ACT"})
+
+    # 1. p_granted grants consent
+    client.post(
+        f"/v1/api/privacy/patients/{p_g_id}/consents",
+        headers=superuser_headers,
+        json={
+            "consent_type": "DATA_SHARING",
+            "purpose": "EXTERNAL_SHARING",
+            "decision": "GRANTED",
+            "source": "WRITTEN",
+            "evidence_reference": "GRANT-DOC-01",
+            "scope_type": "recipient",
+            "scope_key": "lab-01",
+            "consenter_type": "patient",
+        },
+    )
+
+    # 2. p_withdrawn grants then withdraws consent
+    client.post(
+        f"/v1/api/privacy/patients/{p_w_id}/consents",
+        headers=superuser_headers,
+        json={
+            "consent_type": "DATA_SHARING",
+            "purpose": "EXTERNAL_SHARING",
+            "decision": "GRANTED",
+            "source": "WRITTEN",
+            "evidence_reference": "GRANT-DOC-02",
+            "scope_type": "recipient",
+            "scope_key": "lab-01",
+            "consenter_type": "patient",
+        },
+    )
+    client.post(
+        f"/v1/api/privacy/patients/{p_w_id}/consents",
+        headers=superuser_headers,
+        json={
+            "consent_type": "DATA_SHARING",
+            "purpose": "EXTERNAL_SHARING",
+            "decision": "WITHDRAWN",
+            "source": "WRITTEN",
+            "evidence_reference": "WITHDRAW-DOC-01",
+            "scope_type": "recipient",
+            "scope_key": "lab-01",
+            "consenter_type": "patient",
+        },
+    )
+
+    # Create & approve v2
+    v2_doc = json.loads((FIXTURES / "privacy_policy_strict.json").read_text(encoding="utf-8"))
+    v2_doc["policy_code"] = "strict-v2"
+    v2_doc["allow_care_flow_consent_gating"] = True
+    c2 = client.post(
+        "/v1/api/privacy/policies",
+        headers=superuser_headers,
+        json={"policy_type": "CONSENT", "policy_document": v2_doc},
+    )
+    rev2_id = c2.json()["id"]
+
+    with Session(engine) as db:
+        doctor = db.query(User).filter_by(email="doctor@default.com").one()
+        r2 = db.get(PrivacyPolicyRevision, rev2_id)
+        r2.configured_by_user_id = doctor.id
+        db.commit()
+
+    client.post(f"/v1/api/privacy/policies/{rev2_id}/approve", headers=superuser_headers, json={"approval_reference": "V2-APP"})
+
+    # Activate v2 with carry-over
+    act2 = client.post(
+        f"/v1/api/privacy/policies/{rev2_id}/activate-audit-only",
+        headers=superuser_headers,
+        json={
+            "approval_reference": "V2-ACT-CARRYOVER",
+            "carry_over_from_revision_id": rev1_id,
+        },
+    )
+    assert act2.status_code == 200
+
+    # Verify: p_granted HAS carried-over consent, p_withdrawn DOES NOT have consent!
+    with Session(engine) as db:
+        g_c = db.query(PatientConsentRecord).filter_by(patient_id=p_g_id, policy_revision_id=rev2_id).first()
+        assert g_c is not None
+        assert g_c.decision == "GRANTED"
+
+        w_c = db.query(PatientConsentRecord).filter_by(patient_id=p_w_id, policy_revision_id=rev2_id).first()
+        assert w_c is None

@@ -27,6 +27,7 @@ from backend.domains.privacy.retention_service import (
     execute_retention_policy_revision,
 )
 from backend.domains.privacy.retention_preview import (
+    canonicalize_category,
     get_allowed_retention_categories,
     preview_retention_counts,
     retention_category_registry,
@@ -153,7 +154,8 @@ class RetentionExecutionRequest(BaseModel):
     policy_revision_id: int = Field(gt=0)
     categories: list[str] = Field(min_length=1, max_length=100)
     approval_reference: str = Field(min_length=3, max_length=100)
-    dry_run: bool = Field(default=False)
+    dry_run: bool = Field(default=True)
+    confirm_destructive_execution: bool = Field(default=False)
 
     @field_validator("approval_reference")
     @classmethod
@@ -183,12 +185,13 @@ class PrivacyLegalHoldCreate(BaseModel):
         cleaned = value.strip().lower()
         if not cleaned:
             raise ValueError("Value cannot be blank.")
+        canonical = canonicalize_category(cleaned)
         allowed = get_allowed_retention_categories()
-        if cleaned not in allowed:
+        if canonical not in allowed and cleaned not in allowed:
             raise ValueError(
                 f"data_category '{cleaned}' is not a recognized retention category. Allowed: {sorted(allowed)}"
             )
-        return cleaned
+        return canonical or cleaned
 
     @field_validator("reason", "hold_reference")
     @classmethod
@@ -329,11 +332,13 @@ def activate_privacy_policy_audit_only(
     revision.mode_set_at = now
     revision.mode_approval_reference = payload.approval_reference
 
-    # Carry over active consents from prior revision if requested (F-05)
+    # Carry over active consents from prior revision if requested (F-05, N-04)
     if payload.carry_over_from_revision_id:
         prior_revision = db.get(PrivacyPolicyRevision, payload.carry_over_from_revision_id)
         if prior_revision is None:
             raise HTTPException(status_code=404, detail="Prior policy revision for carry-over not found.")
+        if prior_revision.policy_type != "CONSENT":
+            raise HTTPException(status_code=422, detail="Prior policy revision must be of type CONSENT.")
         validate_policy_document("CONSENT", prior_revision.policy_document)
         new_policy = validate_policy_document("CONSENT", revision.policy_document)
         new_purpose_codes = {p.code for p in new_policy.purposes}
@@ -345,16 +350,29 @@ def activate_privacy_policy_audit_only(
         )
         eligible_purposes = allowed_purposes.intersection(new_purpose_codes)
 
-        prior_consents = db.execute(
+        # N-04: Fetch prior records and evaluate LATEST record per scope to prevent resurrecting withdrawn consent
+        all_prior = db.execute(
             select(PatientConsentRecord).where(
                 PatientConsentRecord.policy_revision_id == prior_revision.id,
-                PatientConsentRecord.decision == "GRANTED",
                 PatientConsentRecord.purpose.in_(eligible_purposes),
+            ).order_by(
+                PatientConsentRecord.recorded_at.desc(),
+                PatientConsentRecord.id.desc(),
             )
         ).scalars().all()
 
-        for old_c in prior_consents:
+        latest_map = {}
+        for record in all_prior:
+            key = (record.patient_id, record.consent_type, record.purpose, record.scope_type, record.scope_key)
+            if key not in latest_map:
+                latest_map[key] = record
+
+        for key, old_c in latest_map.items():
+            if old_c.decision != "GRANTED":
+                # N-04: Do not carry over withdrawn or declined consent
+                continue
             if old_c.expires_at is not None and old_c.expires_at <= now:
+                # Expired consent is not carried over
                 continue
             db.add(
                 PatientConsentRecord(
@@ -363,7 +381,7 @@ def activate_privacy_policy_audit_only(
                     purpose=old_c.purpose,
                     decision="GRANTED",
                     source=old_c.source,
-                    evidence_reference=f"CARRYOVER:{old_c.evidence_reference or 'LEGACY'}",
+                    evidence_reference=f"CARRYOVER:{old_c.evidence_reference or 'LEGACY'}|ORIG_DATE:{old_c.recorded_at.isoformat()}",
                     scope_type=old_c.scope_type,
                     scope_key=old_c.scope_key,
                     consenter_type=old_c.consenter_type,
@@ -659,8 +677,28 @@ def execute_retention_run(
         raise HTTPException(status_code=404, detail="Privacy policy revision not found.")
     if revision.policy_type != "RETENTION" or revision.status != "APPROVED":
         raise HTTPException(status_code=409, detail="Only an approved retention policy can be executed.")
+    # N-05: Three-party separation of duties (actor cannot be creator or approver)
     if revision.configured_by_user_id == actor.id:
-        raise HTTPException(status_code=409, detail="A different user must authorize retention execution.")
+        raise HTTPException(
+            status_code=409, detail="A different user must authorize retention execution (cannot be the user who configured it)."
+        )
+    # N-05: Deployment and environment safeguards on live destructive retention runs
+    if not payload.dry_run:
+        if not settings.PRIVACY_ALLOW_RETENTION_EXECUTE:
+            raise HTTPException(
+                status_code=409,
+                detail="Destructive retention execution is disabled by deployment configuration.",
+            )
+        if settings.ENVIRONMENT.strip().lower() in ("production", "prod"):
+            raise HTTPException(
+                status_code=409,
+                detail="Destructive retention execution cannot run directly in production.",
+            )
+        if not payload.confirm_destructive_execution:
+            raise HTTPException(
+                status_code=422,
+                detail="confirm_destructive_execution must be set to True for live destructive execution.",
+            )
     try:
         policy = validate_policy_document("RETENTION", revision.policy_document)
     except (ValidationError, ValueError) as exc:
