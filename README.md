@@ -42,6 +42,8 @@ canonical `backend.control_plane.api.routers` and
 
 ## Knowledge transfer and operations
 
+- [Master System Architecture and Technical Specification](docs/SYSTEM_ARCHITECTURE_AND_DESIGN.md) — comprehensive high-level and low-level design (HLD & LLD), covering multi-tenancy, all 24 healthcare domains, envelope encryption, background queues, and disaster recovery.
+- [System Inventory and Boundaries Specification](docs/SYSTEM_INVENTORY_AND_BOUNDARIES.md) — complete inventory of what the system contains (subsystems, tables, APIs, controls) versus what is explicitly shelved or out of scope (patient portal, tenant clinical UI).
 - [Project Report and KT](docs/PROJECT_REPORT_AND_KT.md) explains the system
   topology, database ownership, backend domains, frontend files, tests, and
   recommended reading path for a new engineer.
