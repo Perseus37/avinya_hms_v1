@@ -1,9 +1,8 @@
 """Pydantic schemas owned by the Avinya HMS domain."""
 
-from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict
 
 from backend.domains.diagnostics.models import OrderStatusEnum, ServiceTypeEnum, TaskStatusEnum
 
@@ -76,6 +75,29 @@ class DiagnosticTaskResponse(BaseModel):
     result_notes: Optional[str] = None
     is_critical_panic: bool = False
     rejection_reason: Optional[str] = None
+    delta_check_flag: Optional[str] = None
+    previous_result_value: Optional[str] = None
+    delta_percentage: Optional[float] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LabDeltaCheckConfigCreate(BaseModel):
+    service_id: int
+    parameter_name: str
+    max_absolute_delta: Optional[float] = None
+    max_percentage_delta: Optional[float] = None
+    lookback_hours: int = 48
+    severity: str = "WARNING"
+
+
+class LabDeltaCheckConfigResponse(BaseModel):
+    id: int
+    service_id: int
+    parameter_name: str
+    max_absolute_delta: Optional[float] = None
+    max_percentage_delta: Optional[float] = None
+    lookback_hours: int
+    severity: str
     model_config = ConfigDict(from_attributes=True)
 
 class DiagnosticOrderResponse(BaseModel):

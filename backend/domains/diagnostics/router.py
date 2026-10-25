@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Optional
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -12,6 +12,7 @@ from backend.domains.patients.models import Patient
 from backend.domains.diagnostics.models import (
     DiagnosticOrder,
     DiagnosticTask,
+    LabDeltaCheckConfig,
     OrderStatusEnum,
     ServiceBundleMapping,
     ServiceCatalog,
@@ -19,7 +20,23 @@ from backend.domains.diagnostics.models import (
     TaskStatusEnum,
 )
 from backend.schemas.common import PaginatedResponse
-from backend.domains.diagnostics.schemas import DiagnosticOrderCreate, DiagnosticOrderResponse, DiagnosticOrderUpdate, DiagnosticTaskResponse, ServiceBundleMappingCreate, ServiceBundleMappingResponse, ServiceCatalogCreate, ServiceCatalogResponse, ServiceCatalogUpdate, ServiceCategoryCreate, ServiceCategoryResponse, ServiceCategoryUpdate, TaskResultEntry
+from backend.domains.diagnostics.schemas import (
+    DiagnosticOrderCreate,
+    DiagnosticOrderResponse,
+    DiagnosticOrderUpdate,
+    DiagnosticTaskResponse,
+    LabDeltaCheckConfigCreate,
+    LabDeltaCheckConfigResponse,
+    ServiceBundleMappingCreate,
+    ServiceBundleMappingResponse,
+    ServiceCatalogCreate,
+    ServiceCatalogResponse,
+    ServiceCatalogUpdate,
+    ServiceCategoryCreate,
+    ServiceCategoryResponse,
+    ServiceCategoryUpdate,
+    TaskResultEntry,
+)
 from backend.domains.diagnostics.services import explode_clinical_orders
 from backend.domains.billing.services import (
     auto_bill_diagnostic_order,
@@ -568,6 +585,25 @@ def submit_task_result(
             task.is_critical_panic = payload.is_critical_panic
             task.performed_by_id = current_user.id
 
+            # Evaluate LIS Delta Check against patient history
+            try:
+                from backend.domains.clinical.services import evaluate_lab_delta_check
+                delta_eval = evaluate_lab_delta_check(
+                    session=db,
+                    patient_id=task.order.patient_id,
+                    service_id=task.service_id,
+                    current_value_str=payload.result_value,
+                    current_task_id=task.id,
+                )
+                task.delta_check_flag = delta_eval.get("delta_flag")
+                task.previous_result_value = delta_eval.get("previous_value")
+                task.delta_percentage = delta_eval.get("percentage_delta")
+                if delta_eval.get("delta_flag") == "DELTA_EXCEEDED":
+                    delta_note = delta_eval.get("detail", "")
+                    task.result_notes = f"{task.result_notes or ''} [{delta_note}]".strip()
+            except Exception:
+                pass
+
         task.status = payload.status
 
     all_tasks = task.order.tasks
@@ -595,7 +631,15 @@ def submit_task_result(
             },
         )
 
-    return {"status": "success", "message": f"Task {task_id} status advanced to {task.status.value}."}
+    return {
+        "status": "success",
+        "message": f"Task {task_id} status advanced to {task.status.value}.",
+        "task_id": task.id,
+        "delta_check_flag": task.delta_check_flag,
+        "previous_result_value": task.previous_result_value,
+        "delta_percentage": task.delta_percentage,
+        "result_notes": task.result_notes,
+    }
 
 @router.get(
     "/tasks/panic-alerts",
@@ -622,3 +666,45 @@ def list_critical_panic_lab_alerts(
     if any(not decision.allowed for decision in decisions):
         raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
     return tasks
+
+
+# -----------------------------------------------------------------------------
+# Enterprise LIS Delta Check Configurations
+# -----------------------------------------------------------------------------
+
+@router.post("/delta-configs", response_model=LabDeltaCheckConfigResponse, status_code=status.HTTP_201_CREATED)
+def create_or_update_delta_config(
+    payload: LabDeltaCheckConfigCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("mdm:write", "diagnostics:write")),
+):
+    """Configures laboratory delta check thresholds for acute result shift detection."""
+    service = db.get(ServiceCatalog, payload.service_id)
+    if not service or not service.is_active:
+        raise HTTPException(status_code=404, detail="Active service not found in catalog.")
+
+    existing = db.execute(
+        select(LabDeltaCheckConfig).where(LabDeltaCheckConfig.service_id == payload.service_id)
+    ).scalar_one_or_none()
+    if existing:
+        existing.parameter_name = payload.parameter_name
+        existing.max_absolute_delta = payload.max_absolute_delta
+        existing.max_percentage_delta = payload.max_percentage_delta
+        existing.lookback_hours = payload.lookback_hours
+        existing.severity = payload.severity
+        cfg = existing
+    else:
+        cfg = LabDeltaCheckConfig(**payload.model_dump())
+        db.add(cfg)
+    db.commit()
+    db.refresh(cfg)
+    return cfg
+
+
+@router.get("/delta-configs", response_model=List[LabDeltaCheckConfigResponse])
+def list_delta_configs(
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("diagnostics:read", "mdm:read")),
+):
+    """Lists all configured laboratory delta check thresholds."""
+    return list(db.execute(select(LabDeltaCheckConfig).order_by(LabDeltaCheckConfig.id.asc())).scalars().all())
