@@ -215,7 +215,7 @@ def run_restore_drill(
                 if not re.match(r"^[a-zA-Z0-9_]+$", tbl):
                     continue
                 try:
-                    count = session.execute(text(f'SELECT COUNT(*) FROM "{tbl}"')).scalar_one()
+                    count = session.execute(text(f'SELECT COUNT(*) FROM "{tbl}"')).scalar_one()  # nosec B608
                     table_counts[tbl] = count
                 except Exception:
                     table_counts[tbl] = -1

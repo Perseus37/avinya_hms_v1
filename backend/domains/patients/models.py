@@ -7,7 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.core.audit import AuditMixin
 from backend.core.database import Base
-from backend.domains.identity.models import BloodGroupEnum, GenderEnum
+from backend.domains.identity.models import BloodGroupEnum, GenderEnum, User
 
 
 class AllergyCategoryEnum(str, PyEnum):
