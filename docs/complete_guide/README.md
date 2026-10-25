@@ -19,7 +19,11 @@ docs/complete_guide/
 ├── 03_END_TO_END_CLINICAL_AND_BUSINESS_WORKFLOWS.md   <-- Detailed walkthrough of all 26 hospital domains & safety gates
 ├── 04_OPERATOR_AND_ADMINISTRATOR_MANUAL.md            <-- Control plane, tenant onboarding, backups, and migrations
 ├── 05_TROUBLESHOOTING_ERROR_HANDLING_AND_RUNBOOKS.md  <-- Error codes, root causes, diagnostics & emergency runbooks
-└── 06_SECURITY_PRIVACY_AND_COMPLIANCE.md              <-- Envelope encryption, DPDP Act 2023, ABDM, NHCX & audit
+├── 06_SECURITY_PRIVACY_AND_COMPLIANCE.md              <-- Envelope encryption, DPDP Act 2023, ABDM, NHCX & audit
+├── 07_MASTER_OPERATIONS_RUNBOOK.md                    <-- Daily maintenance SOPs, PostgreSQL tuning, Redis & SLAs
+├── 08_API_AND_INTEGRATION_REFERENCE.md                <-- Native HL7 v2 MLLP (:2575), FHIR R4, ABDM & Webhooks
+├── 09_DATABASE_SCHEMA_AND_DATA_DICTIONARY.md          <-- 70+ tables, constraints, fields & sandbox classification
+└── 10_TESTING_QA_AND_RELEASE_GOVERNANCE.md            <-- 421 tests, Bandit SAST, pip-audit, and release gates
 ```
 
 ---
