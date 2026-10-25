@@ -180,3 +180,76 @@ def test_ddi_standalone_precheck_endpoint(client, doctor_headers, pharmacist_hea
     assert len(data["findings"]) >= 1
     assert data["findings"][0]["severity"] == "CRITICAL_HARD_STOP"
 
+
+
+def test_blank_generic_name_does_not_trigger_false_hard_stop(client, doctor_headers, pharmacist_headers):
+    """
+    Verifies that a medication with a blank/empty generic name does NOT falsely match
+    all drug classes or trigger spurious critical hard stops.
+    """
+    p, enc = _create_patient_encounter(client, doctor_headers)
+    blank_med = _create_medication(client, pharmacist_headers, "MED_BLANK_GEN_01", "HerbalSupp", "   ")
+    paracetamol = _create_medication(client, pharmacist_headers, "MED_PCM_01", "Dolo 650", "Paracetamol")
+
+    res = client.post(
+        "/v1/api/pharmacy/prescriptions",
+        headers=doctor_headers,
+        json={
+            "encounter_id": enc["id"],
+            "items": [
+                {"medication_id": blank_med["id"], "dosage_instruction": "1 OD", "requested_quantity": 10},
+                {"medication_id": paracetamol["id"], "dosage_instruction": "650mg SOS", "requested_quantity": 10},
+            ],
+        },
+    )
+    assert res.status_code == 201
+
+
+def test_ddi_cross_encounter_active_prescription_check(client, doctor_headers, pharmacist_headers):
+    """
+    Verifies that active prescriptions from an EARLIER encounter for the same patient
+    are checked when issuing a new prescription in a subsequent encounter.
+    """
+    # 1. First Encounter: prescribe Nitroglycerin
+    p, enc1 = _create_patient_encounter(client, doctor_headers)
+    nitro = _create_medication(client, pharmacist_headers, "MED_NITRO_CROSS_01", "Nitrocontin", "Nitroglycerin")
+    sildenafil = _create_medication(client, pharmacist_headers, "MED_SILD_CROSS_01", "Revatio", "Sildenafil")
+
+    res_rx1 = client.post(
+        "/v1/api/pharmacy/prescriptions",
+        headers=doctor_headers,
+        json={
+            "encounter_id": enc1["id"],
+            "items": [
+                {"medication_id": nitro["id"], "dosage_instruction": "2.6mg BD", "requested_quantity": 30},
+            ],
+        },
+    )
+    assert res_rx1.status_code == 201
+
+    # 2. Second Encounter for the SAME patient: prescribe Sildenafil -> Hard stop contraindication
+    enc2_res = client.post(
+        "/v1/api/adt/encounters",
+        headers=doctor_headers,
+        json={
+            "patient_id": p["id"],
+            "encounter_type": "ER",
+            "primary_doctor_id": 2,
+            "department_id": 1,
+        },
+    )
+    assert enc2_res.status_code == 201
+    enc2 = enc2_res.json()
+
+    res_rx2 = client.post(
+        "/v1/api/pharmacy/prescriptions",
+        headers=doctor_headers,
+        json={
+            "encounter_id": enc2["id"],
+            "items": [
+                {"medication_id": sildenafil["id"], "dosage_instruction": "50mg PRN", "requested_quantity": 4},
+            ],
+        },
+    )
+    assert res_rx2.status_code == 409
+    assert "CLINICAL HARD-STOP" in res_rx2.json()["message"]

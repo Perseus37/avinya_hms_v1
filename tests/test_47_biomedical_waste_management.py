@@ -240,3 +240,4 @@ def test_biomedical_waste_compliance_summary(client, superuser_headers):
     assert "BLUE" in summary["by_category"]
     assert "by_department" in summary
     assert "Bio-Medical Waste Management Rules 2016" in summary["statutory_rules"]
+

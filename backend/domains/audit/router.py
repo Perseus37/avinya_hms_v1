@@ -136,9 +136,9 @@ def _collect_security_events(
     if not category or category.upper() == "DATA_BREACH":
         q_br = select(PrivacyDataBreachIncident)
         if from_time:
-            q_br = q_br.where(PrivacyDataBreachIncident.detected_at >= from_time)
+            q_br = q_br.where(PrivacyDataBreachIncident.created_at >= from_time)
         if to_time:
-            q_br = q_br.where(PrivacyDataBreachIncident.detected_at <= to_time)
+            q_br = q_br.where(PrivacyDataBreachIncident.created_at <= to_time)
         breaches = db.execute(q_br.order_by(desc(PrivacyDataBreachIncident.id)).limit(limit)).scalars().all()
 
         for br in breaches:
@@ -147,7 +147,7 @@ def _collect_security_events(
                 events.append(
                     SiemEvent(
                         event_id=f"AUDIT-BREACH-{br.id}",
-                        timestamp=br.detected_at if br.detected_at.tzinfo else br.detected_at.replace(tzinfo=timezone.utc),
+                        timestamp=br.created_at if br.created_at.tzinfo else br.created_at.replace(tzinfo=timezone.utc),
                         category="DATA_BREACH",
                         severity=sev.upper(),
                         action=f"BREACH_{br.status.value if hasattr(br.status, 'value') else str(br.status)}",
@@ -155,8 +155,8 @@ def _collect_security_events(
                         details={
                             "incident_code": br.incident_code,
                             "title": br.title,
-                            "affected_records_count": br.affected_records_estimated,
-                            "certin_reported": br.certin_notified_at is not None,
+                            "affected_records_count": br.estimated_affected_subjects,
+                            "certin_reported": br.reported_to_authority_at is not None,
                         },
                     )
                 )
@@ -273,10 +273,58 @@ def stream_security_events(
 )
 def test_siem_webhook_connectivity(
     payload: SiemWebhookTestRequest,
-    actor: User = Depends(RequirePermission("privacy:write")),
+    actor: User = Depends(RequirePermission("system:admin")),
 ):
-    """Validates external SIEM ingestion pipeline connectivity."""
+    """Validates external SIEM ingestion pipeline connectivity with SSRF guards."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
     import httpx
+
+    parsed = urlparse(payload.webhook_url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid webhook URL scheme. Only http/https supported.",
+        )
+    if not parsed.hostname:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid webhook URL: missing hostname.",
+        )
+
+    # SSRF Guard: Disallow loopback, private, link-local, and cloud-metadata addresses
+    hostname = parsed.hostname.strip().lower()
+    if hostname in ("localhost", "127.0.0.1", "::1", "169.254.169.254", "metadata.google.internal"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SSRF Protection: Webhook destination resolves to a restricted loopback or internal address.",
+        )
+
+    try:
+        addr_info = socket.getaddrinfo(hostname, None)
+        for _, _, _, _, sockaddr in addr_info:
+            ip_str = sockaddr[0]
+            try:
+                ip_obj = ipaddress.ip_address(ip_str)
+                if (
+                    ip_obj.is_private
+                    or ip_obj.is_loopback
+                    or ip_obj.is_link_local
+                    or ip_obj.is_multicast
+                    or ip_obj.is_reserved
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="SSRF Protection: Webhook destination resolves to a restricted internal or link-local address.",
+                    )
+            except ValueError:
+                pass
+    except socket.gaierror:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot resolve webhook host '{hostname}'.",
+        )
 
     test_payload = {
         "event": "SIEM_CONNECTIVITY_PROBE",
@@ -295,7 +343,7 @@ def test_siem_webhook_connectivity(
             return {
                 "success": resp.is_success,
                 "status_code": resp.status_code,
-                "response_text": resp.text[:200],
+                "message": "Probe delivered successfully." if resp.is_success else "External SIEM returned error status.",
             }
     except Exception as exc:
         raise HTTPException(

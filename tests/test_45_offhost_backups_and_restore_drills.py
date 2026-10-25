@@ -119,9 +119,14 @@ def test_deliver_backup_offhost_s3_configuration(temp_backup_env, monkeypatch):
     monkeypatch.setattr(settings, "BACKUP_OFFHOST_S3_BUCKET", "avinya-dr-bucket")
     monkeypatch.setattr(settings, "BACKUP_OFFHOST_S3_PREFIX", "dr-backups")
 
-    res = deliver_backup_offhost(backup_file, checksum_file, "hospital-alpha")
-    assert res["delivered"] is True
-    assert res["s3_destination"] == f"s3://avinya-dr-bucket/dr-backups/hospital-alpha/{backup_file.name}"
+    with patch("boto3.client") as mock_boto_client:
+        mock_s3 = MagicMock()
+        mock_boto_client.return_value = mock_s3
+
+        res = deliver_backup_offhost(backup_file, checksum_file, "hospital-alpha")
+        assert res["delivered"] is True
+        assert res["s3_destination"] == f"s3://avinya-dr-bucket/dr-backups/hospital-alpha/{backup_file.name}"
+        assert mock_s3.upload_file.call_count == 2
 
 
 def test_run_restore_drill_end_to_end(temp_backup_env, tmp_path):
@@ -157,17 +162,18 @@ def test_run_restore_drill_end_to_end(temp_backup_env, tmp_path):
         with patch("backend.scripts.restore_drill.Session", return_value=mock_session_inst):
             report = run_restore_drill(
                 backup_file=backup_file,
-                tenant_slug="apollo",
+                tenant_slug="apollo-central-delhi",
                 encryption_key=secret_key,
                 max_acceptable_rto_seconds=120,
                 output_report_path=report_file,
             )
 
-        assert report["tenant_slug"] == "apollo"
+        assert report["tenant_slug"] == "apollo-central-delhi"
         assert report["checksum_verified"] is True
         assert report["sla_rto_passed"] is True
         assert report["verification_status"] == "PASSED"
         assert report["verified_tables_count"] == 6
+        assert report["measured_rpo_seconds"] is None
         assert report["missing_critical_tables"] == []
         assert report_file.exists()
 

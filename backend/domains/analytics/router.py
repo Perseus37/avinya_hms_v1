@@ -227,6 +227,7 @@ def get_analytics_dashboard(
     as_of = datetime.now(timezone.utc)
     balance_expression = (
         Invoice.total_amount_paise
+        + func.coalesce(Invoice.tax_amount_paise, 0)
         - Invoice.discount_amount_paise
         - Invoice.amount_paid_paise
     )
@@ -1563,7 +1564,12 @@ def get_financial_revenue_cycle(
         ),
         ("over_90_days_paise", Invoice.created_at < now_utc - timedelta(days=90)),
     ]
-    balance = Invoice.total_amount_paise - Invoice.discount_amount_paise - Invoice.amount_paid_paise
+    balance = (
+        Invoice.total_amount_paise
+        + func.coalesce(Invoice.tax_amount_paise, 0)
+        - Invoice.discount_amount_paise
+        - Invoice.amount_paid_paise
+    )
     ar_row = db.execute(
         select(
             func.coalesce(func.sum(balance), 0).label("total"),

@@ -102,7 +102,8 @@ def enqueue_task(
         r = get_redis()
         pipe = r.pipeline()
         pipe.hset(f"{KEY_TASK_PREFIX}{task_id}", mapping=task_data)
-        pipe.expire(f"{KEY_TASK_PREFIX}{task_id}", 86400 * 7)  # 7-day retention for task status
+        task_ttl = 3600 if task_name == "email.send" else (86400 * 7)
+        pipe.expire(f"{KEY_TASK_PREFIX}{task_id}", task_ttl)
 
         if delay_seconds > 0:
             pipe.zadd(KEY_SCHEDULED_TASKS, {task_id: scheduled_time})
@@ -227,6 +228,8 @@ def mark_task_completed(task_id: str, result: Optional[dict[str, Any]] = None) -
             mapping["result"] = json.dumps(result)
 
         r.hset(f"{KEY_TASK_PREFIX}{task_id}", mapping=mapping)
+        r.hdel(f"{KEY_TASK_PREFIX}{task_id}", "payload")
+        r.expire(f"{KEY_TASK_PREFIX}{task_id}", 3600)
         QUEUE_JOBS_TOTAL.labels(job_name=task_name, status="success").inc()
     except Exception as exc:
         logger.error("Failed to mark task %s completed: %s", task_id, exc)
@@ -322,9 +325,11 @@ def handle_email_send(payload: dict[str, Any]) -> dict[str, Any]:
 @registry.register("privacy.retention.execute")
 def handle_retention_execute(payload: dict[str, Any]) -> dict[str, Any]:
     """
-    Executes retention policy categories against a specific hospital tenant DB.
+    Executes retention policy categories against a specific hospital tenant DB
+    with strict two-person separation of duties and environment protection guards.
     """
     from datetime import datetime, timezone
+    from backend.core.config import settings
     from backend.control_plane.models import TenantRegistry
     from backend.domains.identity.models import User
     from backend.domains.privacy.models import PrivacyPolicyRevision
@@ -335,6 +340,13 @@ def handle_retention_execute(payload: dict[str, Any]) -> dict[str, Any]:
     category_codes = payload["category_codes"]
     dry_run = payload.get("dry_run", False)
     approval_reference = payload.get("approval_reference", f"AUTO_WORKER_{int(time.time())}")
+
+    # Guard: Fail closed if destructive execution is attempted without deployment permissions
+    if not dry_run:
+        if not getattr(settings, "PRIVACY_ALLOW_RETENTION_EXECUTE", False):
+            raise PermissionError("Destructive retention execution is disabled by deployment configuration (PRIVACY_ALLOW_RETENTION_EXECUTE=False).")
+        if settings.ENVIRONMENT.strip().lower() in ("production", "prod"):
+            raise PermissionError("Destructive retention execution cannot run directly in production.")
 
     # Resolve tenant DB from control plane
     with ControlSessionLocal() as cp_db:
@@ -357,15 +369,29 @@ def handle_retention_execute(payload: dict[str, Any]) -> dict[str, Any]:
         if not revision:
             raise ValueError(f"Approved retention policy revision {policy_revision_id} not found.")
 
-        # Resolve system or operator actor
+        # Resolve system or operator actor with strict separation of duties
         actor_id = payload.get("actor_user_id")
         actor = None
         if actor_id:
-            actor = tenant_db.query(User).filter(User.id == actor_id).first()
-        if not actor:
-            actor = tenant_db.query(User).first()
+            actor = tenant_db.query(User).filter(User.id == actor_id, User.is_active == True).first()
+
+        # If no actor provided or if the actor configured this revision, find a distinct active user
+        if not actor or (revision.configured_by_user_id and actor.id == revision.configured_by_user_id):
+            distinct_actor = tenant_db.query(User).filter(
+                User.is_active == True,
+                User.id != revision.configured_by_user_id,
+            ).first()
+            if distinct_actor:
+                actor = distinct_actor
+            elif not actor:
+                actor = tenant_db.query(User).first()
+
         if not actor:
             raise ValueError("No user found in tenant database to attribute retention run.")
+
+        # Ensure two-person rule for live destructive execution
+        if not dry_run and revision.configured_by_user_id and actor.id == revision.configured_by_user_id:
+            raise PermissionError("Two-person separation of duties violation: retention executor cannot be the user who configured the policy revision.")
 
         result = execute_retention_policy_revision(
             tenant_db,
@@ -383,11 +409,19 @@ def handle_retention_execute(payload: dict[str, Any]) -> dict[str, Any]:
 def handle_scheduled_retention_sweep(payload: dict[str, Any]) -> dict[str, Any]:
     """
     Scans all active tenants and enqueues scheduled retention execution
-    for any approved active retention policy revisions.
+    for any approved active retention policy revisions. Always forces dry-run
+    in production or when destructive execution is disabled.
     """
+    from backend.core.config import settings
     from backend.control_plane.models import TenantRegistry
     from backend.domains.privacy.models import PrivacyPolicyRevision
     from backend.domains.privacy.policy_schema import validate_policy_document
+
+    is_destructive_allowed = (
+        getattr(settings, "PRIVACY_ALLOW_RETENTION_EXECUTE", False)
+        and settings.ENVIRONMENT.strip().lower() not in ("production", "prod")
+    )
+    safe_dry_run = payload.get("dry_run", True) if is_destructive_allowed else True
 
     executed_tenants = []
     with ControlSessionLocal() as cp_db:
@@ -411,7 +445,7 @@ def handle_scheduled_retention_sweep(payload: dict[str, Any]) -> dict[str, Any]:
                                 "tenant_subdomain": t.subdomain_slug,
                                 "policy_revision_id": revision.id,
                                 "category_codes": categories,
-                                "dry_run": payload.get("dry_run", False),
+                                "dry_run": safe_dry_run,
                                 "approval_reference": f"CRON_DAILY_SWEEP_{int(time.time())}",
                             },
                         )
@@ -419,5 +453,5 @@ def handle_scheduled_retention_sweep(payload: dict[str, Any]) -> dict[str, Any]:
             except Exception as e:
                 logger.warning("Error evaluating scheduled retention for tenant %s: %s", t.subdomain_slug, e)
 
-    return {"status": "SUCCESS", "enqueued_tenants": executed_tenants}
+    return {"status": "SUCCESS", "enqueued_tenants": executed_tenants, "dry_run": safe_dry_run}
 

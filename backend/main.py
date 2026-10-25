@@ -3,6 +3,7 @@ from backend.security.envelope import _get_master_key
 import contextvars
 import logging
 import re
+import secrets
 import time
 import uuid
 
@@ -363,8 +364,28 @@ def api_home():
 # -----------------------------------------------------------------------------
 @app.get("/metrics", include_in_schema=False)
 @v1_app.get("/metrics", include_in_schema=False)
-def prometheus_metrics():
+def prometheus_metrics(request: Request):
     """Exposes application and runtime metrics in Prometheus text format."""
+    required_token = settings.METRICS_SCRAPE_TOKEN
+    if required_token:
+        auth_header = request.headers.get("Authorization", "")
+        token = ""
+        if auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1].strip()
+        elif request.headers.get("X-Metrics-Token"):
+            token = request.headers.get("X-Metrics-Token", "").strip()
+
+        if not token or not secrets.compare_digest(token, required_token):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Unauthorized: valid metrics scrape token required.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    elif str(settings.ENVIRONMENT).lower() in {"production", "prod"}:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: METRICS_SCRAPE_TOKEN must be configured in production environments.",
+        )
     return Response(content=get_prometheus_metrics_bytes(), media_type=CONTENT_TYPE_LATEST)
 
 @app.get("/health", tags=["System Health"])

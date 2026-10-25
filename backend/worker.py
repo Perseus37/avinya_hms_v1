@@ -81,7 +81,7 @@ def run_worker_loop(
             last_periodic_check = now
             logger.info("Triggering periodic scheduled retention check.")
             try:
-                enqueue_task("privacy.retention.scheduled_daily_sweep", {}, sync_fallback=False)
+                enqueue_task("privacy.retention.scheduled_daily_sweep", {"dry_run": True}, sync_fallback=False)
             except Exception as e:
                 logger.warning("Failed to enqueue periodic retention sweep: %s", e)
 

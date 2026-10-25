@@ -728,6 +728,47 @@ def _scrub_sandbox_tenant_data(sandbox_db: str) -> None:
                     if hasattr(u, "phone_number"):
                         u.phone_number = None
 
+        if "patient_insurance_policies" in table_names:
+            from backend.domains.insurance.models import PatientInsurancePolicy
+            policies = s_session.execute(select(PatientInsurancePolicy)).scalars().all()
+            for pol in policies:
+                pol.policy_number = f"POL-SBX-{pol.id}"
+                pol.member_id = f"MEM-SBX-{pol.id}"
+
+        if "insurance_pre_auths" in table_names:
+            from backend.domains.insurance.models import InsurancePreAuth
+            preauths = s_session.execute(select(InsurancePreAuth)).scalars().all()
+            for pa in preauths:
+                pa.clinical_justification = None
+                pa.tpa_query_remarks = None
+                pa.tpa_reference_number = f"TPA-SBX-{pa.id}"
+
+        if "birth_records" in table_names:
+            from backend.domains.clinical.models import BirthRecord
+            births = s_session.execute(select(BirthRecord)).scalars().all()
+            for b in births:
+                b.baby_full_name = f"Sandbox Baby {b.id}"
+                b.clinical_notes = None
+
+        if "death_records" in table_names:
+            from backend.domains.clinical.models import DeathRecord
+            deaths = s_session.execute(select(DeathRecord)).scalars().all()
+            for d in deaths:
+                d.body_handed_over_to = "Sandbox Informant"
+                d.antecedent_cause_notes = None
+
+        if "medico_legal_cases" in table_names:
+            from backend.domains.clinical.models import MedicoLegalCase
+            mlcs = s_session.execute(select(MedicoLegalCase)).scalars().all()
+            for m in mlcs:
+                m.brought_by_name = "Sandbox Informant"
+                m.brought_by_relation = None
+                m.brought_by_phone = "9000000000"
+                m.alleged_history = "Anonymized sandbox history"
+                m.identification_marks = "Anonymized"
+                m.police_station_name = "Sandbox PS"
+                m.fir_number = None
+
         s_session.commit()
 
 @router.post("/tenants/{slug}/clone-sandbox")
