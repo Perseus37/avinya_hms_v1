@@ -42,6 +42,7 @@ canonical `backend.control_plane.api.routers` and
 
 ## Knowledge transfer and operations
 
+- **[Complete Enterprise Guide & System Manuals](docs/complete_guide/README.md)** — the definitive, end-to-end documentation suite explaining the entire platform conceptually and operationally without needing to read code, complete with error troubleshooting runbooks and clinical safety guides.
 - [Enterprise Master System Documentation](docs/ENTERPRISE_SYSTEM_DOCUMENTATION.md) — comprehensive enterprise master handbook detailing system topology, all 26 domains, clinical safety (CPOE, NEWS2, BCMA, Controlled Substances Vault), regulatory gateways (ABDM M1-M3, NHCX, HL7 v2 MLLP), RCM automated tariff/census billing, and NABH 5th Ed / JCI 7th Ed quality indicators.
 - [Master System Architecture and Technical Specification](docs/SYSTEM_ARCHITECTURE_AND_DESIGN.md) — comprehensive high-level and low-level design (HLD & LLD), covering multi-tenancy, all 24 healthcare domains, envelope encryption, background queues, and disaster recovery.
 - [System Inventory and Boundaries Specification](docs/SYSTEM_INVENTORY_AND_BOUNDARIES.md) — complete inventory of what the system contains (subsystems, tables, APIs, controls) versus what is explicitly shelved or out of scope (patient portal, tenant clinical UI).
