@@ -55,6 +55,7 @@ from backend.domains.service_ops import router as service_ops_router
 from backend.domains.privacy import router as privacy_router
 from backend.domains.workforce import router as workforce_router
 from backend.domains.audit import router as audit_router
+from backend.domains.abdm import router as abdm_router
 
 # -----------------------------------------------------------------------------
 # M1 FIX: Context-Safe Request ID Logging Across All Libraries
@@ -352,6 +353,7 @@ for target in (v1_app, app):
         dependencies=[Depends(RequireLicensedModule("mortuary"))],
     )
     target.include_router(service_ops_router.bmw_router)
+    target.include_router(abdm_router.router)
     target.include_router(privacy_router)
     target.include_router(
         workforce_router,
