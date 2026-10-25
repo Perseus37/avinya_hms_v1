@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger('avinya.auth')
 """Authentication and user identity APIs.
 
 This router belongs to the identity and access domain. It manages sessions,
@@ -865,6 +867,18 @@ def unlock_user(
     user.status = UserStatusEnum.ACTIVE
     user.failed_login_attempts = 0
     user.locked_until = None
+    db.info["audit_user_id"] = current_user.id
+    from backend.domains.privacy.models import PrivacyDecisionAudit
+    db.add(
+        PrivacyDecisionAudit(
+            actor_user_id=current_user.id,
+            data_use_point="identity.user.unlock",
+            mode="ENFORCE",
+            result="ALLOW",
+            reason_code=f"ADMIN_UNLOCK:unlocked_user_id={user.id}:email={user.email}",
+        )
+    )
+    logger.info("Admin %s explicitly unlocked user %s (id=%d)", current_user.email, user.email, user.id)
     db.commit()
     if redis_client:
         try:

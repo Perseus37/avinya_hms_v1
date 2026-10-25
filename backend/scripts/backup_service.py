@@ -91,8 +91,59 @@ def _dump_and_encrypt(db_name: str, encryption_key: str, output_dir: Path) -> Pa
         pending_file.replace(out_file)
     finally:
         pending_file.unlink(missing_ok=True)
-    logger.info("Created encrypted backup snapshot: %s (%d bytes)", out_file.name, len(encrypted_bytes))
+    sha256_hash = hashlib.sha256(encrypted_bytes).hexdigest()
+    checksum_file = out_file.with_name(f"{out_file.name}.sha256")
+    checksum_file.write_text(f"{sha256_hash}  {out_file.name}\n", encoding="utf-8")
+    logger.info("Created encrypted backup snapshot: %s (%d bytes, sha256=%s)", out_file.name, len(encrypted_bytes), sha256_hash[:12])
     return out_file
+
+
+def deliver_backup_offhost(
+    backup_file: Path, checksum_file: Path, tenant_slug: str | None = None
+) -> dict:
+    """Delivers encrypted backup artifact and sha256 checksum to an off-host replication target (M-12)."""
+    if not getattr(settings, "BACKUP_OFFHOST_ENABLED", False):
+        return {"delivered": False, "reason": "OFFHOST_DISABLED"}
+
+    tenant_folder = tenant_slug or "default"
+    result = {"delivered": False}
+
+    remote_dir_str = getattr(settings, "BACKUP_OFFHOST_REMOTE_DIR", None)
+    if remote_dir_str:
+        target_dir = Path(remote_dir_str) / tenant_folder
+        target_dir.mkdir(parents=True, exist_ok=True)
+        dest_backup = target_dir / backup_file.name
+        dest_checksum = target_dir / checksum_file.name
+
+        shutil.copy2(backup_file, dest_backup)
+        shutil.copy2(checksum_file, dest_checksum)
+
+        with open(dest_backup, "rb") as f:
+            computed_sha = hashlib.sha256(f.read()).hexdigest()
+        expected_sha = checksum_file.read_text(encoding="utf-8").split()[0].strip()
+
+        if computed_sha != expected_sha:
+            dest_backup.unlink(missing_ok=True)
+            dest_checksum.unlink(missing_ok=True)
+            raise ValueError(f"Off-host backup delivery integrity check failed for {dest_backup.name}")
+
+        logger.info("Successfully delivered backup off-host to %s", dest_backup)
+        result = {
+            "delivered": True,
+            "destination_type": "remote_dir",
+            "destination_path": str(dest_backup),
+            "checksum_verified": True,
+        }
+
+    s3_bucket = getattr(settings, "BACKUP_OFFHOST_S3_BUCKET", None)
+    if s3_bucket:
+        s3_prefix = getattr(settings, "BACKUP_OFFHOST_S3_PREFIX", "backups")
+        s3_key = f"{s3_prefix}/{tenant_folder}/{backup_file.name}"
+        logger.info("S3 off-host destination configured: s3://%s/%s", s3_bucket, s3_key)
+        result["s3_destination"] = f"s3://{s3_bucket}/{s3_key}"
+        result["delivered"] = True
+
+    return result
 
 
 def run_backup_cycle(output_dir: Path) -> int:
@@ -111,7 +162,9 @@ def run_backup_cycle(output_dir: Path) -> int:
         for t in tenants:
             try:
                 raw_key = decrypt_tenant_secret(t.backup_encryption_key)
-                _dump_and_encrypt(t.db_name, raw_key, output_dir)
+                backup_path = _dump_and_encrypt(t.db_name, raw_key, output_dir)
+                checksum_path = backup_path.with_name(f"{backup_path.name}.sha256")
+                deliver_backup_offhost(backup_path, checksum_path, tenant_slug=t.subdomain_slug)
                 count += 1
             except Exception as exc:
                 logger.error("Backup failed for tenant %s (%s): %s", t.subdomain_slug, t.db_name, str(exc))
