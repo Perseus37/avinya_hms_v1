@@ -159,6 +159,7 @@ class RetentionExecutionRequest(BaseModel):
     approval_reference: str = Field(min_length=3, max_length=100)
     dry_run: bool = Field(default=True)
     confirm_destructive_execution: bool = Field(default=False)
+    async_mode: bool = Field(default=False)
 
     @field_validator("approval_reference")
     @classmethod
@@ -712,6 +713,28 @@ def execute_retention_run(
     if not requested.issubset(policy_categories):
         raise HTTPException(status_code=422, detail="Requested categories must be present in the approved policy.")
 
+    if payload.async_mode:
+        from backend.core.queue import enqueue_task
+        subdomain = request.state.tenant_context.subdomain_slug
+        job_id = enqueue_task(
+            "privacy.retention.execute",
+            {
+                "tenant_subdomain": subdomain,
+                "policy_revision_id": revision.id,
+                "category_codes": payload.categories,
+                "dry_run": payload.dry_run,
+                "approval_reference": payload.approval_reference,
+                "actor_user_id": actor.id,
+            },
+        )
+        return {
+            "job_id": job_id,
+            "status": "QUEUED",
+            "message": "Retention execution queued for background processing.",
+            "policy_revision_id": revision.id,
+            "dry_run": payload.dry_run,
+        }
+
     return execute_retention_policy_revision(
         db,
         revision=revision,
@@ -721,6 +744,19 @@ def execute_retention_run(
         dry_run=payload.dry_run,
     )
 
+
+
+@router.get("/retention/jobs/{job_id}")
+def get_retention_job_status(
+    job_id: str,
+    actor: User = Depends(RequirePermission("privacy:read")),
+):
+    """Checks background retention job execution status."""
+    from backend.core.queue import get_task_status
+    status_data = get_task_status(job_id)
+    if not status_data:
+        raise HTTPException(status_code=404, detail="Retention job not found.")
+    return status_data
 
 
 @router.post("/retention-policies", status_code=201)

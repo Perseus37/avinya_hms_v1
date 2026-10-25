@@ -80,6 +80,31 @@ def send_email(
         raise MailDeliveryError(f"Email delivery failed using {provider}.") from exc
 
 
+def enqueue_email(
+    recipient: str,
+    subject: str,
+    text_body: str,
+    *,
+    html_body: Optional[str] = None,
+    delay_seconds: int = 0,
+) -> str:
+    """Enqueues email delivery into the Redis background worker queue with sync fallback."""
+    from backend.core.queue import enqueue_task
+
+    payload = {
+        "recipient": recipient,
+        "subject": subject,
+        "text_body": text_body,
+        "html_body": html_body,
+    }
+    return enqueue_task(
+        "email.send",
+        payload,
+        delay_seconds=delay_seconds,
+        sync_fallback=True,
+    )
+
+
 def _send_smtp(message: EmailMessage) -> None:
     if not settings.SMTP_HOST:
         raise MailDeliveryError("SMTP_HOST is required when MAIL_PROVIDER=smtp.")

@@ -96,6 +96,7 @@ NON_PATIENT_OR_DEFERRED_GET_ROUTES = {
     "/api/privacy/patients/{patient_id}/consents",
     "/api/privacy/policies",
     "/api/privacy/retention-policies",
+    "/api/privacy/retention/jobs/{job_id}",
     "/api/procurement/invoices",
     "/api/procurement/invoices/{invoice_id}",
     "/api/procurement/invoices/{invoice_id}/document",

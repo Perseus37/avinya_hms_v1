@@ -72,6 +72,17 @@ class PrescriptionCreate(BaseModel):
     encounter_id: int
     clinical_notes: Optional[str] = None
     items: List[PrescriptionItemCreate]
+    override_ddi_warning: Optional[bool] = False
+    ddi_override_justification: Optional[str] = None
+
+class ClinicalDdiPrecheckRequest(BaseModel):
+    patient_id: int
+    medication_ids: List[int] = Field(min_length=1)
+
+class ClinicalDdiPrecheckResponse(BaseModel):
+    has_critical_hard_stop: bool
+    has_critical_warning: bool
+    findings: List[dict]
 
 class PrescriptionUpdate(BaseModel):
     clinical_notes: Optional[str] = None

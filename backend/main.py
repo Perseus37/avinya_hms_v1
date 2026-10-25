@@ -10,7 +10,14 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST
+from backend.core.metrics import (
+    HTTP_REQUESTS_TOTAL,
+    HTTP_REQUEST_DURATION_SECONDS,
+    get_prometheus_metrics_bytes,
+    normalize_metric_path,
+)
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
@@ -260,10 +267,26 @@ async def request_correlation_middleware(request: Request, call_next):
     logger.info("Started %s %s", request.method, request.url.path)
     try:
         response = await call_next(request)
-        process_time = (time.time() - start_time) * 1000
+        latency_sec = time.time() - start_time
+        process_time = latency_sec * 1000
         response.headers["X-Request-ID"] = req_id
         response.headers["X-Process-Time-Ms"] = f"{process_time:.2f}"
         logger.info("Completed %s %s - Status: %s in %.2fms", request.method, request.url.path, response.status_code, process_time)
+
+        try:
+            norm_path = normalize_metric_path(request.url.path)
+            HTTP_REQUESTS_TOTAL.labels(
+                method=request.method,
+                endpoint=norm_path,
+                status=str(response.status_code),
+            ).inc()
+            HTTP_REQUEST_DURATION_SECONDS.labels(
+                method=request.method,
+                endpoint=norm_path,
+            ).observe(latency_sec)
+        except Exception:
+            pass
+
         return response
     finally:
         request_id_ctx_var.reset(token)
@@ -331,6 +354,16 @@ def api_home():
 # -----------------------------------------------------------------------------
 # M11 FIX: Liveness & Deep Readiness Health Probes
 # -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# M-13: Prometheus Telemetry and Metrics Exposition
+# -----------------------------------------------------------------------------
+@app.get("/metrics", include_in_schema=False)
+@v1_app.get("/metrics", include_in_schema=False)
+def prometheus_metrics():
+    """Exposes application and runtime metrics in Prometheus text format."""
+    return Response(content=get_prometheus_metrics_bytes(), media_type=CONTENT_TYPE_LATEST)
+
 @app.get("/health", tags=["System Health"])
 def liveness_check():
     """Lightweight liveness probe for container orchestrators."""

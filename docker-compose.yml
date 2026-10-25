@@ -109,6 +109,25 @@ services:
       - default
       - scanner-net
 
+  worker:
+    image: avinya-hms-api:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+      PGTZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
+    command: ["python", "-m", "backend.worker"]
+    volumes:
+      - hms_backups:/app/backups
+      - hms_attachments:/app/attachments
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   onboarding-portal:
     image: avinya-hms-api:latest
     restart: unless-stopped
