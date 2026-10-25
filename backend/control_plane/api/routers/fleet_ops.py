@@ -47,16 +47,6 @@ from backend.scripts.migrate import upgrade_tenant_database_url
 logger = logging.getLogger("avinya.fleet_ops")
 router = APIRouter(prefix="/api", tags=["Control Plane Fleet Operations"])
 
-# def verify_control_plane_secret(
-#     x_control_plane_secret: Optional[str] = Header(default=None, alias="X-Control-Plane-Secret"),
-# ) -> None:
-#     expected_key = getattr(settings, "CONTROL_PLANE_MASTER_KEY", None)
-#     if expected_key and (not x_control_plane_secret or not secrets.compare_digest(x_control_plane_secret, expected_key)):
-#         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Control Plane credentials.")
-
-# def _verify_vendor_key(provided_key: str) -> None:
-#     if not provided_key or not secrets.compare_digest(provided_key, settings.MASTER_ONBOARDING_KEY):
-#         raise HTTPException(status_code=403, detail="Invalid Master Vendor Setup Key.")
 
 class TenantStatusUpdateRequest(BaseModel):
     master_setup_key: str
@@ -696,6 +686,51 @@ def restore_tenant_from_snapshot(
     control_db.commit()
     return {"status": "success", "message": f"Snapshot '{safe_name}' queued for restoration into {tenant.db_name}."}
 
+from sqlalchemy import inspect
+
+def _scrub_sandbox_tenant_data(sandbox_db: str) -> None:
+    """
+    F-02: Scrubs and anonymizes all production patient and user data in the newly cloned sandbox database.
+    Prevents live patient PII/PHI or real staff contact info from persisting in UAT/sandbox environments.
+    """
+    engine = tenant_engine_pool.get_engine(sandbox_db)
+    with Session(bind=engine) as s_session:
+        inspector = inspect(s_session.connection())
+        table_names = set(inspector.get_table_names())
+
+        if "patients" in table_names:
+            from backend.domains.patients.models import Patient
+            patients = s_session.execute(select(Patient)).scalars().all()
+            for p in patients:
+                p.full_name = f"Sandbox Patient {p.id}"
+                p.mrn = f"SBX-{p.id}"
+                p.phone_number = "9000000000"
+                p.email = f"patient_{p.id}@sandbox.local"
+                p.address = "Sandbox Medical Suite"
+                p.village = None
+                p.city = "Sandbox City"
+                p.district = "Sandbox District"
+                p.state = "Sandbox State"
+                p.pincode = "500001"
+                p.abha_number = None
+                p.emergency_contact_name = None
+                p.emergency_contact_phone = None
+                p.blood_group = None
+                p.allow_network_sharing = False
+                if getattr(p, "date_of_birth", None):
+                    p.date_of_birth = datetime(p.date_of_birth.year, 1, 1)
+
+        if "users" in table_names:
+            from backend.domains.identity.models import User
+            users = s_session.execute(select(User)).scalars().all()
+            for u in users:
+                if not getattr(u, "is_superuser", False) and getattr(u, "role", "") != "admin":
+                    u.email = f"staff_{u.id}@sandbox.local"
+                    if hasattr(u, "phone_number"):
+                        u.phone_number = None
+
+        s_session.commit()
+
 @router.post("/tenants/{slug}/clone-sandbox")
 def clone_hospital_to_sandbox_environment(
     slug: str,
@@ -735,6 +770,9 @@ def clone_hospital_to_sandbox_environment(
         p_session.connection().connection.set_isolation_level(0)
         p_session.execute(text(f'CREATE DATABASE "{sandbox_db}" WITH TEMPLATE "{src_tenant.db_name}"'))
 
+    # F-02: Scrub production patient PII/PHI and sensitive user contacts from cloned sandbox database
+    _scrub_sandbox_tenant_data(sandbox_db)
+
     sandbox_jwt = secrets.token_hex(32)
     sandbox_backup = secrets.token_urlsafe(32)
 
@@ -762,7 +800,7 @@ def clone_hospital_to_sandbox_environment(
         ControlPlaneAuditLog(
             action="CLONE_SANDBOX",
             target_slug=sandbox_slug,
-            details=f"Cloned from {src_tenant.subdomain_slug}",
+            details=f"Cloned from {src_tenant.subdomain_slug} with automated patient PII/PHI scrubbing",
         )
     )
     control_db.commit()

@@ -24,6 +24,9 @@ from backend.security.totp import matching_totp_counter, totp_code
 control_plane_actor: ContextVar[Optional[str]] = ContextVar(
     "control_plane_actor", default=None
 )
+control_plane_operator_role: ContextVar[Optional[str]] = ContextVar(
+    "control_plane_operator_role", default=None
+)
 
 
 class OperatorLogin(BaseModel):
@@ -140,6 +143,7 @@ def authenticate_operator_token(token: str) -> Optional[dict[str, object]]:
         return {
             "id": operator.id,
             "email": operator.email,
+            "role": getattr(operator, "role", "superadmin"),
             "token_id": token_id,
         }
 
@@ -339,7 +343,8 @@ def verify_control_plane_secret(
 
 
 def _verify_vendor_key(provided_key: str) -> None:
-    if control_plane_actor.get():
+    # F-08: Only superadmin operators can bypass vendor key checks; other roles or unauthenticated requests must supply valid master key
+    if control_plane_operator_role.get() == "superadmin":
         return
     if not provided_key or not secrets.compare_digest(provided_key, settings.MASTER_ONBOARDING_KEY):
         raise HTTPException(status_code=403, detail="Invalid Master Vendor Setup Key.")

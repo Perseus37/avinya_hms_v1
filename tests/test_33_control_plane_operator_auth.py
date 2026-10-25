@@ -133,3 +133,37 @@ def test_named_operator_mfa_login_auths_control_plane_and_logout_revokes(
         control_app_module.app.dependency_overrides.pop(get_control_db, None)
         control_app_module.app.dependency_overrides.pop(get_redis, None)
         engine.dispose()
+
+
+def test_operator_roles_and_master_key_scoping(monkeypatch):
+    """Audit F-08 regression: Non-superadmin operators cannot bypass master vendor key verification."""
+    from fastapi import HTTPException
+    import pytest
+    from backend.core.config import settings
+    from backend.control_plane.services.auth import _verify_vendor_key, control_plane_operator_role
+
+    monkeypatch.setattr(settings, "MASTER_ONBOARDING_KEY", "real-super-secret-vendor-key")
+
+    # 1. Unauthenticated / No role caller without key is rejected
+    with pytest.raises(HTTPException) as exc_info:
+        _verify_vendor_key("")
+    assert exc_info.value.status_code == 403
+
+    # 2. Support role operator without key is rejected (cannot bypass)
+    token = control_plane_operator_role.set("support")
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            _verify_vendor_key("")
+        assert exc_info.value.status_code == 403
+
+        # Support operator WITH correct key succeeds
+        _verify_vendor_key("real-super-secret-vendor-key")
+    finally:
+        control_plane_operator_role.reset(token)
+
+    # 3. Superadmin operator can execute vendor ops
+    token = control_plane_operator_role.set("superadmin")
+    try:
+        _verify_vendor_key("")  # Allowed for superadmin
+    finally:
+        control_plane_operator_role.reset(token)

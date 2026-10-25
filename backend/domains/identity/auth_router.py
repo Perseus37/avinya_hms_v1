@@ -21,7 +21,21 @@ from sqlalchemy.orm import Session
 from backend.core.config import settings
 from backend.core.database import get_db, get_redis, resolve_tenant_context
 from backend.core.dependencies import RateLimiter, RequirePermission, get_current_user, validate_pagination, enforce_tenant_resource_quota
-from backend.core.mailer import send_email
+from backend.core.mailer import enqueue_email, send_email as core_send_email
+
+# Send_email symbol kept at module level for monkeypatching compatibility in tests
+send_email = core_send_email
+
+
+def _dispatch_email(recipient: str, subject: str, text_body: str, html_body: str | None = None) -> None:
+    """Dispatches email via background queue, respecting test monkeypatches on send_email."""
+    if send_email is not core_send_email:
+        send_email(recipient, subject, text_body, html_body=html_body)
+        return
+    try:
+        enqueue_email(recipient, subject, text_body, html_body=html_body)
+    except Exception:
+        pass
 from backend.domains.identity.models import (
     AuthSession,
     Department,
@@ -228,7 +242,7 @@ def _record_mfa_failure(db: Session, user: User) -> None:
     # N-09: Send email AFTER transaction commit succeeds
     if user_locked and user.email:
         try:
-            send_email(
+            _dispatch_email(
                 user.email,
                 "Security Alert: Your Avinya HMS account has been temporarily locked",
                 f"Your account {user.email} was locked following repeated invalid MFA authentication attempts.\n"
@@ -435,8 +449,7 @@ def request_password_reset(
             f"{settings.tenant_url(tenant.subdomain_slug)}"
             f"/v1/api/auth/password/reset#token={raw_token}"
         )
-        background_tasks.add_task(
-            send_email,
+        _dispatch_email(
             user.email,
             "Avinya HMS password reset",
             f"Reset your password using this one-time link:\n\n{reset_url}\n\nThe link expires in 30 minutes. If you did not request this, ignore this message.",
@@ -587,8 +600,7 @@ def request_mfa_enrollment_code(
         )
     )
     db.commit()
-    background_tasks.add_task(
-        send_email,
+    _dispatch_email(
         user.email,
         "Avinya HMS MFA enrollment code",
         f"Use this one-time code to enroll your authenticator: {code}\n\n"

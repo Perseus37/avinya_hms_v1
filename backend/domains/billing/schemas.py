@@ -17,6 +17,8 @@ class InvoiceLineItemCreate(BaseModel):
     description: str
     quantity: int = Field(gt=0, description="Quantity must be strictly positive")
     unit_price_paise: int = Field(ge=0, description="Price cannot be negative")
+    gst_rate_percent: int = Field(default=0, ge=0, le=100)
+    hsn_sac_code: Optional[str] = None
 
 class InvoiceUpdate(BaseModel):
     notes: Optional[str] = None
@@ -33,6 +35,9 @@ class InvoiceLineItemResponse(BaseModel):
     quantity: int
     unit_price_paise: int
     total_price_paise: int
+    gst_rate_percent: int = 0
+    tax_amount_paise: int = 0
+    hsn_sac_code: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 class PaymentReceiptResponse(BaseModel):
@@ -50,6 +55,12 @@ class InvoiceResponse(BaseModel):
     invoice_number: str
     status: InvoiceStatusEnum
     total_amount_paise: int
+    tax_amount_paise: int = 0
+    cgst_amount_paise: int = 0
+    sgst_amount_paise: int = 0
+    igst_amount_paise: int = 0
+    is_tax_exempt: bool = True
+    hsn_sac_code: Optional[str] = None
     discount_amount_paise: int = 0
     net_amount_paise: int = 0
     discount_reason: Optional[str] = None

@@ -282,7 +282,9 @@ def discover_and_aggregate_patient_across_branches(
     else:
         p_hash = normalize_phone_hash(phone_number)
         stmt = stmt.where(GlobalPatientPointer.phone_hash == p_hash)
-        identifier_used = f"phone:{phone_number}"
+        # F-09: Mask phone number in requested_identifier to prevent logging raw PII
+        masked_phone = f"{phone_number[:3]}****{phone_number[-4:]}" if len(phone_number) >= 7 else "****"
+        identifier_used = f"phone:{masked_phone}"
 
     pointers = control_db.execute(
         stmt.order_by(GlobalPatientPointer.last_clinical_update_at.desc())
@@ -297,14 +299,22 @@ def discover_and_aggregate_patient_across_branches(
 
     import concurrent.futures
 
-    def _fetch_branch_data(ptr):
-        tenant_reg = control_db.query(TenantRegistry).filter(
-            TenantRegistry.branch_code == ptr.branch_code, TenantRegistry.is_active.is_(True)
-        ).first()
-        if not tenant_reg:
+    # F-03: Pre-resolve tenant databases in the main thread to prevent worker threads
+    # from sharing or concurrently querying control_db.
+    branch_codes = {ptr.branch_code for ptr in pointers}
+    tenant_regs = control_db.execute(
+        select(TenantRegistry).where(
+            TenantRegistry.branch_code.in_(branch_codes),
+            TenantRegistry.is_active.is_(True),
+        )
+    ).scalars().all()
+    branch_to_db = {reg.branch_code: reg.db_name for reg in tenant_regs}
+
+    def _fetch_branch_data(ptr, branch_db_name: Optional[str]):
+        if not branch_db_name:
             return None
 
-        branch_engine = tenant_engine_pool.get_engine(tenant_reg.db_name)
+        branch_engine = tenant_engine_pool.get_engine(branch_db_name)
         BranchSession = sessionmaker(bind=branch_engine, autocommit=False, autoflush=False)
         with BranchSession() as branch_db:
             policy = _get_branch_policy(branch_db)
@@ -312,7 +322,10 @@ def discover_and_aggregate_patient_across_branches(
             if policy.federation_sharing_mode == FederationPolicyEnum.ISOLATED_SILO:
                 return None
             if policy.federation_sharing_mode == FederationPolicyEnum.CORPORATE_GROUP_ONLY:
-                if ptr.branch_code.split("-")[0].strip().upper() != calling_node.branch_code.split("-")[0].strip().upper():
+                # F-09: Robust corporate group matching across hyphen and underscore delimiters
+                calling_group = re.split(r"[-_]", calling_node.branch_code)[0].strip().upper()
+                target_group = re.split(r"[-_]", ptr.branch_code)[0].strip().upper()
+                if target_group != calling_group:
                     return None
             if policy.federation_sharing_mode == FederationPolicyEnum.EMERGENCY_ALLERGIES_ONLY and purpose.strip().upper() not in {"EMERGENCY", "EMERGENCY_CARE", "EMERGENCY_TREATMENT"}:
                 return None
@@ -382,15 +395,28 @@ def discover_and_aggregate_patient_across_branches(
                 "share_demographics": policy.federation_share_demographics
             }
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        ptr_to_future = {ptr: executor.submit(_fetch_branch_data, ptr) for ptr in pointers}
-        concurrent.futures.wait(ptr_to_future.values(), timeout=5.0, return_when=concurrent.futures.ALL_COMPLETED)
+    # F-03: ThreadPoolExecutor with isolated sessions and non-blocking timeout shutdown
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(pointers)))
+    try:
+        ptr_to_future = {
+            ptr: executor.submit(_fetch_branch_data, ptr, branch_to_db.get(ptr.branch_code))
+            for ptr in pointers
+        }
+        done, not_done = concurrent.futures.wait(
+            ptr_to_future.values(),
+            timeout=5.0,
+            return_when=concurrent.futures.ALL_COMPLETED,
+        )
+        for f in not_done:
+            f.cancel()
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     for ptr in pointers:
-        future = ptr_to_future[ptr]
+        future = ptr_to_future.get(ptr)
+        if not future or not future.done() or future.cancelled():
+            continue
         try:
-            if not future.done():
-                continue
             result = future.result()
             if result:
                 if latest_demographics is None and result["share_demographics"]:

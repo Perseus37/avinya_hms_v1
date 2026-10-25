@@ -66,9 +66,13 @@ class Invoice(AuditMixin, Base):
         CheckConstraint("discount_amount_paise <= total_amount_paise", name="ck_invoice_discount_le_total"),
         CheckConstraint("amount_paid_paise >= 0", name="ck_invoice_paid_non_neg"),
         CheckConstraint(
-            "amount_paid_paise <= (total_amount_paise - discount_amount_paise)",
+            "amount_paid_paise <= (total_amount_paise + tax_amount_paise - discount_amount_paise)",
             name="ck_invoice_no_overpayment",
         ),
+        CheckConstraint("tax_amount_paise >= 0", name="ck_invoice_tax_non_neg"),
+        CheckConstraint("cgst_amount_paise >= 0", name="ck_invoice_cgst_non_neg"),
+        CheckConstraint("sgst_amount_paise >= 0", name="ck_invoice_sgst_non_neg"),
+        CheckConstraint("igst_amount_paise >= 0", name="ck_invoice_igst_non_neg"),
         Index("ix_invoices_patient_id", "patient_id"),
         Index("ix_invoices_encounter_id", "encounter_id"),
         # DB-005: Prevent multiple DRAFT invoices for a single encounter (PostgreSQL + SQLite compatible)
@@ -91,6 +95,12 @@ class Invoice(AuditMixin, Base):
     discount_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     discount_approved_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
     amount_paid_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tax_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cgst_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sgst_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    igst_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_tax_exempt: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    hsn_sac_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text)
 
     # DB-001: Enforce Optimistic Concurrency Control to prevent lost updates on financial ledgers
@@ -106,7 +116,7 @@ class Invoice(AuditMixin, Base):
 
     @property
     def net_amount_paise(self) -> int:
-        return max(0, self.total_amount_paise - (self.discount_amount_paise or 0))
+        return max(0, self.total_amount_paise + self.tax_amount_paise - (self.discount_amount_paise or 0))
 
 
 class InvoiceLineItem(AuditMixin, Base):
@@ -115,6 +125,8 @@ class InvoiceLineItem(AuditMixin, Base):
         CheckConstraint("quantity > 0", name="ck_line_item_qty_pos"),
         CheckConstraint("unit_price_paise >= 0", name="ck_line_item_unit_price_non_neg"),
         CheckConstraint("total_price_paise >= 0", name="ck_line_item_total_non_neg"),
+        CheckConstraint("gst_rate_percent >= 0 AND gst_rate_percent <= 100", name="ck_line_item_gst_rate"),
+        CheckConstraint("tax_amount_paise >= 0", name="ck_line_item_tax_non_neg"),
         Index("ix_invoice_line_items_invoice_id", "invoice_id"),
     )
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -124,6 +136,9 @@ class InvoiceLineItem(AuditMixin, Base):
     quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     unit_price_paise: Mapped[int] = mapped_column(Integer, nullable=False)
     total_price_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    gst_rate_percent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tax_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    hsn_sac_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     invoice: Mapped[Invoice] = relationship(back_populates="line_items")
     service: Mapped[Optional["ServiceCatalog"]] = relationship()

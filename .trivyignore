@@ -1,0 +1,3 @@
+# Trivy ignore list for third-party base container vulnerabilities pending upstream release
+# Upstream ClamAV Debian 13 base image (libbrotli1) pending upstream rebuild
+CVE-2026-111497

@@ -15,8 +15,8 @@ from backend.domains.encounters.models import EncounterStatusEnum, PatientEncoun
 from backend.domains.identity.models import User
 from backend.domains.pharmacy.models import InventoryBatch, MedicationMaster, Prescription, PrescriptionItem, PrescriptionStatusEnum, PharmacyReturnLog
 from backend.schemas.common import PaginatedResponse
-from backend.domains.pharmacy.schemas import DispenseRequest, InventoryBatchCreate, InventoryBatchResponse, InventoryBatchUpdate, InventoryStockAdjustment, MedicationCreate, MedicationResponse, MedicationUpdate, PrescriptionCreate, PrescriptionResponse, PrescriptionUpdate, PharmacyReturnLogResponse, PharmacyReturnRequest
-from backend.domains.clinical.services import check_allergy_hard_stop
+from backend.domains.pharmacy.schemas import DispenseRequest, InventoryBatchCreate, InventoryBatchResponse, InventoryBatchUpdate, InventoryStockAdjustment, MedicationCreate, MedicationResponse, MedicationUpdate, PrescriptionCreate, PrescriptionResponse, PrescriptionUpdate, PharmacyReturnLogResponse, PharmacyReturnRequest, ClinicalDdiPrecheckRequest, ClinicalDdiPrecheckResponse
+from backend.domains.clinical.services import check_allergy_hard_stop, check_drug_drug_interactions, evaluate_drug_interactions
 from backend.domains.privacy.runtime import evaluate_tenant_patient_data_uses
 
 router = APIRouter(prefix="/api/pharmacy", tags=["Pharmacy & Inventory Management"])
@@ -257,10 +257,25 @@ def write_prescription(
 
     check_allergy_hard_stop(db, encounter.patient_id, allergen_keywords)
 
+    # M-11: Clinical Drug-Drug Interaction and Duplicate Therapy Hard-Stop / Warning Check
+    check_drug_drug_interactions(
+        session=db,
+        patient_id=encounter.patient_id,
+        candidate_medications=meds,
+        encounter_id=encounter.id,
+        override_warning=bool(payload.override_ddi_warning),
+        override_justification=payload.ddi_override_justification,
+    )
+
+    notes = payload.clinical_notes
+    if payload.override_ddi_warning and payload.ddi_override_justification:
+        override_entry = f"[CLINICAL DDI OVERRIDE by Dr. {current_user.full_name}: {payload.ddi_override_justification}]"
+        notes = f"{notes}\n{override_entry}" if notes else override_entry
+
     prescription = Prescription(
         encounter_id=payload.encounter_id,
         prescribing_doctor_id=current_user.id,
-        clinical_notes=payload.clinical_notes,
+        clinical_notes=notes,
         status=PrescriptionStatusEnum.ACTIVE,
     )
     db.add(prescription)
@@ -279,6 +294,28 @@ def write_prescription(
     db.commit()
     db.refresh(prescription)
     return prescription
+
+
+@router.post("/clinical-checks/ddi", response_model=ClinicalDdiPrecheckResponse)
+def precheck_drug_interactions(
+    payload: ClinicalDdiPrecheckRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("pharmacy:read")),
+):
+    """Pre-checks drug-drug interactions and duplicate therapy for CPOE prescription workflows."""
+    meds = db.query(MedicationMaster).filter(MedicationMaster.id.in_(payload.medication_ids)).all()
+    all_med_records = [
+        {"id": m.id, "name": m.brand_name, "generic_name": m.generic_name}
+        for m in meds
+    ]
+    findings = evaluate_drug_interactions(all_med_records)
+    has_critical_hard_stop = any(f["severity"] == "CRITICAL_HARD_STOP" for f in findings)
+    has_critical_warning = any(f["severity"] == "CRITICAL" for f in findings)
+    return {
+        "has_critical_hard_stop": has_critical_hard_stop,
+        "has_critical_warning": has_critical_warning,
+        "findings": findings,
+    }
 
 
 @router.get(

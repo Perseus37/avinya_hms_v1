@@ -216,6 +216,7 @@ class ControlPlaneOperator(ControlBase):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    role: Mapped[str] = mapped_column(String(50), default="superadmin", server_default="superadmin", nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     mfa_secret: Mapped[Optional[str]] = mapped_column(String(255))
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
