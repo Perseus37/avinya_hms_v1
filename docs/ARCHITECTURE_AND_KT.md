@@ -7,19 +7,21 @@ operational commands and safety procedures live in
 
 ## Read these documents
 
-1. [Project Report and KT](PROJECT_REPORT_AND_KT.md) — system topology,
+1. [Master System Architecture and Technical Specification](SYSTEM_ARCHITECTURE_AND_DESIGN.md) — comprehensive high-level and low-level design (HLD & LLD), covering multi-tenancy, all 24 healthcare domains, envelope encryption, background queues, and disaster recovery.
+2. [System Inventory and Boundaries Specification](SYSTEM_INVENTORY_AND_BOUNDARIES.md) — complete inventory of what the system contains (subsystems, tables, APIs, controls) versus what is explicitly shelved or out of scope (patient portal, tenant clinical UI).
+3. [Project Report and KT](PROJECT_REPORT_AND_KT.md) — system topology,
    responsibilities, database boundaries, backend/frontend file map, tests,
    limitations, and onboarding reading order.
-2. [Operations Runbook](OPERATIONS_RUNBOOK.md) — local/production checks,
+4. [Operations Runbook](OPERATIONS_RUNBOOK.md) — local/production checks,
    releases, schema migrations, backups/restores, troubleshooting, and
    release checklist.
-3. [Project Structure](PROJECT_STRUCTURE.md) — current versus intended package
+5. [Project Structure](PROJECT_STRUCTURE.md) — current versus intended package
    structure and migration notes.
-4. [Production Deployment](PRODUCTION_DEPLOYMENT.md) — provider, networking,
+6. [Production Deployment](PRODUCTION_DEPLOYMENT.md) — provider, networking,
    secrets, cost and VM deployment guidance.
-5. [Migration Studio](MIGRATION_STUDIO.md) — import workflow, ETL blocks,
+7. [Migration Studio](MIGRATION_STUDIO.md) — import workflow, ETL blocks,
    duplicate policies, and safety limitations.
-6. [Onboarding Improvements](ONBOARDING_IMPROVEMENTS.md) — existing analytics,
+8. [Onboarding Improvements](ONBOARDING_IMPROVEMENTS.md) — existing analytics,
    audit-field inventory and improvement backlog.
 
 The earlier content of this Markdown file contained implementation claims
