@@ -13,9 +13,43 @@ from backend.core.date_ranges import resolve_record_date_window
 from backend.domains.billing.models import Invoice, InvoiceLineItem, InvoiceStatusEnum, PaymentMethodEnum, RefundVoucher
 from backend.domains.encounters.models import EncounterStatusEnum, PatientEncounter
 from backend.domains.identity.models import User
-from backend.domains.pharmacy.models import InventoryBatch, MedicationMaster, Prescription, PrescriptionItem, PrescriptionStatusEnum, PharmacyReturnLog
+from backend.domains.pharmacy.models import (
+    BCMAScanAuditLog,
+    ControlledSubstanceMovementLog,
+    ControlledSubstanceVault,
+    InventoryBatch,
+    MedicationMaster,
+    PharmacyReturnLog,
+    Prescription,
+    PrescriptionItem,
+    PrescriptionStatusEnum,
+)
 from backend.schemas.common import PaginatedResponse
-from backend.domains.pharmacy.schemas import DispenseRequest, InventoryBatchCreate, InventoryBatchResponse, InventoryBatchUpdate, InventoryStockAdjustment, MedicationCreate, MedicationResponse, MedicationUpdate, PrescriptionCreate, PrescriptionResponse, PrescriptionUpdate, PharmacyReturnLogResponse, PharmacyReturnRequest, ClinicalDdiPrecheckRequest, ClinicalDdiPrecheckResponse
+from backend.domains.pharmacy.schemas import (
+    BCMAVerificationRequest,
+    BCMAVerificationResponse,
+    ClinicalDdiPrecheckRequest,
+    ClinicalDdiPrecheckResponse,
+    ControlledSubstanceDispenseRequest,
+    ControlledSubstanceMovementResponse,
+    ControlledSubstanceReceiptRequest,
+    ControlledSubstanceVaultCreate,
+    ControlledSubstanceVaultResponse,
+    ControlledSubstanceWastageRequest,
+    DispenseRequest,
+    InventoryBatchCreate,
+    InventoryBatchResponse,
+    InventoryBatchUpdate,
+    InventoryStockAdjustment,
+    MedicationCreate,
+    MedicationResponse,
+    MedicationUpdate,
+    PharmacyReturnLogResponse,
+    PharmacyReturnRequest,
+    PrescriptionCreate,
+    PrescriptionResponse,
+    PrescriptionUpdate,
+)
 from backend.domains.clinical.services import check_allergy_hard_stop, check_drug_drug_interactions, evaluate_drug_interactions
 from backend.domains.privacy.runtime import evaluate_tenant_patient_data_uses
 
@@ -706,3 +740,161 @@ def return_dispensed_medication(
     for l in return_logs:
         db.refresh(l)
     return return_logs
+
+
+# =============================================================================
+# Barcode Medication Administration (BCMA) 5-Rights Bedside Verification
+# =============================================================================
+
+@router.post("/bcma/verify-and-administer", response_model=BCMAVerificationResponse, status_code=status.HTTP_201_CREATED)
+def bcma_verify_and_administer(
+    payload: BCMAVerificationRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("nursing:write", "clinical:write", "opd:write", "adt:write", "pharmacy:write")),
+):
+    """
+    Bedside Barcode Medication Administration (BCMA) endpoint verifying the 5 Rights:
+    Right Patient, Right Drug, Right Dose, Right Route, and Right Time (+/- 60 mins).
+    Automates eMAR dose logging upon successful verification; triggers hard stops on mismatch.
+    """
+    from backend.domains.pharmacy.services import execute_bcma_administration
+    return execute_bcma_administration(
+        session=db,
+        encounter_id=payload.encounter_id,
+        prescription_item_id=payload.prescription_item_id,
+        administered_by_user=current_user,
+        scanned_patient_barcode=payload.scanned_patient_barcode,
+        scanned_medication_barcode=payload.scanned_medication_barcode,
+        dose_given=payload.dose_given,
+        scheduled_time=payload.scheduled_time,
+        override_warning=payload.override_warning,
+        override_reason=payload.override_reason,
+    )
+
+
+# =============================================================================
+# Controlled Substances (Narcotics) Perpetual Vault & Dual-Witness Register
+# =============================================================================
+
+@router.post("/controlled-substances/vault", response_model=ControlledSubstanceVaultResponse, status_code=status.HTTP_201_CREATED)
+def create_controlled_substance_vault_entry(
+    payload: ControlledSubstanceVaultCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("pharmacy:write", "mdm:write")),
+):
+    """Initializes a perpetual narcotics inventory vault entry for a controlled substance."""
+    med = db.get(MedicationMaster, payload.medication_id)
+    if not med:
+        raise HTTPException(status_code=404, detail="Medication not found in formulary.")
+
+    existing = db.execute(
+        select(ControlledSubstanceVault).where(ControlledSubstanceVault.medication_id == payload.medication_id)
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail="A controlled substance vault entry already exists for this medication.")
+
+    med.is_controlled_substance = True
+    vault = ControlledSubstanceVault(
+        medication_id=payload.medication_id,
+        vault_location=payload.vault_location,
+        current_balance_units=payload.initial_balance_units,
+        unit_of_measure=payload.unit_of_measure,
+        tamper_seal_number=payload.tamper_seal_number,
+        is_locked=True,
+    )
+    db.add(vault)
+    db.commit()
+    db.refresh(vault)
+    return vault
+
+
+@router.get("/controlled-substances/vault", response_model=list[ControlledSubstanceVaultResponse])
+def list_controlled_substance_vaults(
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("pharmacy:read", "nursing:read", "clinical:read")),
+):
+    """Lists all active perpetual narcotics vaults with current safe balances and tamper seal status."""
+    stmt = select(ControlledSubstanceVault).options(joinedload(ControlledSubstanceVault.medication)).order_by(ControlledSubstanceVault.id.asc())
+    return list(db.execute(stmt).scalars().all())
+
+
+@router.post("/controlled-substances/receipt", response_model=ControlledSubstanceMovementResponse, status_code=status.HTTP_201_CREATED)
+def receive_controlled_substance_into_vault(
+    payload: ControlledSubstanceReceiptRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("pharmacy:write")),
+):
+    """Logs stock replenishment / supplier receipt into the double-locked narcotics vault."""
+    from backend.domains.pharmacy.services import process_controlled_substance_movement
+    return process_controlled_substance_movement(
+        session=db,
+        vault_id=payload.vault_id,
+        movement_type="RECEIPT",
+        quantity_units=payload.quantity_units,
+        primary_user=current_user,
+        batch_number=payload.batch_number,
+        tamper_seal_number=payload.tamper_seal_number,
+        notes=payload.notes,
+    )
+
+
+@router.post("/controlled-substances/dispense", response_model=ControlledSubstanceMovementResponse, status_code=status.HTTP_201_CREATED)
+def dispense_controlled_substance_from_vault(
+    payload: ControlledSubstanceDispenseRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("pharmacy:write", "nursing:write")),
+):
+    """Dispenses controlled narcotics from perpetual safe to ward stock or patient encounter."""
+    from backend.domains.pharmacy.services import process_controlled_substance_movement
+    return process_controlled_substance_movement(
+        session=db,
+        vault_id=payload.vault_id,
+        movement_type="DISPENSE",
+        quantity_units=payload.quantity_units,
+        primary_user=current_user,
+        encounter_id=payload.encounter_id,
+        prescription_item_id=payload.prescription_item_id,
+        batch_number=payload.batch_number,
+        notes=payload.notes,
+    )
+
+
+@router.post("/controlled-substances/waste", response_model=ControlledSubstanceMovementResponse, status_code=status.HTTP_201_CREATED)
+def record_controlled_substance_dual_witness_wastage(
+    payload: ControlledSubstanceWastageRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("nursing:write", "pharmacy:write", "clinical:write")),
+):
+    """
+    Mandatory Dual-Witness Narcotics Wastage:
+    Co-signs partial ampoule / vial destruction with secondary healthcare witness credential validation.
+    """
+    from backend.domains.pharmacy.services import process_controlled_substance_movement
+    return process_controlled_substance_movement(
+        session=db,
+        vault_id=payload.vault_id,
+        movement_type="WASTAGE_DESTROYED",
+        quantity_units=payload.quantity_units,
+        primary_user=current_user,
+        witness_user_id=payload.witness_user_id,
+        witness_password=payload.witness_password,
+        encounter_id=payload.encounter_id,
+        prescription_item_id=payload.prescription_item_id,
+        wastage_reason=payload.wastage_reason,
+        disposal_method=payload.disposal_method,
+        batch_number=payload.batch_number,
+        notes=payload.notes,
+    )
+
+
+@router.get("/controlled-substances/movements", response_model=list[ControlledSubstanceMovementResponse])
+def list_controlled_substance_movements(
+    vault_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("pharmacy:read", "nursing:read", "clinical:read")),
+):
+    """Retrieves full perpetual audit ledger of all controlled substance transactions."""
+    stmt = select(ControlledSubstanceMovementLog).order_by(ControlledSubstanceMovementLog.id.desc())
+    if vault_id:
+        stmt = stmt.where(ControlledSubstanceMovementLog.vault_id == vault_id)
+    return list(db.execute(stmt).scalars().all())

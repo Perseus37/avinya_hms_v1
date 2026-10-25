@@ -92,6 +92,8 @@ NON_PATIENT_OR_DEFERRED_GET_ROUTES = {
     "/api/opd/doctors/{doctor_id}/leaves",
     "/api/ot/theatres",
     "/api/patients/pincode-suggestions",
+    "/api/pharmacy/controlled-substances/movements",
+    "/api/pharmacy/controlled-substances/vault",
     "/api/pharmacy/inventory/batches",
     "/api/pharmacy/medications",
     "/api/privacy/breach-incidents",
@@ -522,6 +524,8 @@ def test_opd_patient_reads_are_classified_except_doctor_leave_schedule():
 
 def test_billing_pharmacy_diagnostics_and_insurance_reads_are_classified():
     non_patient_routes = {
+        "GET /api/pharmacy/controlled-substances/movements",
+        "GET /api/pharmacy/controlled-substances/vault",
         "GET /api/pharmacy/medications",
         "GET /api/pharmacy/inventory/batches",
         "GET /api/diagnostics/categories",

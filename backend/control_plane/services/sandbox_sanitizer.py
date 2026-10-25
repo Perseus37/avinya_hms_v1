@@ -32,6 +32,7 @@ MASTER_AND_CONFIG_TABLES: frozenset[str] = frozenset({
     "chief_complaints_master",
     "comorbidities_master",
     "cssd_instrument_sets",
+    "controlled_substance_vaults",
     "departments",
     "diagnoses_master",
     "equipment_master",
@@ -87,6 +88,7 @@ SCRUBBED_DATA_TABLES: frozenset[str] = frozenset({
     "appointment_waitlist_history",
     "appointments",
     "attendance_records",
+    "bcma_scan_audit_logs",
     "bed_transfer_logs",
     "biomedical_waste_bags",
     "biomedical_waste_manifests",
@@ -94,6 +96,7 @@ SCRUBBED_DATA_TABLES: frozenset[str] = frozenset({
     "blood_cross_match_orders",
     "clinical_early_warning_scores",
     "clinical_notes",
+    "controlled_substance_movement_logs",
     "cssd_sterilization_batches",
     "death_records",
     "diagnostic_orders",
@@ -319,6 +322,30 @@ def scrub_sandbox_database(sandbox_db: str) -> Dict[str, int]:
                     UPDATE clinical_early_warning_scores
                     SET clinical_recommendation = 'Sandbox standardized clinical recommendation'
                     WHERE clinical_recommendation IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "bcma_scan_audit_logs" in table_names:
+            session.execute(
+                text("""
+                    UPDATE bcma_scan_audit_logs
+                    SET scanned_patient_barcode = 'PAT-SANDBOX-SCRUBBED',
+                        scanned_medication_barcode = 'MED-SANDBOX-SCRUBBED',
+                        override_reason = 'Sandbox protocol override'
+                    WHERE override_reason IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "controlled_substance_movement_logs" in table_names:
+            session.execute(
+                text("""
+                    UPDATE controlled_substance_movement_logs
+                    SET wastage_reason = 'Sandbox protocol wastage',
+                        notes = 'Sandbox narcotics movement record',
+                        disposal_method = 'SANDBOX_NEUTRALIZATION'
+                    WHERE wastage_reason IS NOT NULL OR notes IS NOT NULL
                 """)
             )
             stats["scrubbed_tables"] += 1
