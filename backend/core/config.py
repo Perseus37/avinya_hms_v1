@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     PRIVACY_ALLOW_AUDIT_ONLY: bool = False
     PRIVACY_ALLOW_RETENTION_DRY_RUN: bool = False
     PRIVACY_ALLOW_RETENTION_EXECUTE: bool = False
+    ENABLE_PRODUCTION_API_DOCS: bool = False
     TRUSTED_PROXY_IPS: str = ""
     WS_MAX_CONNECTIONS: int = Field(default=100, ge=1, le=10000)
     WS_MAX_WAITING_ROOM_CONNECTIONS: int = Field(default=25, ge=1, le=10000)

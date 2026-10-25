@@ -10,9 +10,9 @@ from typing import Any, Dict, Optional
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from fastapi import APIRouter, Depends, Header, HTTPException, status, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status, BackgroundTasks, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.domains.billing.models import InvoiceStatusEnum
@@ -41,7 +41,12 @@ from backend.domains.patients.models import Patient
 from backend.domains.federation.models import FederatedClient
 from backend.security.envelope import decrypt_tenant_secret, encrypt_tenant_secret
 from backend.core.seed import seed_universal_hospital_data
-from backend.control_plane.services.auth import verify_control_plane_secret, _verify_vendor_key
+from backend.control_plane.services.auth import (
+    verify_control_plane_secret,
+    _verify_vendor_key,
+    require_operator_role,
+)
+from backend.control_plane.services.sandbox_sanitizer import scrub_sandbox_database
 from backend.scripts.migrate import upgrade_tenant_database_url
 
 logger = logging.getLogger("avinya.fleet_ops")
@@ -287,6 +292,7 @@ def rotate_tenant_cryptographic_keys(
     payload: TenantKeyRotationRequest,
     control_db: Session = Depends(get_control_db),
     _: None = Depends(verify_control_plane_secret),
+    _role: str = Depends(require_operator_role("ops", "superadmin")),
 ):
     _verify_vendor_key(payload.master_setup_key)
     tenant = control_db.execute(
@@ -359,6 +365,7 @@ def emergency_reset_tenant_admin_password(
     payload: TenantAdminPasswordResetRequest,
     control_db: Session = Depends(get_control_db),
     _: None = Depends(verify_control_plane_secret),
+    _role: str = Depends(require_operator_role("support", "ops", "superadmin")),
 ):
     _verify_vendor_key(payload.master_setup_key)
     tenant = control_db.execute(
@@ -384,14 +391,19 @@ def emergency_reset_tenant_admin_password(
         admin_user.hashed_password = pwd_context.hash(new_password)
         admin_user.status = UserStatusEnum.ACTIVE
         admin_user.failed_login_attempts = 0
-        admin_user.password_changed_at = None
+        admin_user.password_changed_at = datetime.now(timezone.utc)
+
+        # R-07: Invalidate all active sessions and reset tokens for this admin
+        from backend.domains.identity.models import AuthSession, PasswordResetToken
+        t_db.execute(delete(AuthSession).where(AuthSession.user_id == admin_user.id))
+        t_db.execute(delete(PasswordResetToken).where(PasswordResetToken.user_id == admin_user.id))
         t_db.commit()
         admin_email = admin_user.email
     control_db.add(
         ControlPlaneAuditLog(
             action="BREAK_GLASS_ADMIN_RESET",
             target_slug=slug.lower(),
-            details=f"Admin password reset for user {admin_email}",
+            details=f"Admin password reset for user {admin_email}. Active sessions invalidated.",
         )
     )
     control_db.commit()
@@ -400,6 +412,7 @@ def emergency_reset_tenant_admin_password(
         "subdomain_slug": tenant.subdomain_slug,
         "admin_email": admin_email,
         "one_time_password": new_password,
+        "sessions_invalidated": True,
     }
 
 @router.patch("/tenants/{slug}/entitlements")
@@ -579,6 +592,7 @@ def trigger_manual_backup_snapshot(
     background_tasks: BackgroundTasks,
     control_db: Session = Depends(get_control_db),
     _: None = Depends(verify_control_plane_secret),
+    _role: str = Depends(require_operator_role("ops", "superadmin")),
 ):
     _verify_vendor_key(payload.master_setup_key)
     tenant = control_db.execute(
@@ -633,6 +647,7 @@ def restore_tenant_from_snapshot(
     background_tasks: BackgroundTasks,
     control_db: Session = Depends(get_control_db),
     _: None = Depends(verify_control_plane_secret),
+    _role: str = Depends(require_operator_role("ops", "superadmin")),
 ):
     _verify_vendor_key(payload.master_setup_key)
     tenant = control_db.execute(
@@ -656,6 +671,18 @@ def restore_tenant_from_snapshot(
 
     def _execute_restore():
         try:
+            # R-08: Automatic pre-restore safety snapshot before destructive restore
+            try:
+                from backend.scripts.backup_service import create_encrypted_backup
+                safety_path = create_encrypted_backup(tenant_db_name, encrypted_backup_key)
+                _record_backup_task_audit(
+                    "PRE_RESTORE_SAFETY_SNAPSHOT",
+                    tenant_slug,
+                    f"Created pre-restore safety snapshot {Path(safety_path).name} before overwriting {tenant_db_name}.",
+                )
+            except Exception as snap_exc:
+                logger.warning("Could not create pre-restore safety snapshot for %s: %s", tenant_slug, snap_exc)
+
             restore_encrypted_backup(
                 str(target_path), tenant_db_name, encrypted_backup_key, promote_to_cloud=False
             )
@@ -685,91 +712,13 @@ def restore_tenant_from_snapshot(
     control_db.commit()
     return {"status": "success", "message": f"Snapshot '{safe_name}' queued for restoration into {tenant.db_name}."}
 
-from sqlalchemy import inspect
-
 def _scrub_sandbox_tenant_data(sandbox_db: str) -> None:
     """
-    F-02: Scrubs and anonymizes all production patient and user data in the newly cloned sandbox database.
-    Prevents live patient PII/PHI or real staff contact info from persisting in UAT/sandbox environments.
+    R-02 / F-02: Scrubs and anonymizes all production patient and user data in the newly cloned sandbox database.
+    Prevents live patient PII/PHI, passwords, MFA secrets, or real staff contact info from persisting in UAT/sandbox environments.
     """
-    engine = tenant_engine_pool.get_engine(sandbox_db)
-    with Session(bind=engine) as s_session:
-        inspector = inspect(s_session.connection())
-        table_names = set(inspector.get_table_names())
+    scrub_sandbox_database(sandbox_db)
 
-        if "patients" in table_names:
-            from backend.domains.patients.models import Patient
-            patients = s_session.execute(select(Patient)).scalars().all()
-            for p in patients:
-                p.full_name = f"Sandbox Patient {p.id}"
-                p.mrn = f"SBX-{p.id}"
-                p.phone_number = "9000000000"
-                p.email = f"patient_{p.id}@sandbox.local"
-                p.address = "Sandbox Medical Suite"
-                p.village = None
-                p.city = "Sandbox City"
-                p.district = "Sandbox District"
-                p.state = "Sandbox State"
-                p.pincode = "500001"
-                p.abha_number = None
-                p.emergency_contact_name = None
-                p.emergency_contact_phone = None
-                p.blood_group = None
-                p.allow_network_sharing = False
-                if getattr(p, "date_of_birth", None):
-                    p.date_of_birth = datetime(p.date_of_birth.year, 1, 1)
-
-        if "users" in table_names:
-            from backend.domains.identity.models import User
-            users = s_session.execute(select(User)).scalars().all()
-            for u in users:
-                if not getattr(u, "is_superuser", False) and getattr(u, "role", "") != "admin":
-                    u.email = f"staff_{u.id}@sandbox.local"
-                    if hasattr(u, "phone_number"):
-                        u.phone_number = None
-
-        if "patient_insurance_policies" in table_names:
-            from backend.domains.insurance.models import PatientInsurancePolicy
-            policies = s_session.execute(select(PatientInsurancePolicy)).scalars().all()
-            for pol in policies:
-                pol.policy_number = f"POL-SBX-{pol.id}"
-                pol.member_id = f"MEM-SBX-{pol.id}"
-
-        if "insurance_pre_auths" in table_names:
-            from backend.domains.insurance.models import InsurancePreAuth
-            preauths = s_session.execute(select(InsurancePreAuth)).scalars().all()
-            for pa in preauths:
-                pa.clinical_justification = None
-                pa.tpa_query_remarks = None
-                pa.tpa_reference_number = f"TPA-SBX-{pa.id}"
-
-        if "birth_records" in table_names:
-            from backend.domains.clinical.models import BirthRecord
-            births = s_session.execute(select(BirthRecord)).scalars().all()
-            for b in births:
-                b.baby_full_name = f"Sandbox Baby {b.id}"
-                b.clinical_notes = None
-
-        if "death_records" in table_names:
-            from backend.domains.clinical.models import DeathRecord
-            deaths = s_session.execute(select(DeathRecord)).scalars().all()
-            for d in deaths:
-                d.body_handed_over_to = "Sandbox Informant"
-                d.antecedent_cause_notes = None
-
-        if "medico_legal_cases" in table_names:
-            from backend.domains.clinical.models import MedicoLegalCase
-            mlcs = s_session.execute(select(MedicoLegalCase)).scalars().all()
-            for m in mlcs:
-                m.brought_by_name = "Sandbox Informant"
-                m.brought_by_relation = None
-                m.brought_by_phone = "9000000000"
-                m.alleged_history = "Anonymized sandbox history"
-                m.identification_marks = "Anonymized"
-                m.police_station_name = "Sandbox PS"
-                m.fir_number = None
-
-        s_session.commit()
 
 @router.post("/tenants/{slug}/clone-sandbox")
 def clone_hospital_to_sandbox_environment(
@@ -777,6 +726,7 @@ def clone_hospital_to_sandbox_environment(
     payload: SandboxCloneRequest,
     control_db: Session = Depends(get_control_db),
     _: None = Depends(verify_control_plane_secret),
+    _role: str = Depends(require_operator_role("ops", "superadmin")),
 ):
     _verify_vendor_key(payload.master_setup_key)
     src_tenant = control_db.execute(
@@ -784,6 +734,8 @@ def clone_hospital_to_sandbox_environment(
     ).scalar_one_or_none()
     if not src_tenant:
         raise HTTPException(status_code=404, detail=f"Source tenant '{slug}' not found.")
+    if not src_tenant.is_active:
+        raise HTTPException(status_code=400, detail=f"Source tenant '{slug}' is not active.")
 
     sandbox_slug = payload.sandbox_subdomain_slug.strip().lower()
     sandbox_db = (
@@ -1096,10 +1048,13 @@ def get_federation_network_topology(
 
 @router.get("/mpi/lookup")
 def lookup_global_mpi_pointers(
+    request: Request,
     query: str,
+    justification: str = Query(..., min_length=10, description="Mandatory operational or clinical justification for cross-tenant search"),
     x_master_setup_key: Optional[str] = Header(default=None, alias="X-Master-Setup-Key"),
     control_db: Session = Depends(get_control_db),
     _: None = Depends(verify_control_plane_secret),
+    _role: str = Depends(require_operator_role("support", "superadmin")),
 ):
     _verify_vendor_key(x_master_setup_key or "")
     q = query.strip()
@@ -1121,8 +1076,22 @@ def lookup_global_mpi_pointers(
     )
 
     pointers = list(control_db.execute(stmt).scalars().all())
+
+    # R-06: Comprehensive audit logging for all cross-tenant patient index lookups
+    actor = getattr(request.state, "operator_email", None) or "VENDOR_MASTER_KEY"
+    control_db.add(
+        ControlPlaneAuditLog(
+            action="MPI_CROSS_TENANT_LOOKUP",
+            target_slug="GLOBAL_MPI",
+            actor=actor,
+            details=f"MPI lookup for hash={phone_hash[:16]}... justification='{justification.strip()}' matches={len(pointers)}",
+        )
+    )
+    control_db.commit()
+
     return {
         "query": q,
+        "justification": justification.strip(),
         "computed_phone_sha256": phone_hash[:16] + "..." if phone_hash else None,
         "matches_count": len(pointers),
         "pointers": [

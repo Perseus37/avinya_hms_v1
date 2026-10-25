@@ -58,11 +58,19 @@ async def lifespan(_app: FastAPI):
         tenant_engine_pool.dispose_all()
 
 
+is_prod_docs_disabled = (
+    str(settings.ENVIRONMENT).lower() in {"production", "prod"}
+    and not getattr(settings, "ENABLE_PRODUCTION_API_DOCS", False)
+)
+
 app = FastAPI(
     title="Avinya Control Plane API",
     version="5.1.0",
     description="Multi-tenant hospital fleet orchestration and provisioning engine.",
     lifespan=lifespan,
+    docs_url=None if is_prod_docs_disabled else "/docs",
+    redoc_url=None if is_prod_docs_disabled else "/redoc",
+    openapi_url=None if is_prod_docs_disabled else "/openapi.json",
 )
 
 # -------------------------------------------------------------------------
@@ -114,6 +122,7 @@ async def operator_session_middleware(request: Request, call_next):
     request.state.operator_email = identity["email"] if identity else None
     request.state.operator_id = identity["id"] if identity else None
     request.state.operator_token_id = identity["token_id"] if identity else None
+    request.state.operator_role = str(identity.get("role", "superadmin")) if identity else None
     actor_token = control_plane_actor.set(str(identity["email"])) if identity else None
     role_token = control_plane_operator_role.set(str(identity.get("role", "superadmin"))) if identity else None
     try:
