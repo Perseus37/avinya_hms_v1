@@ -58,6 +58,8 @@ class MedicationMaster(AuditMixin, Base):
     form: Mapped[MedicationFormEnum] = mapped_column(nullable=False)
     strength: Mapped[str] = mapped_column(String(50), nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True)
+    is_controlled_substance: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    ndc_or_barcode: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     low_stock_threshold_units: Mapped[Optional[int]] = mapped_column(Integer)
     fefo_expiry_warning_days: Mapped[Optional[int]] = mapped_column(Integer)
 
@@ -161,3 +163,81 @@ class PharmacyReturnLog(AuditMixin, Base):
     prescription_item: Mapped["PrescriptionItem"] = relationship()
     batch: Mapped["InventoryBatch"] = relationship()
     returned_by: Mapped["User"] = relationship(foreign_keys=[returned_by_id])
+
+
+class ControlledSubstanceVault(AuditMixin, Base):
+    """Perpetual inventory vault register for Schedule II / X controlled narcotics (e.g. Fentanyl, Morphine)."""
+    __tablename__ = "controlled_substance_vaults"
+    __table_args__ = (
+        CheckConstraint("current_balance_units >= 0", name="ck_vault_bal_non_neg"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    medication_id: Mapped[int] = mapped_column(ForeignKey("medication_master.id"), unique=True, nullable=False)
+    vault_location: Mapped[str] = mapped_column(String(100), default="MAIN_NARCOTICS_SAFE", nullable=False)
+    current_balance_units: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    unit_of_measure: Mapped[str] = mapped_column(String(30), default="AMPOULE", nullable=False)
+    tamper_seal_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    is_locked: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    medication: Mapped[MedicationMaster] = relationship()
+
+
+class ControlledSubstanceMovementLog(AuditMixin, Base):
+    """Auditable perpetual movement log for narcotics receipts, dispenses, and dual-witness wastage."""
+    __tablename__ = "controlled_substance_movement_logs"
+    __table_args__ = (
+        CheckConstraint("quantity_units > 0", name="ck_narcotic_move_qty_pos"),
+        CheckConstraint("balance_after >= 0", name="ck_narcotic_bal_after_non_neg"),
+        Index("ix_narcotic_move_vault_id", "vault_id"),
+        Index("ix_narcotic_move_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    vault_id: Mapped[int] = mapped_column(ForeignKey("controlled_substance_vaults.id", ondelete="CASCADE"), nullable=False)
+    movement_type: Mapped[str] = mapped_column(String(30), nullable=False)  # RECEIPT, DISPENSE, ADMINISTRATION, RETURN_TO_VAULT, WASTAGE_DESTROYED
+    quantity_units: Mapped[int] = mapped_column(Integer, nullable=False)
+    balance_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    balance_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    encounter_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patient_encounters.id"), nullable=True)
+    prescription_item_id: Mapped[Optional[int]] = mapped_column(ForeignKey("prescription_items.id"), nullable=True)
+    primary_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    witness_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    witness_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    wastage_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    disposal_method: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    batch_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    vault: Mapped[ControlledSubstanceVault] = relationship()
+    primary_user: Mapped["User"] = relationship(foreign_keys=[primary_user_id])
+    witness_user: Mapped[Optional["User"]] = relationship(foreign_keys=[witness_user_id])
+
+
+class BCMAScanAuditLog(AuditMixin, Base):
+    """Bedside Barcode Medication Administration (BCMA) 5-Rights verification log and scan history."""
+    __tablename__ = "bcma_scan_audit_logs"
+    __table_args__ = (
+        Index("ix_bcma_encounter_time", "encounter_id", "scanned_at"),
+        Index("ix_bcma_rx_item", "prescription_item_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id", ondelete="CASCADE"), nullable=False)
+    prescription_item_id: Mapped[int] = mapped_column(ForeignKey("prescription_items.id", ondelete="CASCADE"), nullable=False)
+    administered_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    scanned_patient_barcode: Mapped[str] = mapped_column(String(100), nullable=False)
+    scanned_medication_barcode: Mapped[str] = mapped_column(String(100), nullable=False)
+    patient_matched: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    medication_matched: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    dose_matched: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    time_status: Mapped[str] = mapped_column(String(30), default="ON_TIME", nullable=False)  # ON_TIME, EARLY, LATE, PRN
+    verification_status: Mapped[str] = mapped_column(String(50), nullable=False)  # VERIFIED, WARNING_OVERRIDDEN, BLOCKED_MISMATCH
+    override_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    scanned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    emar_log_id: Mapped[Optional[int]] = mapped_column(ForeignKey("medication_administration_logs.id", ondelete="SET NULL"), nullable=True)
+
+    encounter: Mapped["PatientEncounter"] = relationship()
+    prescription_item: Mapped[PrescriptionItem] = relationship()
+    administered_by: Mapped["User"] = relationship()
+    emar_log: Mapped[Optional[MedicationAdministrationLog]] = relationship()
