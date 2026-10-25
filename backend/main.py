@@ -56,6 +56,7 @@ from backend.domains.privacy import router as privacy_router
 from backend.domains.workforce import router as workforce_router
 from backend.domains.audit import router as audit_router
 from backend.domains.abdm import router as abdm_router
+from backend.domains.quality import router as quality_router
 
 # -----------------------------------------------------------------------------
 # M1 FIX: Context-Safe Request ID Logging Across All Libraries
@@ -354,6 +355,7 @@ for target in (v1_app, app):
     )
     target.include_router(service_ops_router.bmw_router)
     target.include_router(abdm_router.router)
+    target.include_router(quality_router.router)
     target.include_router(privacy_router)
     target.include_router(
         workforce_router,
