@@ -1,8 +1,9 @@
 from datetime import datetime
+from enum import Enum as PyEnum
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.core.audit import AuditMixin
 from backend.core.database import Base
@@ -119,3 +120,83 @@ class ServiceWorkflowEvent(Base):
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+# -----------------------------------------------------------------------------
+# Bio-Medical Waste (BMW) Management under Indian BMW Rules 2016 (M-09)
+# -----------------------------------------------------------------------------
+class BMWColorCategoryEnum(str, PyEnum):
+    YELLOW = "YELLOW"
+    RED = "RED"
+    WHITE = "WHITE"
+    BLUE = "BLUE"
+
+
+class BMWBagStatusEnum(str, PyEnum):
+    LOGGED = "LOGGED"
+    STORED = "STORED"
+    HANDED_OVER = "HANDED_OVER"
+    DISPOSED = "DISPOSED"
+
+
+class BiomedicalWasteManifest(AuditMixin, Base):
+    """Daily/periodic handover manifest to Common Bio-medical Waste Treatment Facility (CBWTF)."""
+    __tablename__ = "biomedical_waste_manifests"
+    __table_args__ = (
+        CheckConstraint("total_bags_count >= 0", name="ck_bmw_manifest_bags_non_neg"),
+        CheckConstraint("total_weight_grams >= 0", name="ck_bmw_manifest_weight_non_neg"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    manifest_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    cbwtf_operator_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    cbwtf_vehicle_number: Mapped[str] = mapped_column(String(50), nullable=False)
+    cbwtf_driver_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    total_bags_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_weight_grams: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    yellow_weight_grams: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    red_weight_grams: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    white_weight_grams: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    blue_weight_grams: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    supervisor_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    pickup_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+
+    bags: Mapped[list["BiomedicalWasteBag"]] = relationship(back_populates="manifest")
+
+
+class BiomedicalWasteBag(AuditMixin, Base):
+    """Barcoded colour-coded bio-medical waste bag tracking from ward generation to disposal."""
+    __tablename__ = "biomedical_waste_bags"
+    __table_args__ = (
+        CheckConstraint("weight_grams > 0", name="ck_bmw_bag_weight_pos"),
+        CheckConstraint(
+            "color_category IN ('YELLOW', 'RED', 'WHITE', 'BLUE')",
+            name="ck_bmw_bag_color_category",
+        ),
+        CheckConstraint(
+            "status IN ('LOGGED', 'STORED', 'HANDED_OVER', 'DISPOSED')",
+            name="ck_bmw_bag_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    barcode: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    color_category: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    weight_grams: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_department: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="LOGGED", index=True)
+    manifest_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("biomedical_waste_manifests.id"), index=True
+    )
+    waste_description: Mapped[Optional[str]] = mapped_column(Text)
+    logged_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    logged_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+    stored_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    handed_over_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    manifest: Mapped[Optional["BiomedicalWasteManifest"]] = relationship(back_populates="bags")
