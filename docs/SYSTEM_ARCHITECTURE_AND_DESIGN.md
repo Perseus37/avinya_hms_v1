@@ -2,10 +2,10 @@
 ## High-Level & Low-Level Design (HLD & LLD)
 
 **Repository:** `sai1-crypto/avinya_hms`  
-**Current Milestone Version:** `v1.5.0` (Commit [`8d65554`](file:///v:/avinya_hms))  
+**Current Milestone Version:** `v2.0.0-ENTERPRISE` (Commit [`79ac432`](file:///v:/avinya_hms) on `main`)  
 **Target Environment:** Multi-Tenant Healthcare Enterprise (Cloud / Hybrid On-Premises)  
 **Document Classification:** Engineering Architecture Specification & Technical Handover  
-**Date:** 25 October 2026  
+**Date:** 26 October 2026  
 
 ---
 
@@ -180,18 +180,22 @@ The system organizes clinical, operational, and financial functions into **24 co
   2. Pharmacy clearance confirming no pending unreturned medications.
   3. Billing clearance confirming zero outstanding balance or authorized financial indemnity.
 
-### 4.6 Clinical Decision Support & DDI Engine ([`backend/domains/clinical`](file:///v:/avinya_hms/backend/domains/clinical))
-- **Responsibilities:** EMR documentation (SOAP notes), clinical problem lists, allergy tracking, and real-time drug interaction checks.
-- **Key Models:** `ClinicalNote`, `Prescription`, `PrescriptionItem`, `PatientAllergy`.
+### 4.6 Clinical Decision Support, CPOE & NEWS2 Deterioration Alerts ([`backend/domains/clinical`](file:///v:/avinya_hms/backend/domains/clinical))
+- **Responsibilities:** EMR documentation (SOAP notes), clinical problem lists, allergy tracking, CPOE standardized order sets, NEWS2 physiological deterioration scoring, drug-disease contraindications, and cross-encounter DDI checks.
+- **Key Models:** `ClinicalNote`, `Prescription`, `PrescriptionItem`, `PatientAllergy`, `OrderSet`, `ClinicalEarlyWarningScore`.
+- **CPOE Order Sets:** Standardized evidence-based protocol bundles (`OrderSet`) that atomically generate multi-disciplinary medication, laboratory, and radiology orders.
+- **NEWS2 Deterioration Alerts:** Real-time scoring across 6 physiological parameters (respiration rate, SpO2, supplemental oxygen, systolic BP, pulse, consciousness/temperature) with immediate emergency escalation to Rapid Response Teams (RRT) for scores >= 7.
+- **Drug-Disease Contraindications:** Cross-references prescribed generic molecules against patient active ICD-10 diagnoses (e.g. Beta-blockers in Bronchial Asthma `J45`, NSAIDs in Peptic Ulcer `K27`).
 - **DDI Engine Specification:**
   - Evaluates active prescriptions across **all encounters** (both past and active admissions/OPDs) for the patient.
   - Enforces generic token length validation (`len >= 3` and whitespace rejection) to prevent false hard stops on unmapped drug names.
   - Interaction severities: `CRITICAL_HARD_STOP` (blocks submission), `MAJOR_WARNING` (requires physician clinical override justification), and `MODERATE_INFO`.
 
-### 4.7 Diagnostic Laboratory Information System (LIS) ([`backend/domains/diagnostics`](file:///v:/avinya_hms/backend/domains/diagnostics))
-- **Responsibilities:** Pathology and diagnostic test ordering, specimen collection, result entry, reference ranges, and critical panic alerts.
+### 4.7 Diagnostic Laboratory Information System (LIS) & Delta Checking ([`backend/domains/diagnostics`](file:///v:/avinya_hms/backend/domains/diagnostics))
+- **Responsibilities:** Pathology and diagnostic test ordering, specimen collection, result entry, reference ranges, automated numeric delta checks, and critical panic alerts.
 - **Key Models:** `ServiceCategory`, `ServiceCatalog`, `DiagnosticOrder`, `DiagnosticTask`.
-- **Panic Value Alerting:** Critical values (e.g., severe hypokalemia, extreme troponin elevation) trigger automated immediate alerts to the attending doctor's dashboard.
+- **LIS Delta Checking:** Evaluates acute variations between current result and prior historic baseline over a retrospective time window, flagging potential hemolyzation or IV fluid contamination.
+- **Panic Value Alerting:** Critical values (e.g., severe hypokalemia, extreme troponin elevation) trigger automated immediate alerts to attending doctors and ward dashboards.
 - **Two-Tier Verification:** Phlebotomist/technician entry is isolated from senior pathologist verification and digital sign-off.
 
 ### 4.8 Radiology PACS & Imaging Metadata ([`backend/domains/bloodbank`](file:///v:/avinya_hms/backend/domains/bloodbank))
@@ -199,14 +203,18 @@ The system organizes clinical, operational, and financial functions into **24 co
 - **Key Models:** `RadiologyStudyMetadata`, `RadiologyStudyAttachment`.
 - **Integration:** Secure URL generation for Web-based DICOM viewers with ephemeral token-authenticated viewing sessions.
 
-### 4.9 Pharmacy Management & FEFO Dispensation ([`backend/domains/pharmacy`](file:///v:/avinya_hms/backend/domains/pharmacy))
-- **Responsibilities:** Medication catalog, stock receipt, batch-expiry management, dispensation against prescription items, and controlled narcotics tracking.
-- **Key Models:** `PharmacyItem`, `PharmacyBatch`, `MedicationDispense`, `PharmacyReturn`.
-- **FEFO Logic:** Dispensation algorithms prioritize batches with the nearest expiration date (First-Expiry, First-Out) while preventing dispensation of expired lots.
+### 4.9 Pharmacy Management, BCMA 5-Rights & Controlled Substances Vault ([`backend/domains/pharmacy`](file:///v:/avinya_hms/backend/domains/pharmacy))
+- **Responsibilities:** Medication catalog, stock receipt, batch-expiry management, FEFO dispensation, bedside Barcode Medication Administration (BCMA) 5-rights verification, and Schedule H/X perpetual narcotics vault.
+- **Key Models:** `PharmacyItem`, `PharmacyBatch`, `MedicationDispense`, `PharmacyReturn`, `BCMAScanAuditLog`, `ControlledSubstanceMovementLog`.
+- **BCMA 5-Rights Verification:** Bedside barcode validation confirming Right Patient, Right Drug, Right Dose, Right Route, and Right Time with strict hard stops on mismatches.
+- **Schedule H/X Perpetual Vault:** Double-locked perpetual inventory and dual-witness digital co-signatures for dispensation and wastage logging.
+- **FEFO Logic:** Dispensation algorithms prioritize batches with the nearest expiration date while preventing dispensation of expired lots.
 
-### 4.10 Billing, Accounts Receivable & GST Tax Engine ([`backend/domains/billing`](file:///v:/avinya_hms/backend/domains/billing))
-- **Responsibilities:** Invoice generation, statutory GST calculation, discount authorization, advance deposits, and Accounts Receivable (AR) aging.
-- **Key Models:** `Invoice`, `InvoiceLineItem`, `Payment`, `AdvanceDeposit`.
+### 4.10 Billing, Multi-Tariff CDM, Midnight Census & GST Engine ([`backend/domains/billing`](file:///v:/avinya_hms/backend/domains/billing))
+- **Responsibilities:** Chargemaster (CDM) automation, multi-tariff MoU rate card resolution, automated inpatient midnight census billing, invoice generation, statutory GST calculation, discount authorization, and AR aging.
+- **Key Models:** `Invoice`, `InvoiceLineItem`, `Payment`, `AdvanceDeposit`, `ChargeCaptureEvent`, `InsurancePlanTariff`.
+- **Multi-Tariff MoU Engine:** Resolves negotiated insurance rates and enforces statutory daily room rent caps.
+- **Midnight Census Runner:** Automated daily midnight charge capture for occupied beds, nursing fees, and recurring care with idempotent `source_reference` deduplication.
 - **GST Invoicing:**
   - Automated calculation of CGST, SGST, and IGST based on hospital location and patient state of residence.
   - Net discount validation includes statutory taxes (`new_net = (total_amount_paise + tax_amount_paise) - discount_amount_paise`).
@@ -264,10 +272,19 @@ The system organizes clinical, operational, and financial functions into **24 co
 ### 4.23 Realtime Events & WebSockets ([`backend/domains/realtime`](file:///v:/avinya_hms/backend/domains/realtime))
 - **Responsibilities:** Live telemetry broadcasting, bed status updates, emergency code announcements, and doctor notification channels over Redis Pub/Sub.
 
-### 4.24 Integrations & Medical Equipment ([`backend/domains/integrations`](file:///v:/avinya_hms/backend/domains/integrations))
-- **Responsibilities:** Medical equipment telemetry ingestion (vital monitors, ventilators), HL7 v2.x message parsing, and device maintenance tracking.
+### 4.24 Native HL7 v2 MLLP Receiver & Equipment Test Mappings ([`backend/domains/integrations`](file:///v:/avinya_hms/backend/domains/integrations))
+- **Responsibilities:** Native TCP/MLLP socket listener on port 2575, unsolicited `ORU^R01` observation result parsing, equipment-to-catalog test mappings, automated delta checking, and panic alert broadcasting.
+- **Key Models:** `EquipmentMaster`, `HL7IntegrationLog`, `EquipmentTestMapping`.
 
-### 4.25 SaaS Control Plane & Fleet Orchestrator ([`backend/control_plane`](file:///v:/avinya_hms/backend/control_plane))
+### 4.25 ABDM (M1-M3) & NHCX National Health Claims Gateway ([`backend/domains/abdm`](file:///v:/avinya_hms/backend/domains/abdm))
+- **Responsibilities:** Ayushman Bharat Digital Mission (ABDM) ABHA profile creation/linking (M1), consent artifact management and revocations (M2), FHIR R4 Encounter/DiagnosticReport bundle packaging (M3), and National Health Claims Exchange (NHCX) claim dispatch and adjudication logging.
+- **Key Models:** `ABDMConsentArtefact`, `NHCXClaimExchangeLog`.
+
+### 4.26 Hospital Quality Indicators (NABH 5th Ed / JCI 7th Ed) & Incident Register ([`backend/domains/quality`](file:///v:/avinya_hms/backend/domains/quality))
+- **Responsibilities:** Automated computation of hospital-acquired infection benchmarks (CAUTI, CLABSI, VAP, SSI), inpatient fall rates, medication errors, and unplanned ICU/OT returns; adverse incident register with root cause analysis (RCA) and CAPA tracking.
+- **Key Models:** `ClinicalQualityIncident`, `QualityIndicatorBenchmark`.
+
+### 4.27 SaaS Control Plane & Fleet Orchestrator ([`backend/control_plane`](file:///v:/avinya_hms/backend/control_plane))
 - **Responsibilities:** Multi-tenant provisioning, subscription billing, blueprint seeding, key rotation, database cloning, and sandbox sanitization.
 - **Key Services:**
   - `auth.py`: Operator session authentication and role validation.
@@ -351,5 +368,5 @@ sequenceDiagram
 Every merge to `main` must pass four strict GitHub Actions release gates:
 1. `Build onboarding UI`: Vite production build and Node.js test execution.
 2. `Build production API image`: Multi-stage Docker container build with non-root security.
-3. `Python tests and PostgreSQL 17 migrations`: 390 automated tests across 46 modules, plus Alembic multi-tenant migration application.
+3. `Python tests and PostgreSQL 17 migrations`: 421 automated tests across 63 modules, plus Alembic multi-tenant migration application.
 4. `Validate Compose configurations`: Compose schema and environment variable validation.

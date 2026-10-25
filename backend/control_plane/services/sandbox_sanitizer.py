@@ -187,7 +187,7 @@ def scrub_sandbox_database(sandbox_db: str) -> Dict[str, int]:
         # 1. PURGE SENSITIVE LOGS, SESSIONS, AND SECURITY TOKENS
         for tbl in PURGED_LOG_TABLES:
             if tbl in table_names:
-                session.execute(text(f'DELETE FROM "{tbl}"'))
+                session.execute(text(f'DELETE FROM "{tbl}"'))  # nosec B608
                 stats["purged_tables"] += 1
 
         # 2. WIPE USERS, PASSWORDS, AND MFA

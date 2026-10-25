@@ -19,6 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from backend.core.audit import AuditMixin
 from backend.core.database import Base
 from backend.domains.identity.models import Department, User
+from backend.domains.encounters.models import PatientEncounter
 from backend.domains.pharmacy.models import MedicationMaster, InventoryBatch
 # from backend.domains.procurement.models import VendorMaster, PurchaseOrder, GoodsReceiptNote
 
