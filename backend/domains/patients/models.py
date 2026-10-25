@@ -127,6 +127,9 @@ class Patient(AuditMixin, Base):
     abha_number: Mapped[Optional[str]] = mapped_column(
         String(50), unique=True, index=True, nullable=True
     )
+    abha_address: Mapped[Optional[str]] = mapped_column(
+        String(100), unique=True, index=True, nullable=True
+    )
     email: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     blood_group: Mapped[Optional[BloodGroupEnum]] = mapped_column(nullable=True)
     address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

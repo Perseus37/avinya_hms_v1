@@ -82,6 +82,7 @@ PURGED_LOG_TABLES: frozenset[str] = frozenset({
 })
 
 SCRUBBED_DATA_TABLES: frozenset[str] = frozenset({
+    "abdm_consent_artefacts",
     "ambulance_dispatches",
     "appointment_status_history",
     "appointment_waitlist_entries",
@@ -123,6 +124,7 @@ SCRUBBED_DATA_TABLES: frozenset[str] = frozenset({
     "medication_administration_logs",
     "medico_legal_cases",
     "mortuary_cases",
+    "nhcx_claim_exchange_logs",
     "nursing_shift_assignments",
     "operative_anesthesia_records",
     "patient_allergies",
@@ -356,6 +358,25 @@ def scrub_sandbox_database(sandbox_db: str) -> Dict[str, int]:
                 text("""
                     UPDATE charge_capture_events
                     SET description = 'Sandbox RCM charge line'
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "abdm_consent_artefacts" in table_names:
+            session.execute(
+                text("""
+                    UPDATE abdm_consent_artefacts
+                    SET signature = NULL,
+                        hiu_id = 'SANDBOX-HIU'
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "nhcx_claim_exchange_logs" in table_names:
+            session.execute(
+                text("""
+                    UPDATE nhcx_claim_exchange_logs
+                    SET bundle_json = '{"resourceType": "Bundle", "status": "sandbox-scrubbed"}'
                 """)
             )
             stats["scrubbed_tables"] += 1
