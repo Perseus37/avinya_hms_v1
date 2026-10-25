@@ -23,7 +23,8 @@ docs/complete_guide/
 ├── 07_MASTER_OPERATIONS_RUNBOOK.md                    <-- Daily maintenance SOPs, PostgreSQL tuning, Redis & SLAs
 ├── 08_API_AND_INTEGRATION_REFERENCE.md                <-- Native HL7 v2 MLLP (:2575), FHIR R4, ABDM & Webhooks
 ├── 09_DATABASE_SCHEMA_AND_DATA_DICTIONARY.md          <-- 70+ tables, constraints, fields & sandbox classification
-└── 10_TESTING_QA_AND_RELEASE_GOVERNANCE.md            <-- 421 tests, Bandit SAST, pip-audit, and release gates
+├── 10_TESTING_QA_AND_RELEASE_GOVERNANCE.md            <-- 421 tests, Bandit SAST, pip-audit, and release gates
+└── 11_DEVELOPER_AND_LOCAL_ENVIRONMENT_RUNBOOK.md      <-- Local dev setup, hot-reload, Alembic migrations, test data seeding & debugging
 ```
 
 ---
@@ -37,6 +38,7 @@ Different stakeholders require different entry points into the system documentat
 - **Step 2:** Study [`02_ARCHITECTURE_AND_SYSTEM_DESIGN.md`](02_ARCHITECTURE_AND_SYSTEM_DESIGN.md) to understand the dual-ASGI engine (Hospital Engine vs. Control Plane) and database pooling.
 - **Step 3:** Explore [`03_END_TO_END_CLINICAL_AND_BUSINESS_WORKFLOWS.md`](03_END_TO_END_CLINICAL_AND_BUSINESS_WORKFLOWS.md) to understand domain logic, CPOE order sets, NEWS2 scoring, and BCMA verification.
 - **Step 4:** Review [`06_SECURITY_PRIVACY_AND_COMPLIANCE.md`](06_SECURITY_PRIVACY_AND_COMPLIANCE.md) for cryptographic boundaries (AES-256-GCM envelope encryption).
+- **Step 5:** Dive into [`11_DEVELOPER_AND_LOCAL_ENVIRONMENT_RUNBOOK.md`](11_DEVELOPER_AND_LOCAL_ENVIRONMENT_RUNBOOK.md) to launch the dual-ASGI servers with hot-reload, author Alembic migrations, seed test data, and run the pre-commit test suite.
 
 ### 2. DevOps, Site Reliability & Platform Operators
 - **Step 1:** Read [`02_ARCHITECTURE_AND_SYSTEM_DESIGN.md`](02_ARCHITECTURE_AND_SYSTEM_DESIGN.md) for network ingress, Traefik routing, PostgreSQL 17, and Redis 8 infrastructure.
