@@ -13,6 +13,8 @@ class MedicationMasterCreate(BaseModel):
     generic_name: str
     form: MedicationFormEnum
     strength: str
+    is_controlled_substance: bool = False
+    ndc_or_barcode: Optional[str] = None
     low_stock_threshold_units: Optional[int] = Field(default=None, ge=0)
     fefo_expiry_warning_days: Optional[int] = Field(default=None, ge=1, le=365)
 
@@ -22,6 +24,8 @@ class MedicationMasterUpdate(BaseModel):
     form: Optional[MedicationFormEnum] = None
     dosage_form: Optional[MedicationFormEnum] = None
     strength: Optional[str] = None
+    is_controlled_substance: Optional[bool] = None
+    ndc_or_barcode: Optional[str] = None
     is_active: Optional[bool] = None
     low_stock_threshold_units: Optional[int] = Field(default=None, ge=0)
     fefo_expiry_warning_days: Optional[int] = Field(default=None, ge=1, le=365)
@@ -33,9 +37,11 @@ class MedicationMasterResponse(BaseModel):
     generic_name: str
     form: MedicationFormEnum
     strength: str
+    is_controlled_substance: bool = False
+    ndc_or_barcode: Optional[str] = None
     is_active: bool
-    low_stock_threshold_units: Optional[int]
-    fefo_expiry_warning_days: Optional[int]
+    low_stock_threshold_units: Optional[int] = None
+    fefo_expiry_warning_days: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
 
 class InventoryBatchCreate(BaseModel):
@@ -139,3 +145,104 @@ MedicationCreate = MedicationMasterCreate
 MedicationResponse = MedicationMasterResponse
 MedicationUpdate = MedicationMasterUpdate
 DispenseRequest = PrescriptionDispenseRequest
+
+
+# -----------------------------------------------------------------------------
+# Barcode Medication Administration (BCMA) 5-Rights Verification Schemas
+# -----------------------------------------------------------------------------
+
+class BCMAVerificationRequest(BaseModel):
+    encounter_id: int
+    prescription_item_id: int
+    scanned_patient_barcode: str
+    scanned_medication_barcode: str
+    dose_given: Optional[str] = None
+    scheduled_time: Optional[datetime] = None
+    override_warning: bool = False
+    override_reason: Optional[str] = None
+
+
+class BCMAVerificationResponse(BaseModel):
+    is_verified: bool
+    verification_status: str  # VERIFIED, WARNING_OVERRIDDEN, BLOCKED_MISMATCH
+    patient_matched: bool
+    medication_matched: bool
+    dose_matched: bool
+    time_status: str  # ON_TIME, EARLY, LATE, PRN
+    messages: List[str]
+    emar_log_id: Optional[int] = None
+    bcma_log_id: Optional[int] = None
+
+
+# -----------------------------------------------------------------------------
+# Controlled Substances (Narcotics) Vault & Dual-Witness Wastage Schemas
+# -----------------------------------------------------------------------------
+
+class ControlledSubstanceVaultCreate(BaseModel):
+    medication_id: int
+    vault_location: str = "MAIN_NARCOTICS_SAFE"
+    initial_balance_units: int = Field(default=0, ge=0)
+    unit_of_measure: str = "AMPOULE"
+    tamper_seal_number: Optional[str] = None
+
+
+class ControlledSubstanceVaultResponse(BaseModel):
+    id: int
+    medication_id: int
+    vault_location: str
+    current_balance_units: int
+    unit_of_measure: str
+    tamper_seal_number: Optional[str] = None
+    is_locked: bool
+    medication: MedicationMasterResponse
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ControlledSubstanceReceiptRequest(BaseModel):
+    vault_id: int
+    quantity_units: int = Field(gt=0)
+    batch_number: str
+    tamper_seal_number: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ControlledSubstanceDispenseRequest(BaseModel):
+    vault_id: int
+    quantity_units: int = Field(gt=0)
+    encounter_id: Optional[int] = None
+    prescription_item_id: Optional[int] = None
+    batch_number: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ControlledSubstanceWastageRequest(BaseModel):
+    vault_id: int
+    quantity_units: int = Field(gt=0)
+    encounter_id: Optional[int] = None
+    prescription_item_id: Optional[int] = None
+    wastage_reason: str = Field(min_length=5, max_length=255)
+    disposal_method: str = Field(min_length=3, max_length=100)
+    witness_user_id: int
+    witness_password: str
+    batch_number: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ControlledSubstanceMovementResponse(BaseModel):
+    id: int
+    vault_id: int
+    movement_type: str
+    quantity_units: int
+    balance_before: int
+    balance_after: int
+    encounter_id: Optional[int] = None
+    prescription_item_id: Optional[int] = None
+    primary_user_id: int
+    witness_user_id: Optional[int] = None
+    witness_verified: bool
+    wastage_reason: Optional[str] = None
+    disposal_method: Optional[str] = None
+    batch_number: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)

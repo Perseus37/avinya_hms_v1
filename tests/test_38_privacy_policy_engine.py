@@ -38,6 +38,7 @@ NON_PATIENT_OR_DEFERRED_GET_ROUTES = {
     "/api/admin/policies",
     "/api/audit/security-events",
     "/api/audit/stream",
+    "/api/abdm/m2/consent/artefacts/{consent_id}",
     "/api/ambulance/vehicles",
     "/api/analytics/appointment-performance",
     "/api/analytics/care-timings",
@@ -61,12 +62,15 @@ NON_PATIENT_OR_DEFERRED_GET_ROUTES = {
     "/api/auth/roles",
     "/api/auth/users",
     "/api/auth/users/{user_id}",
+    "/api/billing/rcm/charge-events",
     "/api/biomedical-waste/bags",
     "/api/biomedical-waste/compliance/summary",
     "/api/biomedical-waste/manifests",
     "/api/biomedical-waste/manifests/{manifest_id}",
     "/api/blood-bank/bags",
     "/api/clinical/departments/{department_id}/taxonomy/{taxonomy_type}",
+    "/api/clinical/order-sets",
+    "/api/clinical/order-sets/{order_set_id}",
     "/api/cssd/batches",
     "/api/cssd/instrument-sets",
     "/api/diagnostics/catalog",
@@ -74,8 +78,10 @@ NON_PATIENT_OR_DEFERRED_GET_ROUTES = {
     "/api/diagnostics/catalog/{parent_id}/bundles",
     "/api/diagnostics/categories",
     "/api/diagnostics/categories/{category_id}",
+    "/api/diagnostics/delta-configs",
     "/api/equipment/",
     "/api/equipment/logs",
+    "/api/equipment/mappings",
     "/api/federation/clients",
     "/api/fhir/R4/metadata",
     "/api/insurance/plans",
@@ -86,9 +92,12 @@ NON_PATIENT_OR_DEFERRED_GET_ROUTES = {
     "/api/ip/wards",
     "/api/ip/wards/{ward_id}/rooms",
     "/api/ip/wards/{ward_id}/shifts",
+    "/api/nhcx/transactions/{transaction_id}",
     "/api/opd/doctors/{doctor_id}/leaves",
     "/api/ot/theatres",
     "/api/patients/pincode-suggestions",
+    "/api/pharmacy/controlled-substances/movements",
+    "/api/pharmacy/controlled-substances/vault",
     "/api/pharmacy/inventory/batches",
     "/api/pharmacy/medications",
     "/api/privacy/breach-incidents",
@@ -108,6 +117,10 @@ NON_PATIENT_OR_DEFERRED_GET_ROUTES = {
     "/api/procurement/invoices/{invoice_id}/document",
     "/api/procurement/purchase-orders/{po_id}/print",
     "/api/procurement/vendors/{vendor_id}/metrics",
+    "/api/quality/benchmarks",
+    "/api/quality/incidents",
+    "/api/quality/incidents/{incident_id}",
+    "/api/quality/indicators/summary",
     "/api/reports/templates",
     "/api/reports/templates/variables/{report_type}",
     "/api/workforce/attendance",
@@ -467,7 +480,11 @@ def test_clinical_patient_record_routes_are_classified_or_explicitly_excluded():
         route = f"GET {path}"
         operation = operations["get"]
         point = operation.get("x-privacy-data-use-point")
-        if route == public_taxonomy:
+        if route in (
+            public_taxonomy,
+            "GET /api/clinical/order-sets",
+            "GET /api/clinical/order-sets/{order_set_id}",
+        ):
             assert point is None
             continue
         assert point in DATA_USE_POINTS, f"Unclassified clinical route: {route}"
@@ -479,6 +496,7 @@ def test_clinical_patient_record_routes_are_classified_or_explicitly_excluded():
         "GET /api/clinical/encounters/{encounter_id}/diagnoses",
         "GET /api/clinical/patients/{patient_id}/comorbidities",
         "GET /api/clinical/encounters/{encounter_id}/physical-exams",
+        "GET /api/clinical/encounters/{encounter_id}/early-warning-scores",
     }
 
 
@@ -514,6 +532,9 @@ def test_opd_patient_reads_are_classified_except_doctor_leave_schedule():
 
 def test_billing_pharmacy_diagnostics_and_insurance_reads_are_classified():
     non_patient_routes = {
+        "GET /api/billing/rcm/charge-events",
+        "GET /api/pharmacy/controlled-substances/movements",
+        "GET /api/pharmacy/controlled-substances/vault",
         "GET /api/pharmacy/medications",
         "GET /api/pharmacy/inventory/batches",
         "GET /api/diagnostics/categories",
@@ -521,6 +542,7 @@ def test_billing_pharmacy_diagnostics_and_insurance_reads_are_classified():
         "GET /api/diagnostics/catalog",
         "GET /api/diagnostics/catalog/{item_id}",
         "GET /api/diagnostics/catalog/{parent_id}/bundles",
+        "GET /api/diagnostics/delta-configs",
         "GET /api/insurance/plans",
         "GET /api/insurance/plans/{plan_id}/tariffs",
         "GET /api/insurance/providers",

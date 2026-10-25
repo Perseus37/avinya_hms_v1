@@ -32,16 +32,21 @@ MASTER_AND_CONFIG_TABLES: frozenset[str] = frozenset({
     "chief_complaints_master",
     "comorbidities_master",
     "cssd_instrument_sets",
+    "controlled_substance_vaults",
     "departments",
     "diagnoses_master",
     "equipment_master",
+    "equipment_test_mappings",
     "floors",
     "hospital_policy_settings",
     "insurance_plan_tariffs",
     "insurance_plans",
     "insurance_providers",
+    "lab_delta_check_configs",
     "medication_master",
     "operation_theatres",
+    "order_set_items",
+    "order_set_masters",
     "permissions",
     "physical_examinations_master",
     "physical_rooms_master",
@@ -49,6 +54,7 @@ MASTER_AND_CONFIG_TABLES: frozenset[str] = frozenset({
     "privacy_policy_revisions",
     "privacy_retention_policies",
     "procurement_vendors",
+    "quality_indicator_benchmarks",
     "report_templates",
     "role_permissions",
     "roles",
@@ -78,18 +84,24 @@ PURGED_LOG_TABLES: frozenset[str] = frozenset({
 })
 
 SCRUBBED_DATA_TABLES: frozenset[str] = frozenset({
+    "abdm_consent_artefacts",
     "ambulance_dispatches",
     "appointment_status_history",
     "appointment_waitlist_entries",
     "appointment_waitlist_history",
     "appointments",
     "attendance_records",
+    "bcma_scan_audit_logs",
     "bed_transfer_logs",
     "biomedical_waste_bags",
     "biomedical_waste_manifests",
     "birth_records",
     "blood_cross_match_orders",
+    "charge_capture_events",
+    "clinical_early_warning_scores",
     "clinical_notes",
+    "clinical_quality_incidents",
+    "controlled_substance_movement_logs",
     "cssd_sterilization_batches",
     "death_records",
     "diagnostic_orders",
@@ -115,6 +127,7 @@ SCRUBBED_DATA_TABLES: frozenset[str] = frozenset({
     "medication_administration_logs",
     "medico_legal_cases",
     "mortuary_cases",
+    "nhcx_claim_exchange_logs",
     "nursing_shift_assignments",
     "operative_anesthesia_records",
     "patient_allergies",
@@ -305,6 +318,79 @@ def scrub_sandbox_database(sandbox_db: str) -> Dict[str, int]:
                         result_notes = 'Sandbox verified test result',
                         rejection_reason = NULL
                     WHERE result_value IS NOT NULL OR result_notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "clinical_early_warning_scores" in table_names:
+            session.execute(
+                text("""
+                    UPDATE clinical_early_warning_scores
+                    SET clinical_recommendation = 'Sandbox standardized clinical recommendation'
+                    WHERE clinical_recommendation IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "bcma_scan_audit_logs" in table_names:
+            session.execute(
+                text("""
+                    UPDATE bcma_scan_audit_logs
+                    SET scanned_patient_barcode = 'PAT-SANDBOX-SCRUBBED',
+                        scanned_medication_barcode = 'MED-SANDBOX-SCRUBBED',
+                        override_reason = 'Sandbox protocol override'
+                    WHERE override_reason IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "controlled_substance_movement_logs" in table_names:
+            session.execute(
+                text("""
+                    UPDATE controlled_substance_movement_logs
+                    SET wastage_reason = 'Sandbox protocol wastage',
+                        notes = 'Sandbox narcotics movement record',
+                        disposal_method = 'SANDBOX_NEUTRALIZATION'
+                    WHERE wastage_reason IS NOT NULL OR notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "charge_capture_events" in table_names:
+            session.execute(
+                text("""
+                    UPDATE charge_capture_events
+                    SET description = 'Sandbox RCM charge line'
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "abdm_consent_artefacts" in table_names:
+            session.execute(
+                text("""
+                    UPDATE abdm_consent_artefacts
+                    SET signature = NULL,
+                        hiu_id = 'SANDBOX-HIU'
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "nhcx_claim_exchange_logs" in table_names:
+            session.execute(
+                text("""
+                    UPDATE nhcx_claim_exchange_logs
+                    SET bundle_json = '{"resourceType": "Bundle", "status": "sandbox-scrubbed"}'
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "clinical_quality_incidents" in table_names:
+            session.execute(
+                text("""
+                    UPDATE clinical_quality_incidents
+                    SET description = 'Sandbox anonymized clinical quality incident',
+                        root_cause_analysis = CASE WHEN root_cause_analysis IS NOT NULL THEN 'Sandbox RCA record' ELSE NULL END,
+                        capa_plan = CASE WHEN capa_plan IS NOT NULL THEN 'Sandbox CAPA plan' ELSE NULL END
                 """)
             )
             stats["scrubbed_tables"] += 1

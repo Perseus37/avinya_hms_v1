@@ -1,7 +1,7 @@
 from enum import Enum as PyEnum
 from typing import Optional
 
-from sqlalchemy import Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.core.audit import AuditMixin
@@ -47,5 +47,27 @@ class HL7IntegrationLog(AuditMixin, Base):
     parsed_order_id: Mapped[Optional[str]] = mapped_column(String(100), index=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False)
     error_details: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class EquipmentTestMapping(AuditMixin, Base):
+    """Mapping of equipment-specific analyte test code to internal HMS Service Catalog."""
+
+    __tablename__ = "equipment_test_mappings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    equipment_id: Mapped[int] = mapped_column(
+        ForeignKey("equipment_master.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    analyzer_test_code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    analyzer_test_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    service_id: Mapped[int] = mapped_column(
+        ForeignKey("service_catalog.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    units: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    equipment: Mapped["EquipmentMaster"] = relationship()
+    service: Mapped["ServiceCatalog"] = relationship()
+
 
     equipment: Mapped[Optional["EquipmentMaster"]] = relationship()

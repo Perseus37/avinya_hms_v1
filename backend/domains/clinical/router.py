@@ -2,20 +2,37 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from backend.core.database import get_db, get_redis, resolve_tenant_context
 from backend.core.dependencies import RequirePermission
-from backend.domains.clinical.models import ClinicalNote, EncounterDiagnosis, EncounterVital, EncounterPhysicalExam, PatientComorbidity
+from backend.domains.clinical.models import (
+    ClinicalEarlyWarningScore,
+    ClinicalNote,
+    EarlyWarningRiskEnum,
+    EncounterDiagnosis,
+    EncounterPhysicalExam,
+    EncounterVital,
+    OrderSetItem,
+    OrderSetItemTypeEnum,
+    OrderSetMaster,
+    OrderSetPriorityEnum,
+    PatientComorbidity,
+)
 from backend.domains.encounters.models import DiagnosisTypeEnum, EncounterStatusEnum, PatientEncounter
 from backend.domains.identity.models import User
 from backend.domains.patients.models import AllergyMaster, ChiefComplaintMaster, ComorbidityMaster, DiagnosisMaster, PhysicalExaminationMaster, Patient
 
 from backend.domains.clinical.schemas import EncounterVitalCreate, EncounterVitalResponse, ClinicalNoteCreate, ClinicalNoteResponse, ClinicalNoteUpdate, EncounterDiagnosisCreate, EncounterDiagnosisResponse, EncounterPhysicalExamCreate, EncounterPhysicalExamResponse, PatientComorbidityCreate, PatientComorbidityResponse
 from backend.domains.patients.schemas import AllergyCreate, AllergyResponse, AllergyUpdate, ChiefComplaintCreate, ChiefComplaintResponse, ChiefComplaintUpdate, CPOEAllergyCheckRequest, ComorbidityResponse, ComorbidityCreate, ComorbidityUpdate, DiagnosisResponse, DiagnosisCreate, DiagnosisUpdate, PhysicalExamResponse, PhysicalExamCreate, PhysicalExamUpdate
-from backend.domains.clinical.services import check_allergy_hard_stop
+from backend.domains.clinical.services import (
+    calculate_news2_score,
+    check_allergy_hard_stop,
+    check_drug_disease_contraindications,
+    check_drug_drug_interactions,
+)
 from backend.domains.patients.services import (
     get_department_taxonomy,
     invalidate_department_taxonomy_cache,
@@ -801,5 +818,371 @@ def list_encounter_physical_exams(
         .options(joinedload(EncounterPhysicalExam.exam_master))
         .where(EncounterPhysicalExam.encounter_id == encounter_id)
         .order_by(EncounterPhysicalExam.id.asc())
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+# -----------------------------------------------------------------------------
+# Enterprise CPOE Order Sets & Protocol Bundles
+# -----------------------------------------------------------------------------
+
+class OrderSetItemInput(BaseModel):
+    item_type: OrderSetItemTypeEnum
+    medication_id: Optional[int] = None
+    service_id: Optional[int] = None
+    dosage_instruction: Optional[str] = None
+    quantity: int = 1
+    priority: OrderSetPriorityEnum = OrderSetPriorityEnum.ROUTINE
+    clinical_instructions: Optional[str] = None
+
+
+class OrderSetCreateRequest(BaseModel):
+    code: str
+    title: str
+    specialty: Optional[str] = "General"
+    clinical_indication: Optional[str] = None
+    items: List[OrderSetItemInput] = []
+
+
+class OrderSetItemResponse(BaseModel):
+    id: int
+    item_type: str
+    medication_id: Optional[int] = None
+    service_id: Optional[int] = None
+    dosage_instruction: Optional[str] = None
+    quantity: int
+    priority: str
+    clinical_instructions: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class OrderSetMasterResponse(BaseModel):
+    id: int
+    code: str
+    title: str
+    specialty: Optional[str] = "General"
+    clinical_indication: Optional[str] = None
+    is_active: bool
+    items: List[OrderSetItemResponse] = []
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ApplyOrderSetPayload(BaseModel):
+    order_set_id: int
+    priority: Optional[str] = "ROUTINE"
+    clinical_justification: Optional[str] = None
+    override_ddi_warning: bool = False
+    ddi_override_justification: Optional[str] = None
+    override_contraindication: bool = False
+    contraindication_override_justification: Optional[str] = None
+
+
+class NEWS2EvaluationRequest(BaseModel):
+    vital_id: Optional[int] = None
+    respiratory_rate: Optional[int] = None
+    spo2_percent: Optional[int] = None
+    bp_systolic: Optional[int] = None
+    pulse_bpm: Optional[int] = None
+    consciousness: Optional[str] = "ALERT"
+    temperature_f: Optional[float] = None
+    on_supplemental_oxygen: bool = False
+
+
+@router.post("/order-sets", response_model=OrderSetMasterResponse, status_code=status.HTTP_201_CREATED)
+def create_cpoe_order_set(
+    payload: OrderSetCreateRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("clinical:write", "mdm:write")),
+):
+    """Creates a standardized CPOE order set template (e.g. Sepsis protocol, Chest Pain pathway)."""
+    existing = db.execute(
+        select(OrderSetMaster).where(OrderSetMaster.code == payload.code)
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Order set with code '{payload.code}' already exists.")
+
+    order_set = OrderSetMaster(
+        code=payload.code,
+        title=payload.title,
+        specialty=payload.specialty,
+        clinical_indication=payload.clinical_indication,
+        is_active=True,
+    )
+    db.add(order_set)
+    db.flush()
+
+    for item_in in payload.items:
+        db.add(
+            OrderSetItem(
+                order_set_id=order_set.id,
+                item_type=item_in.item_type,
+                medication_id=item_in.medication_id,
+                service_id=item_in.service_id,
+                dosage_instruction=item_in.dosage_instruction,
+                quantity=item_in.quantity,
+                priority=item_in.priority,
+                clinical_instructions=item_in.clinical_instructions,
+            )
+        )
+
+    db.commit()
+    db.refresh(order_set)
+    return order_set
+
+
+@router.get("/order-sets", response_model=List[OrderSetMasterResponse])
+def list_cpoe_order_sets(
+    specialty: Optional[str] = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("clinical:read", "opd:read", "adt:read")),
+):
+    """Lists all active CPOE order set protocols, optionally filtered by medical specialty."""
+    stmt = select(OrderSetMaster).options(joinedload(OrderSetMaster.items)).where(OrderSetMaster.is_active == True)
+    if specialty:
+        stmt = stmt.where(OrderSetMaster.specialty.ilike(f"%{specialty}%"))
+    return list(db.execute(stmt.order_by(OrderSetMaster.title.asc())).unique().scalars().all())
+
+
+@router.get("/order-sets/{order_set_id}", response_model=OrderSetMasterResponse)
+def get_cpoe_order_set(
+    order_set_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("clinical:read", "opd:read", "adt:read")),
+):
+    """Retrieves full details of an OrderSetMaster template including all line items."""
+    stmt = (
+        select(OrderSetMaster)
+        .options(joinedload(OrderSetMaster.items))
+        .where(OrderSetMaster.id == order_set_id, OrderSetMaster.is_active == True)
+    )
+    order_set = db.execute(stmt).unique().scalar_one_or_none()
+    if not order_set:
+        raise HTTPException(status_code=404, detail="Order set template not found.")
+    return order_set
+
+
+@router.post("/encounters/{encounter_id}/apply-order-set", status_code=status.HTTP_201_CREATED)
+def apply_cpoe_order_set_to_encounter(
+    encounter_id: int,
+    payload: ApplyOrderSetPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("clinical:write", "opd:write", "adt:write")),
+):
+    """
+    Atomically instantiates a standardized OrderSetMaster for an active clinical encounter.
+    Executes clinical safety checks (Allergy, DDI, and Drug-Disease Contraindications),
+    and creates Prescriptions, PrescriptionItems, DiagnosticOrders, and DiagnosticTasks in one transaction.
+    """
+    encounter = _get_active_encounter_or_raise(db, encounter_id)
+
+    stmt = (
+        select(OrderSetMaster)
+        .options(joinedload(OrderSetMaster.items))
+        .where(OrderSetMaster.id == payload.order_set_id, OrderSetMaster.is_active == True)
+    )
+    order_set = db.execute(stmt).unique().scalar_one_or_none()
+    if not order_set:
+        raise HTTPException(status_code=404, detail="Active order set template not found.")
+
+    from backend.domains.pharmacy.models import (
+        MedicationMaster,
+        Prescription,
+        PrescriptionItem,
+        PrescriptionStatusEnum,
+    )
+    from backend.domains.diagnostics.models import (
+        DiagnosticOrder,
+        DiagnosticTask,
+        OrderStatusEnum,
+        TaskStatusEnum,
+    )
+
+    med_items = [it for it in order_set.items if it.item_type == OrderSetItemTypeEnum.MEDICATION and it.medication_id]
+    lab_items = [it for it in order_set.items if it.item_type in (OrderSetItemTypeEnum.DIAGNOSTIC_LAB, OrderSetItemTypeEnum.RADIOLOGY) and it.service_id]
+
+    prescription = None
+    if med_items:
+        med_ids = [it.medication_id for it in med_items]
+        meds = list(db.execute(select(MedicationMaster).where(MedicationMaster.id.in_(med_ids))).scalars().all())
+
+        # 1. Check Allergy hard-stop
+        allergy_keywords = [m.brand_name for m in meds] + [m.generic_name for m in meds]
+        check_allergy_hard_stop(db, encounter.patient_id, allergy_keywords)
+
+        # 2. Check Drug-Drug Interactions
+        check_drug_drug_interactions(
+            session=db,
+            patient_id=encounter.patient_id,
+            candidate_medications=meds,
+            encounter_id=encounter_id,
+            override_warning=payload.override_ddi_warning,
+            override_justification=payload.ddi_override_justification,
+        )
+
+        # 3. Check Drug-Disease Contraindications
+        med_generics = [m.generic_name for m in meds]
+        check_drug_disease_contraindications(
+            session=db,
+            patient_id=encounter.patient_id,
+            medication_generics=med_generics,
+            override_contraindication=payload.override_contraindication,
+            override_justification=payload.contraindication_override_justification,
+        )
+
+        # Instantiate Prescription
+        prescription = Prescription(
+            encounter_id=encounter_id,
+            prescribing_doctor_id=current_user.id,
+            status=PrescriptionStatusEnum.ACTIVE,
+            clinical_notes=f"CPOE Order Set applied: {order_set.title} ({order_set.code}). Justification: {payload.clinical_justification or 'Protocol order'}",
+        )
+        db.add(prescription)
+        db.flush()
+
+        for item in med_items:
+            db.add(
+                PrescriptionItem(
+                    prescription_id=prescription.id,
+                    medication_id=item.medication_id,
+                    dosage_instruction=item.dosage_instruction or "As directed by clinical protocol",
+                    requested_quantity=item.quantity,
+                    dispensed_quantity=0,
+                )
+            )
+
+    diag_order = None
+    if lab_items:
+        diag_order = DiagnosticOrder(
+            patient_id=encounter.patient_id,
+            ordering_doctor_id=current_user.id,
+            clinical_notes=f"CPOE Order Set: {order_set.title} ({order_set.code})",
+            status=OrderStatusEnum.ACTIVE,
+        )
+        db.add(diag_order)
+        db.flush()
+
+        for item in lab_items:
+            db.add(
+                DiagnosticTask(
+                    order_id=diag_order.id,
+                    service_id=item.service_id,
+                    status=TaskStatusEnum.PENDING,
+                )
+            )
+
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": f"Order set '{order_set.title}' successfully instantiated for encounter {encounter_id}.",
+        "order_set_id": order_set.id,
+        "order_set_code": order_set.code,
+        "prescription_id": prescription.id if prescription else None,
+        "diagnostic_order_id": diag_order.id if diag_order else None,
+        "medication_count": len(med_items),
+        "investigation_count": len(lab_items),
+    }
+
+
+# -----------------------------------------------------------------------------
+# Enterprise Clinical Early Warning Scoring (NEWS2 / qSOFA)
+# -----------------------------------------------------------------------------
+
+class EarlyWarningScoreResponse(BaseModel):
+    id: int
+    encounter_id: int
+    vital_id: Optional[int] = None
+    evaluated_by_id: int
+    news2_score: int
+    risk_level: str
+    qsofa_score: int
+    is_rrt_alert_triggered: bool
+    clinical_recommendation: str
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+@router.post("/encounters/{encounter_id}/vitals/news2", response_model=dict, status_code=status.HTTP_201_CREATED)
+def evaluate_encounter_news2(
+    encounter_id: int,
+    payload: NEWS2EvaluationRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("clinical:write", "opd:write", "adt:write")),
+):
+    """
+    Computes National Early Warning Score 2 (NEWS2) & qSOFA for a patient encounter.
+    Stores the score and automatically flags Rapid Response Team (RRT) triggers for critical deterioration.
+    """
+    _ = _get_active_encounter_or_raise(db, encounter_id)
+
+    rr = payload.respiratory_rate
+    spo2 = payload.spo2_percent
+    sbp = payload.bp_systolic
+    pulse = payload.pulse_bpm
+    temp = payload.temperature_f
+    consciousness = payload.consciousness or "ALERT"
+
+    # Hydrate from EncounterVital if vital_id provided and fields were omitted
+    if payload.vital_id:
+        vital = db.get(EncounterVital, payload.vital_id)
+        if vital and vital.encounter_id == encounter_id:
+            if rr is None: rr = vital.respiratory_rate
+            if spo2 is None: spo2 = vital.spo2_percent
+            if sbp is None: sbp = vital.bp_systolic
+            if pulse is None: pulse = vital.pulse_bpm
+            if temp is None: temp = vital.temperature_f
+
+    news_result = calculate_news2_score(
+        respiratory_rate=rr,
+        spo2_percent=spo2,
+        bp_systolic=sbp,
+        pulse_bpm=pulse,
+        consciousness=consciousness,
+        temperature_f=temp,
+        on_supplemental_oxygen=payload.on_supplemental_oxygen,
+    )
+
+    score_rec = ClinicalEarlyWarningScore(
+        encounter_id=encounter_id,
+        vital_id=payload.vital_id,
+        evaluated_by_id=current_user.id,
+        news2_score=news_result["news2_score"],
+        risk_level=EarlyWarningRiskEnum(news_result["risk_level"]),
+        qsofa_score=news_result["qsofa_score"],
+        is_rrt_alert_triggered=news_result["is_rrt_alert_triggered"],
+        clinical_recommendation=news_result["clinical_recommendation"],
+    )
+    db.add(score_rec)
+    db.commit()
+    db.refresh(score_rec)
+
+    return {
+        "score_id": score_rec.id,
+        "encounter_id": encounter_id,
+        "news2_score": news_result["news2_score"],
+        "risk_level": news_result["risk_level"],
+        "qsofa_score": news_result["qsofa_score"],
+        "is_rrt_alert_triggered": news_result["is_rrt_alert_triggered"],
+        "sub_scores": news_result["sub_scores"],
+        "clinical_recommendation": news_result["clinical_recommendation"],
+    }
+
+
+@router.get(
+    "/encounters/{encounter_id}/early-warning-scores",
+    response_model=List[EarlyWarningScoreResponse],
+    openapi_extra={"x-privacy-data-use-point": "clinical.encounter.vitals.read"},
+)
+def list_early_warning_scores(
+    encounter_id: int,
+    db: Session = Depends(get_db),
+    actor: User = Depends(RequirePermission("clinical:read", "opd:read", "adt:read")),
+):
+    """Retrieves all historical NEWS2 and deterioration scores recorded for an encounter."""
+    _evaluate_encounter_read(db, encounter_id, actor, "clinical.encounter.vitals.read")
+    stmt = (
+        select(ClinicalEarlyWarningScore)
+        .where(ClinicalEarlyWarningScore.encounter_id == encounter_id)
+        .order_by(ClinicalEarlyWarningScore.created_at.desc())
     )
     return list(db.execute(stmt).scalars().all())

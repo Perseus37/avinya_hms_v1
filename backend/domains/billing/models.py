@@ -277,3 +277,52 @@ class RefundVoucher(AuditMixin, Base):
 #     total_price_paise: Mapped[int] = mapped_column(Integer, nullable=False)
 
 #     invoice: Mapped["VendorInvoice"] = relationship(back_populates="items")
+
+
+class ChargeCaptureEventTypeEnum(str, PyEnum):
+    SURGERY_COMPLETED = "SURGERY_COMPLETED"
+    MIDNIGHT_CENSUS = "MIDNIGHT_CENSUS"
+    DIAGNOSTIC_VERIFIED = "DIAGNOSTIC_VERIFIED"
+    CLINICAL_ORDER = "CLINICAL_ORDER"
+    ROOM_BED_CHARGE = "ROOM_BED_CHARGE"
+    MANUAL_ENTRY = "MANUAL_ENTRY"
+
+
+class ChargeCaptureEvent(AuditMixin, Base):
+    """
+    Automated Revenue Cycle Management (RCM) Charge Capture ledger.
+    Guarantees event idempotency and auditable linkage between clinical activities and invoice line items.
+    """
+    __tablename__ = "charge_capture_events"
+    __table_args__ = (
+        UniqueConstraint("source_reference", name="uq_charge_capture_source_ref"),
+        CheckConstraint("total_charge_paise >= 0", name="ck_charge_capture_total_non_neg"),
+        Index("ix_charge_capture_encounter_id", "encounter_id"),
+        Index("ix_charge_capture_patient_id", "patient_id"),
+        Index("ix_charge_capture_posted_at", "posted_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id", ondelete="CASCADE"), nullable=False)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
+    invoice_id: Mapped[int] = mapped_column(ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False)
+    invoice_line_item_id: Mapped[Optional[int]] = mapped_column(ForeignKey("invoice_line_items.id", ondelete="SET NULL"), nullable=True)
+
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_reference: Mapped[str] = mapped_column(String(100), nullable=False)  # e.g. SURGERY-12, CENSUS-4-2026-10-25
+    service_id: Mapped[Optional[int]] = mapped_column(ForeignKey("service_catalog.id", ondelete="SET NULL"), nullable=True)
+    description: Mapped[str] = mapped_column(String(255), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    unit_price_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    tax_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_charge_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    tariff_applied: Mapped[str] = mapped_column(String(100), default="BASE_CATALOG", nullable=False)
+    is_insurance_covered: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    posted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    encounter: Mapped["PatientEncounter"] = relationship()
+    patient: Mapped["Patient"] = relationship()
+    invoice: Mapped["Invoice"] = relationship()
+    invoice_line_item: Mapped[Optional["InvoiceLineItem"]] = relationship()
+    service: Mapped[Optional["ServiceCatalog"]] = relationship()

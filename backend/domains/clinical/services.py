@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-from typing import Any, Iterable, List, Optional, Set
+from typing import Any, Optional
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -277,6 +277,7 @@ def evaluate_drug_interactions(
     return findings
 
 
+# -----------------------------------------------------------------------------
 def check_drug_drug_interactions(
     session: Session,
     patient_id: int,
@@ -371,3 +372,402 @@ def check_drug_drug_interactions(
         )
 
     return findings
+
+
+# -----------------------------------------------------------------------------
+# Enterprise Drug-Disease Contraindication Rules & Evaluator
+# -----------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class DiseaseContraindicationRule:
+    drug_keywords: frozenset[str]
+    icd10_prefixes: tuple[str, ...]
+    disease_keywords: tuple[str, ...]
+    severity: str  # "CRITICAL_HARD_STOP", "CRITICAL"
+    condition_name: str
+    clinical_risk: str
+
+
+DRUG_DISEASE_RULES: list[DiseaseContraindicationRule] = [
+    DiseaseContraindicationRule(
+        drug_keywords=frozenset({
+            "propranolol", "atenolol", "timolol", "metoprolol", "carvedilol", "labetalol", "bisoprolol", "nadolol"
+        }),
+        icd10_prefixes=("J45", "J46"),
+        disease_keywords=("asthma", "bronchospasm", "reactive airway"),
+        severity="CRITICAL_HARD_STOP",
+        condition_name="Bronchial Asthma",
+        clinical_risk="Beta-adrenergic blockade precipitates severe bronchospasm, refractory status asthmaticus, and respiratory arrest.",
+    ),
+    DiseaseContraindicationRule(
+        drug_keywords=frozenset({
+            "aspirin", "ibuprofen", "diclofenac", "naproxen", "ketorolac", "indomethacin", "piroxicam", "aceclofenac"
+        }),
+        icd10_prefixes=("K25", "K26", "K27", "K28"),
+        disease_keywords=("peptic ulcer", "gastric ulcer", "duodenal ulcer", "gi bleed"),
+        severity="CRITICAL",
+        condition_name="Active Peptic Ulcer Disease",
+        clinical_risk="Inhibition of mucosal prostaglandins increases risk of fatal gastrointestinal perforation and acute upper GI hemorrhage.",
+    ),
+    DiseaseContraindicationRule(
+        drug_keywords=frozenset({
+            "metformin", "glycomet"
+        }),
+        icd10_prefixes=("N18.4", "N18.5", "N18.6", "N18.9", "N19"),
+        disease_keywords=("chronic kidney disease", "ckd stage 4", "ckd stage 5", "renal failure", "end stage renal"),
+        severity="CRITICAL",
+        condition_name="Severe Renal Impairment (CKD Stage 4/5)",
+        clinical_risk="Impaired drug clearance causes drug accumulation leading to severe metformin-associated lactic acidosis (MALA), with ~50% mortality.",
+    ),
+    DiseaseContraindicationRule(
+        drug_keywords=frozenset({
+            "enalapril", "lisinopril", "ramipril", "captopril", "losartan", "telmisartan", "valsartan", "olmesartan"
+        }),
+        icd10_prefixes=("O00", "O01", "O02", "O03", "O04", "O05", "O06", "O07", "O08", "O09", "O10", "O20", "O30", "Z33"),
+        disease_keywords=("pregnancy", "pregnant", "gestation"),
+        severity="CRITICAL_HARD_STOP",
+        condition_name="Pregnancy",
+        clinical_risk="Renin-angiotensin system blockade causes severe teratogenic fetopathy, oligohydramnios, neonatal renal failure, and fetal death.",
+    ),
+]
+
+
+def check_drug_disease_contraindications(
+    session: Session,
+    patient_id: int,
+    medication_generics: list[str],
+    override_contraindication: bool = False,
+    override_justification: Optional[str] = None,
+) -> list[dict]:
+    """Evaluates proposed medications against patient's active diagnoses from EncounterDiagnosis."""
+    from backend.domains.clinical.models import EncounterDiagnosis
+    from backend.domains.encounters.models import PatientEncounter
+    from backend.domains.patients.models import DiagnosisMaster
+
+    if not medication_generics:
+        return []
+
+    diag_stmt = (
+        select(DiagnosisMaster.icd10_code, DiagnosisMaster.short_description)
+        .join(EncounterDiagnosis, EncounterDiagnosis.diagnosis_id == DiagnosisMaster.id)
+        .join(PatientEncounter, PatientEncounter.id == EncounterDiagnosis.encounter_id)
+        .where(PatientEncounter.patient_id == patient_id)
+    )
+    active_diagnoses = session.execute(diag_stmt).all()
+    if not active_diagnoses:
+        return []
+
+    normalized_drugs = {m.strip().lower() for m in medication_generics if m and len(m.strip()) >= 3}
+    findings = []
+
+    for rule in DRUG_DISEASE_RULES:
+        # Check drug match
+        matched_drug = None
+        for nd in normalized_drugs:
+            if any(k in nd or nd in k for k in rule.drug_keywords):
+                matched_drug = nd
+                break
+
+        if not matched_drug:
+            continue
+
+        # Check disease match
+        matched_dx = None
+        for code, short_desc in active_diagnoses:
+            c_upper = (code or "").strip().upper()
+            n_lower = (short_desc or "").strip().lower()
+            if any(c_upper.startswith(p) for p in rule.icd10_prefixes) or any(dk in n_lower for dk in rule.disease_keywords):
+                matched_dx = f"{code} ({short_desc})"
+                break
+
+        if matched_dx:
+            findings.append({
+                "drug": matched_drug,
+                "disease": matched_dx,
+                "severity": rule.severity,
+                "condition_name": rule.condition_name,
+                "clinical_risk": rule.clinical_risk,
+            })
+
+    if not findings:
+        return []
+
+    hard_stops = [f for f in findings if f["severity"] == "CRITICAL_HARD_STOP"]
+    if hard_stops:
+        hs = hard_stops[0]
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"CLINICAL CONTRAINDICATION HARD-STOP: Drug '{hs['drug']}' is absolutely contraindicated in {hs['condition_name']} (Diagnosed: {hs['disease']}). "
+                f"Risk: {hs['clinical_risk']} Order blocked."
+            ),
+        )
+
+    criticals = [f for f in findings if f["severity"] == "CRITICAL"]
+    if criticals:
+        if not override_contraindication or not override_justification or len(override_justification.strip()) < 10:
+            crit = criticals[0]
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"CLINICAL CONTRAINDICATION WARNING: Drug '{crit['drug']}' in patient with {crit['condition_name']} ({crit['disease']}). "
+                    f"Risk: {crit['clinical_risk']} "
+                    f"To proceed, provide override_contraindication=True and contraindication_override_justification (min 10 characters)."
+                ),
+            )
+        logger.warning(
+            "Drug-Disease contraindication override accepted for patient %d: %s (Justification: %s)",
+            patient_id,
+            criticals,
+            override_justification,
+        )
+
+    return findings
+
+
+# -----------------------------------------------------------------------------
+# Clinical Early Warning Score (NEWS2 / qSOFA) Engine
+# -----------------------------------------------------------------------------
+
+def calculate_news2_score(
+    respiratory_rate: Optional[int] = None,
+    spo2_percent: Optional[int] = None,
+    bp_systolic: Optional[int] = None,
+    pulse_bpm: Optional[int] = None,
+    consciousness: Optional[str] = "ALERT",
+    temperature_f: Optional[float] = None,
+    on_supplemental_oxygen: bool = False,
+) -> dict:
+    """
+    Computes Royal College of Physicians National Early Warning Score 2 (NEWS2).
+    Evaluates physiological parameters, classifies aggregated clinical risk (LOW, MEDIUM, HIGH),
+    and determines whether an immediate Rapid Response Team (RRT) alert must be triggered.
+    """
+    total_score = 0
+    sub_scores = {}
+    any_parameter_is_3 = False
+
+    # 1. Respiration Rate (breaths/min)
+    if respiratory_rate is not None:
+        if respiratory_rate <= 8:
+            pts = 3
+        elif 9 <= respiratory_rate <= 11:
+            pts = 1
+        elif 12 <= respiratory_rate <= 20:
+            pts = 0
+        elif 21 <= respiratory_rate <= 24:
+            pts = 2
+        else:  # >= 25
+            pts = 3
+        sub_scores["respiratory_rate"] = pts
+        total_score += pts
+        if pts == 3:
+            any_parameter_is_3 = True
+
+    # 2. SpO2 Scale 1 (%)
+    if spo2_percent is not None:
+        if spo2_percent <= 91:
+            pts = 3
+        elif 92 <= spo2_percent <= 93:
+            pts = 2
+        elif 94 <= spo2_percent <= 95:
+            pts = 1
+        else:  # >= 96
+            pts = 0
+        sub_scores["spo2"] = pts
+        total_score += pts
+        if pts == 3:
+            any_parameter_is_3 = True
+
+    # 3. Supplemental Oxygen
+    o2_pts = 2 if on_supplemental_oxygen else 0
+    sub_scores["supplemental_oxygen"] = o2_pts
+    total_score += o2_pts
+
+    # 4. Systolic Blood Pressure (mmHg)
+    if bp_systolic is not None:
+        if bp_systolic <= 90:
+            pts = 3
+        elif 91 <= bp_systolic <= 100:
+            pts = 2
+        elif 101 <= bp_systolic <= 110:
+            pts = 1
+        elif 111 <= bp_systolic <= 219:
+            pts = 0
+        else:  # >= 220
+            pts = 3
+        sub_scores["systolic_bp"] = pts
+        total_score += pts
+        if pts == 3:
+            any_parameter_is_3 = True
+
+    # 5. Pulse (Heart Rate, bpm)
+    if pulse_bpm is not None:
+        if pulse_bpm <= 40:
+            pts = 3
+        elif 41 <= pulse_bpm <= 50:
+            pts = 1
+        elif 51 <= pulse_bpm <= 90:
+            pts = 0
+        elif 91 <= pulse_bpm <= 110:
+            pts = 1
+        elif 111 <= pulse_bpm <= 130:
+            pts = 2
+        else:  # >= 131
+            pts = 3
+        sub_scores["pulse"] = pts
+        total_score += pts
+        if pts == 3:
+            any_parameter_is_3 = True
+
+    # 6. Consciousness (ACVPU Scale: Alert, Confusion, Voice, Pain, Unresponsive)
+    c_str = (consciousness or "ALERT").strip().upper()
+    if c_str in {"ALERT", "A"}:
+        pts = 0
+    else:
+        pts = 3
+    sub_scores["consciousness"] = pts
+    total_score += pts
+    if pts == 3:
+        any_parameter_is_3 = True
+
+    # 7. Temperature (°F / °C normalized)
+    if temperature_f is not None:
+        temp_c = (temperature_f - 32.0) * (5.0 / 9.0) if temperature_f > 45.0 else float(temperature_f)
+        if temp_c <= 35.0:
+            pts = 3
+        elif 35.1 <= temp_c <= 36.0:
+            pts = 1
+        elif 36.1 <= temp_c <= 38.0:
+            pts = 0
+        elif 38.1 <= temp_c <= 39.0:
+            pts = 1
+        else:  # >= 39.1
+            pts = 2
+        sub_scores["temperature"] = pts
+        total_score += pts
+        if pts == 3:
+            any_parameter_is_3 = True
+
+    # Aggregated Risk Classification
+    if total_score >= 7:
+        risk_level = "HIGH"
+        recommendation = "EMERGENCY: Immediate continuous vital monitoring. Mobilize Rapid Response Team (RRT) and transfer to ICU/HDU."
+        rrt_alert = True
+    elif total_score >= 5 or any_parameter_is_3:
+        risk_level = "MEDIUM"
+        recommendation = "URGENT: Urgent clinical review by attending physician within 30 minutes. Increase monitoring frequency to hourly."
+        rrt_alert = True
+    else:
+        risk_level = "LOW"
+        recommendation = "ROUTINE: Continue standard ward vital sign monitoring every 4 to 12 hours as clinically appropriate."
+        rrt_alert = False
+
+    # qSOFA score (quick Sepsis-related Organ Failure Assessment): SBP <= 100 (+1), RR >= 22 (+1), GCS < 15 / Altered mentation (+1)
+    qsofa = 0
+    if bp_systolic is not None and bp_systolic <= 100:
+        qsofa += 1
+    if respiratory_rate is not None and respiratory_rate >= 22:
+        qsofa += 1
+    if c_str not in {"ALERT", "A"}:
+        qsofa += 1
+
+    return {
+        "news2_score": total_score,
+        "risk_level": risk_level,
+        "qsofa_score": qsofa,
+        "is_rrt_alert_triggered": rrt_alert,
+        "sub_scores": sub_scores,
+        "clinical_recommendation": recommendation,
+    }
+
+
+# -----------------------------------------------------------------------------
+# Diagnostic Laboratory Delta Checking Evaluator
+# -----------------------------------------------------------------------------
+
+def evaluate_lab_delta_check(
+    session: Session,
+    patient_id: int,
+    service_id: int,
+    current_value_str: str,
+    current_task_id: Optional[int] = None,
+) -> dict:
+    """
+    Evaluates incoming numerical laboratory result against patient's previous result.
+    Flags acute implausible shifts (e.g. hemolyzed specimens, IV fluid contamination, or acute collapse).
+    """
+    from datetime import datetime, timedelta, timezone
+    import re
+    from backend.domains.diagnostics.models import (
+        DiagnosticOrder,
+        DiagnosticTask,
+        LabDeltaCheckConfig,
+    )
+
+    config = session.execute(
+        select(LabDeltaCheckConfig).where(LabDeltaCheckConfig.service_id == service_id)
+    ).scalar_one_or_none()
+    if not config:
+        return {"delta_flag": "NORMAL", "detail": "No delta check rule configured."}
+
+    num_match = re.search(r"[-+]?\d*\.?\d+", current_value_str)
+    if not num_match:
+        return {"delta_flag": "NORMAL", "detail": "Non-numeric current result."}
+    curr_val = float(num_match.group(0))
+
+    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=config.lookback_hours)
+    prev_task_stmt = (
+        select(DiagnosticTask)
+        .join(DiagnosticOrder, DiagnosticOrder.id == DiagnosticTask.order_id)
+        .where(
+            DiagnosticOrder.patient_id == patient_id,
+            DiagnosticTask.service_id == service_id,
+            DiagnosticTask.result_value.isnot(None),
+            DiagnosticTask.created_at >= cutoff_time,
+        )
+    )
+    if current_task_id:
+        prev_task_stmt = prev_task_stmt.where(DiagnosticTask.id != current_task_id)
+
+    prev_task_stmt = prev_task_stmt.order_by(DiagnosticTask.created_at.desc(), DiagnosticTask.id.desc()).limit(1)
+    prev_task = session.execute(prev_task_stmt).scalar_one_or_none()
+    if not prev_task or not prev_task.result_value:
+        return {"delta_flag": "NO_PRIOR_VALUE", "detail": "Baseline result established."}
+
+    prev_num_match = re.search(r"[-+]?\d*\.?\d+", prev_task.result_value)
+    if not prev_num_match:
+        return {"delta_flag": "NORMAL", "detail": "Non-numeric previous result."}
+    prev_val = float(prev_num_match.group(0))
+
+    abs_delta = abs(curr_val - prev_val)
+    pct_delta = (abs_delta / prev_val * 100.0) if prev_val != 0 else 0.0
+
+    is_exceeded = False
+    reasons = []
+    if config.max_absolute_delta is not None and abs_delta > config.max_absolute_delta:
+        is_exceeded = True
+        reasons.append(f"Absolute delta {abs_delta:.2f} exceeds threshold {config.max_absolute_delta:.2f}")
+    if config.max_percentage_delta is not None and pct_delta > config.max_percentage_delta:
+        is_exceeded = True
+        reasons.append(f"Percentage shift {pct_delta:.1f}% exceeds threshold {config.max_percentage_delta:.1f}%")
+
+    if is_exceeded:
+        return {
+            "delta_flag": "DELTA_EXCEEDED",
+            "severity": config.severity,
+            "previous_value": str(prev_val),
+            "current_value": str(curr_val),
+            "absolute_delta": abs_delta,
+            "percentage_delta": pct_delta,
+            "detail": f"LIS DELTA CHECK ALERT: {', '.join(reasons)}. Pathologist review required before release.",
+        }
+    return {
+        "delta_flag": "NORMAL",
+        "previous_value": str(prev_val),
+        "current_value": str(curr_val),
+        "absolute_delta": abs_delta,
+        "percentage_delta": pct_delta,
+        "detail": "Within acceptable historical limits.",
+    }
+

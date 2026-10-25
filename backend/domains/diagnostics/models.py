@@ -1,11 +1,15 @@
 from enum import Enum as PyEnum
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, CheckConstraint, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.core.audit import AuditMixin
 from backend.core.database import Base
+
+if TYPE_CHECKING:
+    from backend.domains.identity.models import Department, User
+    from backend.domains.patients.models import Patient
 
 
 class ServiceTypeEnum(str, PyEnum):
@@ -124,6 +128,9 @@ class DiagnosticTask(AuditMixin, Base):
     rejection_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     performed_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
     verified_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
+    delta_check_flag: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    previous_result_value: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    delta_percentage: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     order: Mapped[DiagnosticOrder] = relationship(back_populates="tasks")
     service: Mapped[ServiceCatalog] = relationship()
@@ -133,3 +140,20 @@ class DiagnosticTask(AuditMixin, Base):
     verified_by: Mapped[Optional["User"]] = relationship(
         foreign_keys=[verified_by_id]
     )
+
+
+class LabDeltaCheckConfig(AuditMixin, Base):
+    """Threshold configuration for LIS delta checks across repeat patient investigations."""
+    __tablename__ = "lab_delta_check_configs"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    service_id: Mapped[int] = mapped_column(
+        ForeignKey("service_catalog.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    parameter_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    max_absolute_delta: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    max_percentage_delta: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    lookback_hours: Mapped[int] = mapped_column(Integer, default=48, nullable=False)
+    severity: Mapped[str] = mapped_column(String(20), default="WARNING", nullable=False)
+
+    service: Mapped[ServiceCatalog] = relationship()
+
