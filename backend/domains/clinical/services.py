@@ -203,9 +203,13 @@ DUPLICATE_THERAPY_CLASSES = [
 ]
 
 
-def _match_drug_to_class(drug_name: str, drug_class: frozenset[str]) -> bool:
+def _match_drug_to_class(drug_name: Optional[str], drug_class: frozenset[str]) -> bool:
+    if not drug_name:
+        return False
     name_clean = drug_name.strip().lower()
-    return any(member in name_clean or name_clean in member for member in drug_class)
+    if not name_clean:
+        return False
+    return any(member in name_clean or (len(name_clean) >= 3 and name_clean in member) for member in drug_class)
 
 
 def evaluate_drug_interactions(
@@ -308,13 +312,16 @@ def check_drug_drug_interactions(
         for med in candidate_medications
     ]
 
-    # Query active prescriptions for this patient
+    from backend.domains.encounters.models import PatientEncounter
+
+    # Query active prescriptions for this patient across encounters
     stmt = (
         select(MedicationMaster)
         .join(PrescriptionItem, PrescriptionItem.medication_id == MedicationMaster.id)
         .join(Prescription, Prescription.id == PrescriptionItem.prescription_id)
+        .join(PatientEncounter, PatientEncounter.id == Prescription.encounter_id)
         .where(
-            Prescription.encounter_id == encounter_id if encounter_id else True,
+            PatientEncounter.patient_id == patient_id,
             Prescription.status.in_([PrescriptionStatusEnum.ACTIVE, PrescriptionStatusEnum.PARTIAL]),
         )
     )

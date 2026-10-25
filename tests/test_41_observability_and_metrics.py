@@ -57,3 +57,30 @@ def test_http_request_increments_telemetry_counters(test_client):
     # Look for /health metric counter line
     assert 'avinya_http_requests_total{endpoint="/health",method="GET",status="200"}' in body
 
+
+def test_metrics_endpoint_authentication_protection(test_client, monkeypatch):
+    from backend.core.config import settings
+
+    # 1. Configured token requires valid auth
+    monkeypatch.setattr(settings, "METRICS_SCRAPE_TOKEN", "secure-prometheus-token-123")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+
+    unauth_res = test_client.get("/metrics")
+    assert unauth_res.status_code == 401
+
+    wrong_res = test_client.get("/metrics", headers={"Authorization": "Bearer wrong-token"})
+    assert wrong_res.status_code == 401
+
+    bearer_res = test_client.get("/metrics", headers={"Authorization": "Bearer secure-prometheus-token-123"})
+    assert bearer_res.status_code == 200
+
+    header_res = test_client.get("/metrics", headers={"X-Metrics-Token": "secure-prometheus-token-123"})
+    assert header_res.status_code == 200
+
+    # 2. Production without token blocks unauthenticated scrape
+    monkeypatch.setattr(settings, "METRICS_SCRAPE_TOKEN", None)
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+
+    prod_res = test_client.get("/metrics")
+    assert prod_res.status_code == 401
+

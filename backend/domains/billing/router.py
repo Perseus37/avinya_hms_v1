@@ -278,7 +278,7 @@ def apply_invoice_discount(
             detail="Discount amount cannot exceed invoice gross total amount.",
         )
 
-    new_net = invoice.total_amount_paise - payload.discount_amount_paise
+    new_net = max(0, (invoice.total_amount_paise + (invoice.tax_amount_paise or 0)) - payload.discount_amount_paise)
     if invoice.amount_paid_paise > new_net:
         raise HTTPException(
             status_code=400,

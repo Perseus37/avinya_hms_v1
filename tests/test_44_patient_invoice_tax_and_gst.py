@@ -152,3 +152,84 @@ def test_remove_line_item_updates_tax_totals(client, superuser_headers, billing_
     assert inv_after["sgst_amount_paise"] == 0
     assert inv_after["is_tax_exempt"] is True
 
+
+def test_discount_application_on_taxable_invoice(client, superuser_headers, billing_headers):
+    """
+    Verifies that discount can be applied on an invoice with tax,
+    net payable correctly reflects (total + tax - discount),
+    and payments can be made up to the true net amount including tax.
+    """
+    cat = client.post(
+        "/v1/api/diagnostics/categories",
+        headers=superuser_headers,
+        json={"department_id": 1, "code": "CAT_DISC_TAX", "name": "Discount Tax Cat"},
+    ).json()
+    svc = client.post(
+        "/v1/api/diagnostics/catalog",
+        headers=superuser_headers,
+        json={
+            "category_id": cat["id"],
+            "code": "SVC_DISC_TAX",
+            "name": "Taxable Service For Discount",
+            "service_type": "PROCEDURE",
+            "base_price_paise": 10000,
+            "is_order_set": False,
+        },
+    ).json()
+
+    p = client.post(
+        "/v1/api/patients",
+        headers=superuser_headers,
+        json={"full_name": "GST Discount Patient", "date_of_birth": "1990-01-01T00:00:00Z", "gender": "FEMALE"},
+    ).json()
+
+    inv = client.post(
+        "/v1/api/billing/invoices",
+        headers=billing_headers,
+        json={"patient_id": p["id"]},
+    ).json()
+
+    # Add 10,000 paise item with 18% tax (1,800 paise tax -> 11,800 net)
+    item_res = client.post(
+        f"/v1/api/billing/invoices/{inv['id']}/items",
+        headers=billing_headers,
+        json={
+            "service_id": svc["id"],
+            "description": "Taxable Consultation",
+            "quantity": 1,
+            "unit_price_paise": 10000,
+            "gst_rate_percent": 18,
+        },
+    )
+    assert item_res.status_code == 201
+
+    # Finalize invoice to UNPAID
+    finalize_res = client.patch(f"/v1/api/billing/invoices/{inv['id']}/finalize", headers=billing_headers)
+    assert finalize_res.status_code == 200
+
+    # Apply 2,000 discount (gross 10,000, tax 1,800, discount 2,000 -> net payable 9,800)
+    disc_res = client.patch(
+        f"/v1/api/billing/invoices/{inv['id']}/discount",
+        headers=superuser_headers,
+        json={"discount_amount_paise": 2000, "discount_reason": "Senior citizen courtesy"},
+    )
+    assert disc_res.status_code == 200
+    disc_inv = disc_res.json()
+    assert disc_inv["total_amount_paise"] == 10000
+    assert disc_inv["tax_amount_paise"] == 1800
+    assert disc_inv["discount_amount_paise"] == 2000
+    assert disc_inv["net_amount_paise"] == 9800
+
+    # Pay 9,800 which fully pays the net amount including tax
+    pay_res = client.post(
+        f"/v1/api/billing/invoices/{inv['id']}/payments",
+        headers=billing_headers,
+        json={"amount_paid_paise": 9800, "payment_method": "CASH"},
+    )
+    assert pay_res.status_code == 201
+
+    paid_inv = client.get(f"/v1/api/billing/invoices/{inv['id']}", headers=billing_headers).json()
+    assert paid_inv["status"] == "PAID"
+    assert paid_inv["amount_paid_paise"] == 9800
+
+

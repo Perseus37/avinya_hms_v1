@@ -129,6 +129,9 @@ class Settings(BaseSettings):
             )
         return self
 
+    # Telemetry and Observability (M-13)
+    METRICS_SCRAPE_TOKEN: Optional[str] = None
+
     # Payment keys
     STRIPE_SECRET_KEY: Optional[str] = None
     STRIPE_WEBHOOK_SECRET: Optional[str] = None

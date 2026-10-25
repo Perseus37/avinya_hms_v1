@@ -139,9 +139,25 @@ def deliver_backup_offhost(
     if s3_bucket:
         s3_prefix = getattr(settings, "BACKUP_OFFHOST_S3_PREFIX", "backups")
         s3_key = f"{s3_prefix}/{tenant_folder}/{backup_file.name}"
-        logger.info("S3 off-host destination configured: s3://%s/%s", s3_bucket, s3_key)
-        result["s3_destination"] = f"s3://{s3_bucket}/{s3_key}"
-        result["delivered"] = True
+        s3_checksum_key = f"{s3_prefix}/{tenant_folder}/{checksum_file.name}"
+        logger.info("Executing S3 off-host delivery: s3://%s/%s", s3_bucket, s3_key)
+        try:
+            import boto3
+            from botocore.config import Config
+            s3_client = boto3.client("s3", config=Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 3}))
+            s3_client.upload_file(str(backup_file), s3_bucket, s3_key)
+            s3_client.upload_file(str(checksum_file), s3_bucket, s3_checksum_key)
+            result["s3_destination"] = f"s3://{s3_bucket}/{s3_key}"
+            result["delivered"] = True
+            logger.info("Successfully delivered backup snapshot and checksum to S3: s3://%s/%s", s3_bucket, s3_key)
+        except ImportError:
+            logger.warning("boto3 is not installed; off-host S3 delivery cannot proceed.")
+            result["s3_error"] = "boto3 library not installed"
+            result["delivered"] = False
+        except Exception as exc:
+            logger.error("Failed uploading backup snapshot to S3: %s", exc)
+            result["s3_error"] = str(exc)
+            result["delivered"] = False
 
     return result
 

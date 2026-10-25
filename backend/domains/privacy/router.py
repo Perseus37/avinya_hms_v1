@@ -2,7 +2,7 @@ from datetime import date, datetime, timedelta, timezone
 import json
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -673,6 +673,7 @@ def create_retention_dry_run(
 @router.post("/retention/execute")
 def execute_retention_run(
     payload: RetentionExecutionRequest,
+    request: Request,
     db: Session = Depends(get_db),
     actor: User = Depends(RequirePermission("privacy:approve")),
 ):

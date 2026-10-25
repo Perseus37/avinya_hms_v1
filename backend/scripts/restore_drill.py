@@ -13,6 +13,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
@@ -134,7 +135,8 @@ def run_restore_drill(
 
     drill_id = f"DRILL-{uuid.uuid4().hex[:12].upper()}"
     ts_compact = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    drill_db = drill_db_name or f"drill_{tenant_slug}_{ts_compact}"
+    clean_slug = re.sub(r"[^a-zA-Z0-9_]", "_", tenant_slug)
+    drill_db = drill_db_name or f"drill_{clean_slug}_{ts_compact}"
 
     logger.info("Initiating DR restore drill [%s] for tenant '%s' using '%s'", drill_id, tenant_slug, backup_path.name)
 
@@ -156,8 +158,8 @@ def run_restore_drill(
 
     try:
         with admin_engine.connect() as conn:
-            conn.execute(text(f"DROP DATABASE IF EXISTS {drill_db} WITH (FORCE);"))
-            conn.execute(text(f"CREATE DATABASE {drill_db};"))
+            conn.execute(text(f'DROP DATABASE IF EXISTS "{drill_db}" WITH (FORCE);'))
+            conn.execute(text(f'CREATE DATABASE "{drill_db}";'))
         logger.info("Created isolated drill database '%s'", drill_db)
 
         # 4. Measure RTO during pg_restore
@@ -228,7 +230,7 @@ def run_restore_drill(
         if isinstance(newest_record_time, datetime):
             rpo_seconds = max(0.0, (now_utc - newest_record_time).total_seconds())
         else:
-            rpo_seconds = 0.0
+            rpo_seconds = None
 
         all_tables_valid = len(missing_critical_tables) == 0
         sla_rto_passed = rto_seconds <= max_acceptable_rto_seconds
@@ -246,7 +248,7 @@ def run_restore_drill(
         if not keep_drill_db:
             try:
                 with create_engine(admin_dsn, isolation_level="AUTOCOMMIT").connect() as conn:
-                    conn.execute(text(f"DROP DATABASE IF EXISTS {drill_db} WITH (FORCE);"))
+                    conn.execute(text(f'DROP DATABASE IF EXISTS "{drill_db}" WITH (FORCE);'))
                 logger.info("Cleaned up ephemeral drill database '%s'", drill_db)
             except Exception as exc:
                 logger.warning("Could not drop drill database '%s': %s", drill_db, exc)
@@ -260,7 +262,7 @@ def run_restore_drill(
         "measured_rto_seconds": round(rto_seconds, 3),
         "sla_rto_threshold_seconds": max_acceptable_rto_seconds,
         "sla_rto_passed": sla_rto_passed,
-        "measured_rpo_seconds": round(rpo_seconds, 1),
+        "measured_rpo_seconds": round(rpo_seconds, 1) if rpo_seconds is not None else None,
         "newest_transaction_timestamp": newest_record_time.isoformat() if newest_record_time else None,
         "missing_critical_tables": missing_critical_tables,
         "verified_tables_count": len(table_counts),
