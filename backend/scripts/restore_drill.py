@@ -18,6 +18,7 @@ import subprocess
 import sys
 import time
 from typing import Any, Optional
+from urllib.parse import quote_plus
 import uuid
 
 # Ensure core modules are importable when executed as a standalone script
@@ -124,6 +125,14 @@ def run_restore_drill(
     7. Cleans up ephemeral drill database
     8. Generates a formal DR Drill Certification Report
     """
+    # R-10: Guard drill database identifier FIRST before any file or DB operations
+    if drill_db_name:
+        if not re.match(r"^drill_[a-zA-Z0-9_]+$", drill_db_name):
+            raise ValueError(f"Invalid drill database name '{drill_db_name}'. Must match pattern ^drill_[a-zA-Z0-9_]+$")
+        drill_db = drill_db_name
+    else:
+        drill_db = f"drill_{re.sub(r'[^a-zA-Z0-9_]', '_', tenant_slug)}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+
     backup_path = Path(backup_file).resolve()
     if not backup_path.exists():
         raise FileNotFoundError(f"Backup file not found: {backup_path}")
@@ -134,9 +143,6 @@ def run_restore_drill(
     password = postgres_password or settings.POSTGRES_PASSWORD
 
     drill_id = f"DRILL-{uuid.uuid4().hex[:12].upper()}"
-    ts_compact = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    clean_slug = re.sub(r"[^a-zA-Z0-9_]", "_", tenant_slug)
-    drill_db = drill_db_name or f"drill_{clean_slug}_{ts_compact}"
 
     logger.info("Initiating DR restore drill [%s] for tenant '%s' using '%s'", drill_id, tenant_slug, backup_path.name)
 
@@ -149,8 +155,10 @@ def run_restore_drill(
     decryption_time_seconds = time.perf_counter() - t_decrypt_start
     logger.info("Decrypted backup (%d bytes) in %.2fs", len(decrypted_dump), decryption_time_seconds)
 
-    # 3. Create Ephemeral Drill Database
-    admin_dsn = f"postgresql://{user}:{password}@{host}:{port}/postgres"
+    # 3. Create Ephemeral Drill Database (R-10: URL-encode credentials)
+    quoted_user = quote_plus(str(user))
+    quoted_password = quote_plus(str(password))
+    admin_dsn = f"postgresql://{quoted_user}:{quoted_password}@{host}:{port}/postgres"
     admin_engine = create_engine(admin_dsn, isolation_level="AUTOCOMMIT")
 
     env = os.environ.copy()
@@ -191,7 +199,7 @@ def run_restore_drill(
             logger.error("pg_restore returned code %d: %s", proc.returncode, proc.stderr.decode("utf-8", errors="replace"))
 
         # 5. Connect to Drill DB & Measure Integrity and RPO
-        drill_dsn = f"postgresql://{user}:{password}@{host}:{port}/{drill_db}"
+        drill_dsn = f"postgresql://{quoted_user}:{quoted_password}@{host}:{port}/{drill_db}"
         drill_engine = create_engine(drill_dsn)
         
         table_counts: dict[str, int] = {}
@@ -203,9 +211,11 @@ def run_restore_drill(
         newest_record_time: Optional[datetime] = None
 
         with Session(drill_engine) as session:
-            for tbl in existing_tables:
+            for tbl in sorted(existing_tables):
+                if not re.match(r"^[a-zA-Z0-9_]+$", tbl):
+                    continue
                 try:
-                    count = session.execute(text(f"SELECT COUNT(*) FROM {tbl}")).scalar_one()
+                    count = session.execute(text(f'SELECT COUNT(*) FROM "{tbl}"')).scalar_one()
                     table_counts[tbl] = count
                 except Exception:
                     table_counts[tbl] = -1

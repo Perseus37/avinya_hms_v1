@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint, event, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -154,6 +154,17 @@ class ControlPlaneAuditLog(ControlBase):
     actor: Mapped[str] = mapped_column(String(100), default="VENDOR_CONSOLE", nullable=False)
     details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+@event.listens_for(ControlPlaneAuditLog, "before_update")
+def _prevent_audit_log_update(mapper, connection, target):
+    raise PermissionError("ControlPlaneAuditLog records are strictly immutable and cannot be updated.")
+
+
+@event.listens_for(ControlPlaneAuditLog, "before_delete")
+def _prevent_audit_log_delete(mapper, connection, target):
+    raise PermissionError("ControlPlaneAuditLog records are strictly immutable and cannot be deleted.")
+
 
 
 class TenantSnapshotRegistry(ControlBase):

@@ -10,9 +10,12 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from backend.core import database
 from backend.core.config import settings
-from backend.core.database import ControlSessionLocal, get_control_db
+from backend.core.database import get_control_db
 from backend.core.dependencies import RateLimiter
+
+ControlSessionLocal = database.ControlSessionLocal
 from backend.control_plane.models import (
     ControlPlaneOperator,
     ControlPlaneOperatorSession,
@@ -348,3 +351,35 @@ def _verify_vendor_key(provided_key: str) -> None:
         return
     if not provided_key or not secrets.compare_digest(provided_key, settings.MASTER_ONBOARDING_KEY):
         raise HTTPException(status_code=403, detail="Invalid Master Vendor Setup Key.")
+
+
+def require_operator_role(*allowed_roles: str):
+    """
+    R-05: Enforces Role-Based Access Control (RBAC) on control plane endpoints.
+    Allowed roles: 'superadmin', 'ops', 'support', 'billing', 'viewer'.
+    'superadmin' is always authorized across all role-gated routes.
+    """
+    def _role_dependency(
+        request: Request,
+        _: None = Depends(verify_control_plane_secret),
+    ) -> str:
+        current_role = getattr(request.state, "operator_role", None) or control_plane_operator_role.get()
+        if not current_role:
+            # If authenticated via legacy static master key
+            if getattr(request.state, "operator_email", None) is None:
+                return "superadmin"
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Operator role is not defined for this session.",
+            )
+
+        if current_role == "superadmin" or current_role in allowed_roles:
+            return current_role
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access forbidden: role '{current_role}' does not have required permissions. Required: {', '.join(allowed_roles)}.",
+        )
+
+    return _role_dependency
+
