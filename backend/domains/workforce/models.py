@@ -1,5 +1,6 @@
 from datetime import date, datetime, time
 from decimal import Decimal
+from typing import Optional
 
 from sqlalchemy import (
     Date,
@@ -13,10 +14,11 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.core.audit import AuditMixin
 from backend.core.database import Base
+from backend.domains.identity.models import User
 
 
 class AttendanceRecord(AuditMixin, Base):
@@ -44,9 +46,9 @@ class LeaveRequest(AuditMixin, Base):
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
+    decision_notes: Mapped[str | None] = mapped_column(Text)
     decided_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    decision_notes: Mapped[str | None] = mapped_column(Text)
 
 
 class SalaryProfile(Base):
@@ -107,6 +109,18 @@ class PayrollLine(AuditMixin, Base):
     gross_paise: Mapped[int] = mapped_column(Integer, nullable=False)
     net_paise: Mapped[int] = mapped_column(Integer, nullable=False)
     calculation_note: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Statutory Indian deductions and employer contributions (M-05)
+    pf_employee_paise: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    pf_employer_paise: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    esi_employee_paise: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    esi_employer_paise: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    professional_tax_paise: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    tds_paise: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    statutory_details_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    user: Mapped["User"] = relationship()
+    period: Mapped["PayrollPeriod"] = relationship()
 
 
 class PayrollCalculationEvent(Base):
