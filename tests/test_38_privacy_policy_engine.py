@@ -67,6 +67,8 @@ NON_PATIENT_OR_DEFERRED_GET_ROUTES = {
     "/api/biomedical-waste/manifests/{manifest_id}",
     "/api/blood-bank/bags",
     "/api/clinical/departments/{department_id}/taxonomy/{taxonomy_type}",
+    "/api/clinical/order-sets",
+    "/api/clinical/order-sets/{order_set_id}",
     "/api/cssd/batches",
     "/api/cssd/instrument-sets",
     "/api/diagnostics/catalog",
@@ -74,6 +76,7 @@ NON_PATIENT_OR_DEFERRED_GET_ROUTES = {
     "/api/diagnostics/catalog/{parent_id}/bundles",
     "/api/diagnostics/categories",
     "/api/diagnostics/categories/{category_id}",
+    "/api/diagnostics/delta-configs",
     "/api/equipment/",
     "/api/equipment/logs",
     "/api/federation/clients",
@@ -467,7 +470,11 @@ def test_clinical_patient_record_routes_are_classified_or_explicitly_excluded():
         route = f"GET {path}"
         operation = operations["get"]
         point = operation.get("x-privacy-data-use-point")
-        if route == public_taxonomy:
+        if route in (
+            public_taxonomy,
+            "GET /api/clinical/order-sets",
+            "GET /api/clinical/order-sets/{order_set_id}",
+        ):
             assert point is None
             continue
         assert point in DATA_USE_POINTS, f"Unclassified clinical route: {route}"
@@ -479,6 +486,7 @@ def test_clinical_patient_record_routes_are_classified_or_explicitly_excluded():
         "GET /api/clinical/encounters/{encounter_id}/diagnoses",
         "GET /api/clinical/patients/{patient_id}/comorbidities",
         "GET /api/clinical/encounters/{encounter_id}/physical-exams",
+        "GET /api/clinical/encounters/{encounter_id}/early-warning-scores",
     }
 
 
@@ -521,6 +529,7 @@ def test_billing_pharmacy_diagnostics_and_insurance_reads_are_classified():
         "GET /api/diagnostics/catalog",
         "GET /api/diagnostics/catalog/{item_id}",
         "GET /api/diagnostics/catalog/{parent_id}/bundles",
+        "GET /api/diagnostics/delta-configs",
         "GET /api/insurance/plans",
         "GET /api/insurance/plans/{plan_id}/tariffs",
         "GET /api/insurance/providers",

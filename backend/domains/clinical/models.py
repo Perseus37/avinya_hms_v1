@@ -6,7 +6,6 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
-    Enum,
     Float,
     ForeignKey,
     Index,
@@ -15,7 +14,6 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
-    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -306,3 +304,85 @@ class DeathRecord(AuditMixin, Base):
     patient: Mapped["Patient"] = relationship()
     certified_by_doctor: Mapped["User"] = relationship(foreign_keys=[certified_by_doctor_id])
     immediate_cause_diagnosis: Mapped["DiagnosisMaster"] = relationship()
+
+
+class OrderSetItemTypeEnum(str, PyEnum):
+    MEDICATION = "MEDICATION"
+    DIAGNOSTIC_LAB = "DIAGNOSTIC_LAB"
+    RADIOLOGY = "RADIOLOGY"
+    NURSING_CARE = "NURSING_CARE"
+    DIETARY = "DIETARY"
+
+
+class OrderSetPriorityEnum(str, PyEnum):
+    ROUTINE = "ROUTINE"
+    URGENT = "URGENT"
+    STAT = "STAT"
+
+
+class EarlyWarningRiskEnum(str, PyEnum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
+class OrderSetMaster(AuditMixin, Base):
+    """Standardized CPOE clinical protocol / order set template (e.g. Sepsis Bundle, STEMI Pathway)."""
+    __tablename__ = "order_set_masters"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(150), nullable=False)
+    specialty: Mapped[str] = mapped_column(String(100), nullable=False)
+    clinical_indication: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    items: Mapped[List["OrderSetItem"]] = relationship(
+        back_populates="order_set", cascade="all, delete-orphan"
+    )
+
+
+class OrderSetItem(AuditMixin, Base):
+    """Individual line item within an OrderSetMaster defining medication, lab test, or procedure details."""
+    __tablename__ = "order_set_items"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    order_set_id: Mapped[int] = mapped_column(
+        ForeignKey("order_set_masters.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    item_type: Mapped[OrderSetItemTypeEnum] = mapped_column(nullable=False)
+
+    medication_id: Mapped[Optional[int]] = mapped_column(ForeignKey("medication_master.id"), nullable=True)
+    service_id: Mapped[Optional[int]] = mapped_column(ForeignKey("service_catalog.id"), nullable=True)
+
+    dosage_instruction: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    priority: Mapped[OrderSetPriorityEnum] = mapped_column(default=OrderSetPriorityEnum.ROUTINE, nullable=False)
+    clinical_instructions: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    order_set: Mapped[OrderSetMaster] = relationship(back_populates="items")
+
+
+class ClinicalEarlyWarningScore(AuditMixin, Base):
+    """Calculated NEWS2 and qSOFA score based on clinical vitals with Rapid Response Team (RRT) alert status."""
+    __tablename__ = "clinical_early_warning_scores"
+    __table_args__ = (
+        Index("ix_news2_encounter_created", "encounter_id", "created_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    encounter_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_encounters.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    vital_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("encounter_vitals.id", ondelete="SET NULL"), nullable=True
+    )
+    evaluated_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    news2_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    risk_level: Mapped[EarlyWarningRiskEnum] = mapped_column(nullable=False)
+    qsofa_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_rrt_alert_triggered: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    clinical_recommendation: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    encounter: Mapped["PatientEncounter"] = relationship()
+    vital: Mapped[Optional["EncounterVital"]] = relationship()
+    evaluated_by: Mapped["User"] = relationship(foreign_keys=[evaluated_by_id])
+

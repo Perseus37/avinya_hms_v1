@@ -40,8 +40,11 @@ MASTER_AND_CONFIG_TABLES: frozenset[str] = frozenset({
     "insurance_plan_tariffs",
     "insurance_plans",
     "insurance_providers",
+    "lab_delta_check_configs",
     "medication_master",
     "operation_theatres",
+    "order_set_items",
+    "order_set_masters",
     "permissions",
     "physical_examinations_master",
     "physical_rooms_master",
@@ -89,6 +92,7 @@ SCRUBBED_DATA_TABLES: frozenset[str] = frozenset({
     "biomedical_waste_manifests",
     "birth_records",
     "blood_cross_match_orders",
+    "clinical_early_warning_scores",
     "clinical_notes",
     "cssd_sterilization_batches",
     "death_records",
@@ -305,6 +309,16 @@ def scrub_sandbox_database(sandbox_db: str) -> Dict[str, int]:
                         result_notes = 'Sandbox verified test result',
                         rejection_reason = NULL
                     WHERE result_value IS NOT NULL OR result_notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "clinical_early_warning_scores" in table_names:
+            session.execute(
+                text("""
+                    UPDATE clinical_early_warning_scores
+                    SET clinical_recommendation = 'Sandbox standardized clinical recommendation'
+                    WHERE clinical_recommendation IS NOT NULL
                 """)
             )
             stats["scrubbed_tables"] += 1
