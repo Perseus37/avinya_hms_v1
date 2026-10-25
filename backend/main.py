@@ -215,16 +215,27 @@ async def lifespan(app: FastAPI):
     yield
 
 
+is_prod_docs_disabled = (
+    str(settings.ENVIRONMENT).lower() in {"production", "prod"}
+    and not getattr(settings, "ENABLE_PRODUCTION_API_DOCS", False)
+)
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
     description="Enterprise-grade, ACID-compliant Hospital Management System Backend.",
     lifespan=lifespan,
+    docs_url=None if is_prod_docs_disabled else "/docs",
+    redoc_url=None if is_prod_docs_disabled else "/redoc",
+    openapi_url=None if is_prod_docs_disabled else "/openapi.json",
 )
 
 v1_app = FastAPI(
     title=f"{settings.PROJECT_NAME} - V1",
     version="1.0.0",
+    docs_url=None if is_prod_docs_disabled else "/docs",
+    redoc_url=None if is_prod_docs_disabled else "/redoc",
+    openapi_url=None if is_prod_docs_disabled else "/openapi.json",
 )
 
 register_exception_handlers(app)

@@ -209,6 +209,7 @@ def multi_tenant_env(monkeypatch, fake_redis):
         tenant_engines[db_name] = t_eng
 
     monkeypatch.setattr(database, "ControlSessionLocal", TestControlSession)
+    monkeypatch.setattr("backend.control_plane.services.auth.ControlSessionLocal", TestControlSession)
     monkeypatch.setattr(database.tenant_engine_pool, "get_engine", lambda db_name: tenant_engines[db_name])
 
     def override_get_control_db():
