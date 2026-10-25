@@ -105,6 +105,14 @@ class Settings(BaseSettings):
         return normalized
 
     BACKUP_ENCRYPTION_SALT: str
+    BACKUP_OFFHOST_ENABLED: bool = False
+    BACKUP_OFFHOST_REMOTE_DIR: Optional[str] = None
+    BACKUP_OFFHOST_S3_BUCKET: Optional[str] = None
+    BACKUP_OFFHOST_S3_ENDPOINT_URL: Optional[str] = None
+    BACKUP_OFFHOST_S3_REGION: Optional[str] = None
+    BACKUP_OFFHOST_S3_ACCESS_KEY: Optional[str] = None
+    BACKUP_OFFHOST_S3_SECRET_KEY: Optional[str] = None
+    BACKUP_OFFHOST_S3_PREFIX: str = "backups"
 
     @model_validator(mode="after")
     def block_privacy_audit_mode_in_production(self):

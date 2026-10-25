@@ -109,6 +109,7 @@ NON_PATIENT_OR_DEFERRED_GET_ROUTES = {
     "/api/workforce/attendance",
     "/api/workforce/leave-requests",
     "/api/workforce/payroll-lines/{line_id}/history",
+    "/api/workforce/payroll-lines/{line_id}/payslip",
     "/api/workforce/payroll-periods",
     "/api/workforce/payroll-periods/{period_id}/lines",
     "/api/workforce/salary-profiles",

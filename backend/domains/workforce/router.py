@@ -1,3 +1,4 @@
+from backend.domains.workforce.services import calculate_indian_statutory_deductions
 import calendar
 import json
 from datetime import date, datetime, time, timezone
@@ -110,6 +111,11 @@ class PayrollLineCreate(BaseModel):
     additional_earnings_paise: int = Field(default=0, ge=0, le=2_000_000_000)
     deductions_paise: int = Field(default=0, ge=0, le=2_000_000_000)
     calculation_note: str = Field(min_length=3, max_length=2000)
+    include_statutory_deductions: bool = False
+    pf_opt_out: bool = False
+    uncapped_pf: bool = False
+    custom_tds_paise: int = Field(default=0, ge=0, le=2_000_000_000)
+    pt_state: str = Field(default="KA", max_length=10)
 
     @field_validator("calculation_note")
     @classmethod
@@ -355,7 +361,37 @@ def calculate_payroll_line(
         .quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     )
     gross = prorated + payload.additional_earnings_paise
-    net = gross - payload.deductions_paise
+
+    if payload.include_statutory_deductions:
+        stat = calculate_indian_statutory_deductions(
+            gross_paise=gross,
+            prorated_fixed_paise=prorated,
+            pf_opt_out=payload.pf_opt_out,
+            uncapped_pf=payload.uncapped_pf,
+            custom_tds_paise=payload.custom_tds_paise,
+            state=payload.pt_state,
+        )
+        stat_deductions = stat["total_employee_statutory_paise"]
+        pf_employee = stat["pf_employee_paise"]
+        pf_employer = stat["pf_employer_paise"]
+        esi_employee = stat["esi_employee_paise"]
+        esi_employer = stat["esi_employer_paise"]
+        pt_paise = stat["professional_tax_paise"]
+        tds_paise = stat["tds_paise"]
+        stat_json = json.dumps(stat, sort_keys=True)
+    else:
+        stat = None
+        stat_deductions = 0
+        pf_employee = 0
+        pf_employer = 0
+        esi_employee = 0
+        esi_employer = 0
+        pt_paise = 0
+        tds_paise = 0
+        stat_json = None
+
+    total_deductions = payload.deductions_paise + stat_deductions
+    net = gross - total_deductions
     if net < 0:
         raise HTTPException(status_code=422, detail="Deductions cannot exceed gross earnings.")
 
@@ -372,6 +408,11 @@ def calculate_payroll_line(
         "additional_earnings_paise": payload.additional_earnings_paise,
         "deductions_paise": payload.deductions_paise,
         "calculation_note": payload.calculation_note,
+        "include_statutory_deductions": payload.include_statutory_deductions,
+        "pf_opt_out": payload.pf_opt_out,
+        "uncapped_pf": payload.uncapped_pf,
+        "custom_tds_paise": payload.custom_tds_paise,
+        "pt_state": payload.pt_state,
     }
     values = {
         **input_snapshot,
@@ -379,8 +420,20 @@ def calculate_payroll_line(
         "prorated_fixed_paise": prorated,
         "gross_paise": gross,
         "net_paise": net,
+        "pf_employee_paise": pf_employee,
+        "pf_employer_paise": pf_employer,
+        "esi_employee_paise": esi_employee,
+        "esi_employer_paise": esi_employer,
+        "professional_tax_paise": pt_paise,
+        "tds_paise": tds_paise,
+        "statutory_details_json": stat_json,
     }
     values.pop("calculation_note")
+    values.pop("include_statutory_deductions")
+    values.pop("pf_opt_out")
+    values.pop("uncapped_pf")
+    values.pop("custom_tds_paise")
+    values.pop("pt_state")
     if line is None:
         line = PayrollLine(
             period_id=period.id,
@@ -493,3 +546,77 @@ def finalize_payroll_period(
     db.commit()
     db.refresh(period)
     return period
+
+
+
+@router.get("/payroll-lines/{line_id}/payslip")
+def get_payroll_line_payslip(
+    line_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("payroll:read")),
+):
+    line = db.get(PayrollLine, line_id)
+    if not line:
+        raise HTTPException(status_code=404, detail="Payroll line not found.")
+    user = db.get(User, line.user_id)
+    period = db.get(PayrollPeriod, line.period_id)
+    statutory_details = json.loads(line.statutory_details_json) if line.statutory_details_json else {}
+
+    total_employee_deductions = (
+        line.deductions_paise
+        + line.pf_employee_paise
+        + line.esi_employee_paise
+        + line.professional_tax_paise
+        + line.tds_paise
+    )
+
+    def _fmt_inr(paise: int) -> str:
+        return f"₹{paise / 100:,.2f}"
+
+    return {
+        "payslip_id": f"PAYSLIP-{period.period_key if period else 'NA'}-{line.id}",
+        "employee": {
+            "user_id": user.id if user else line.user_id,
+            "name": user.full_name if user else "Staff",
+            "email": user.email if user else "",
+        },
+        "period": {
+            "period_key": period.period_key if period else "",
+            "working_days": line.working_days,
+            "paid_days": float(line.paid_days),
+        },
+        "earnings": {
+            "monthly_fixed_paise": line.monthly_fixed_paise,
+            "monthly_fixed_formatted": _fmt_inr(line.monthly_fixed_paise),
+            "prorated_fixed_paise": line.prorated_fixed_paise,
+            "prorated_fixed_formatted": _fmt_inr(line.prorated_fixed_paise),
+            "additional_earnings_paise": line.additional_earnings_paise,
+            "additional_earnings_formatted": _fmt_inr(line.additional_earnings_paise),
+            "gross_paise": line.gross_paise,
+            "gross_formatted": _fmt_inr(line.gross_paise),
+        },
+        "statutory_deductions": {
+            "pf_employee_paise": line.pf_employee_paise,
+            "pf_employee_formatted": _fmt_inr(line.pf_employee_paise),
+            "esi_employee_paise": line.esi_employee_paise,
+            "esi_employee_formatted": _fmt_inr(line.esi_employee_paise),
+            "professional_tax_paise": line.professional_tax_paise,
+            "professional_tax_formatted": _fmt_inr(line.professional_tax_paise),
+            "tds_paise": line.tds_paise,
+            "tds_formatted": _fmt_inr(line.tds_paise),
+        },
+        "other_deductions_paise": line.deductions_paise,
+        "other_deductions_formatted": _fmt_inr(line.deductions_paise),
+        "total_deductions_paise": total_employee_deductions,
+        "total_deductions_formatted": _fmt_inr(total_employee_deductions),
+        "employer_statutory_contributions": {
+            "pf_employer_paise": line.pf_employer_paise,
+            "pf_employer_formatted": _fmt_inr(line.pf_employer_paise),
+            "esi_employer_paise": line.esi_employer_paise,
+            "esi_employer_formatted": _fmt_inr(line.esi_employer_paise),
+        },
+        "net_pay_paise": line.net_paise,
+        "net_pay_formatted": _fmt_inr(line.net_paise),
+        "statutory_metadata": statutory_details,
+        "calculation_note": line.calculation_note,
+    }
