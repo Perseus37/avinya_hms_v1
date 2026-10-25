@@ -36,6 +36,8 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 NON_PATIENT_OR_DEFERRED_GET_ROUTES = {
     "/api/admin/policies",
+    "/api/audit/security-events",
+    "/api/audit/stream",
     "/api/ambulance/vehicles",
     "/api/analytics/appointment-performance",
     "/api/analytics/care-timings",

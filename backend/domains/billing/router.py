@@ -154,6 +154,7 @@ def add_line_item(
 
     authoritative_price = resolve_patient_service_price_paise(db, invoice.patient_id, service)
     total_price = payload.quantity * authoritative_price
+    tax_paise = round((total_price * payload.gst_rate_percent) / 100) if payload.gst_rate_percent > 0 else 0
 
     item = InvoiceLineItem(
         invoice_id=invoice.id,
@@ -162,9 +163,16 @@ def add_line_item(
         quantity=payload.quantity,
         unit_price_paise=authoritative_price,
         total_price_paise=total_price,
+        gst_rate_percent=payload.gst_rate_percent,
+        tax_amount_paise=tax_paise,
+        hsn_sac_code=payload.hsn_sac_code or "9993",
     )
     db.add(item)
     invoice.total_amount_paise += total_price
+    invoice.tax_amount_paise += tax_paise
+    invoice.cgst_amount_paise = invoice.tax_amount_paise // 2
+    invoice.sgst_amount_paise = invoice.tax_amount_paise - invoice.cgst_amount_paise
+    invoice.is_tax_exempt = (invoice.tax_amount_paise == 0)
     db.commit()
     return {"status": "success", "message": "Line item appended to invoice."}
 
@@ -208,6 +216,10 @@ def remove_line_item(
         )
 
     invoice.total_amount_paise = max(0, invoice.total_amount_paise - item.total_price_paise)
+    invoice.tax_amount_paise = max(0, invoice.tax_amount_paise - (item.tax_amount_paise or 0))
+    invoice.cgst_amount_paise = invoice.tax_amount_paise // 2
+    invoice.sgst_amount_paise = invoice.tax_amount_paise - invoice.cgst_amount_paise
+    invoice.is_tax_exempt = (invoice.tax_amount_paise == 0)
     db.delete(item)
     db.commit()
     return {"status": "success", "message": "Line item removed and invoice total updated."}

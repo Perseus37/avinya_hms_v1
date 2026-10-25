@@ -53,6 +53,7 @@ from backend.domains.procurement import router as procurement_router
 from backend.domains.service_ops import router as service_ops_router
 from backend.domains.privacy import router as privacy_router
 from backend.domains.workforce import router as workforce_router
+from backend.domains.audit import router as audit_router
 
 # -----------------------------------------------------------------------------
 # M1 FIX: Context-Safe Request ID Logging Across All Libraries
@@ -304,6 +305,7 @@ for target in (v1_app, app):
     target.include_router(reports_router.router)
     target.include_router(websocket_router.ws_router)
     target.include_router(tenant_admin_router.router)
+    target.include_router(audit_router.router)
 
     # Modularly licensed clinical, surgical, diagnostic & financial domains
     target.include_router(opd_router.router, dependencies=[Depends(RequireLicensedModule("opd"))])
