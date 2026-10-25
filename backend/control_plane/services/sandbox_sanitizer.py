@@ -54,6 +54,7 @@ MASTER_AND_CONFIG_TABLES: frozenset[str] = frozenset({
     "privacy_policy_revisions",
     "privacy_retention_policies",
     "procurement_vendors",
+    "quality_indicator_benchmarks",
     "report_templates",
     "role_permissions",
     "roles",
@@ -99,6 +100,7 @@ SCRUBBED_DATA_TABLES: frozenset[str] = frozenset({
     "charge_capture_events",
     "clinical_early_warning_scores",
     "clinical_notes",
+    "clinical_quality_incidents",
     "controlled_substance_movement_logs",
     "cssd_sterilization_batches",
     "death_records",
@@ -378,6 +380,17 @@ def scrub_sandbox_database(sandbox_db: str) -> Dict[str, int]:
                 text("""
                     UPDATE nhcx_claim_exchange_logs
                     SET bundle_json = '{"resourceType": "Bundle", "status": "sandbox-scrubbed"}'
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "clinical_quality_incidents" in table_names:
+            session.execute(
+                text("""
+                    UPDATE clinical_quality_incidents
+                    SET description = 'Sandbox anonymized clinical quality incident',
+                        root_cause_analysis = CASE WHEN root_cause_analysis IS NOT NULL THEN 'Sandbox RCA record' ELSE NULL END,
+                        capa_plan = CASE WHEN capa_plan IS NOT NULL THEN 'Sandbox CAPA plan' ELSE NULL END
                 """)
             )
             stats["scrubbed_tables"] += 1
