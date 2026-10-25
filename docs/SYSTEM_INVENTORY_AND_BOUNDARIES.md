@@ -2,9 +2,9 @@
 ## What the System Contains vs. What it Does NOT Contain
 
 **Repository:** `sai1-crypto/avinya_hms`  
-**Milestone Version:** `v1.5.0` (Commit [`8d65554`](file:///v:/avinya_hms))  
+**Milestone Version:** `v2.0.0-ENTERPRISE` (Commit [`79ac432`](file:///v:/avinya_hms) on `main`)  
 **Document Classification:** Product & Technical Boundaries Specification  
-**Date:** 25 October 2026  
+**Date:** 26 October 2026  
 
 ---
 
@@ -19,7 +19,7 @@ This document provides a strict, unambiguous definition of the architectural foo
 ## 2. Comprehensive Inventory of What the System Contains
 
 ### 2.1 Backend Application & API Surface (Hospital Engine)
-The core backend application is built using **Python 3.11** and **FastAPI**, with database access governed by **SQLAlchemy 2.1** and data validation enforced by **Pydantic v2**. The application exposes **both root routes (`/api/...`) and versioned routes (`/v1/api/...`)** across **24 modular healthcare domains**:
+The core backend application is built using **Python 3.11** and **FastAPI**, with database access governed by **SQLAlchemy 2.1** and data validation enforced by **Pydantic v2**. The application exposes **both root routes (`/api/...`) and versioned routes (`/v1/api/...`)** across **26 modular healthcare domains**:
 
 | Domain Package | File Location | Key Capabilities & Endpoints |
 | :--- | :--- | :--- |
@@ -29,13 +29,13 @@ The core backend application is built using **Python 3.11** and **FastAPI**, wit
 | **Outpatient (OPD)** | [`backend/domains/encounters/opd_router.py`](file:///v:/avinya_hms/backend/domains/encounters) | OPD queue triage, appointment booking, doctor assignment, consultation status transitions. |
 | **Inpatient (IPD/ADT)** | [`backend/domains/encounters/adt_router.py`](file:///v:/avinya_hms/backend/domains/encounters) | Admission orders, bed census, inter-ward transfers, 3-tier discharge clearance gate (clinical, pharmacy, billing). |
 | **Facility & Wards** | [`backend/domains/facility`](file:///v:/avinya_hms/backend/domains/facility) | Ward, room, and bed catalog management, bed state locks (`with_for_update(nowait=True)`). |
-| **Clinical EMR & DDI** | [`backend/domains/clinical`](file:///v:/avinya_hms/backend/domains/clinical) | SOAP notes, ICD-10 coding, vital signs, cross-encounter Drug-Drug Interaction (DDI) engine with generic token validation. |
+| **Clinical EMR, CPOE & CDS** | [`backend/domains/clinical`](file:///v:/avinya_hms/backend/domains/clinical) | SOAP notes, ICD-10 coding, CPOE order sets, NEWS2 physiological deterioration scoring, drug-disease contraindications, and cross-encounter DDI engine. |
 | **Emergency & MLC** | [`backend/domains/clinical/nursing_er_router.py`](file:///v:/avinya_hms/backend/domains/clinical) | ER triage assessment (Red/Yellow/Green), trauma clinical documentation, Medico-Legal Case police registers. |
 | **Vital Registries** | [`backend/domains/clinical/vital_registries_router.py`](file:///v:/avinya_hms/backend/domains/clinical) | Birth and death registries, cause-of-death certification, medical certificate generation. |
-| **Diagnostic LIS** | [`backend/domains/diagnostics`](file:///v:/avinya_hms/backend/domains/diagnostics) | LOINC/CPT test orders, order bundles, specimen tracking, panic/critical lab alerts, pathologist two-tier sign-off. |
+| **Diagnostic LIS** | [`backend/domains/diagnostics`](file:///v:/avinya_hms/backend/domains/diagnostics) | LOINC/CPT test orders, order bundles, specimen tracking, panic lab alerts, LIS numeric delta checking, pathologist two-tier sign-off. |
 | **Radiology PACS** | [`backend/domains/bloodbank`](file:///v:/avinya_hms/backend/domains/bloodbank) | Imaging order tracking (CT, MRI, X-ray), DICOM viewer URL generation, radiologist impression reports. |
-| **Pharmacy & FEFO** | [`backend/domains/pharmacy`](file:///v:/avinya_hms/backend/domains/pharmacy) | Medication catalog, First-Expiry First-Out (FEFO) dispensation, batch expiry warnings, narcotics registers, returns/credit notes. |
-| **Billing & GST** | [`backend/domains/billing`](file:///v:/avinya_hms/backend/domains/billing) | Invoice generation, line-item GST calculation (CGST/SGST/IGST), tax-inclusive discount checks, persistent PDF invoices. |
+| **Pharmacy, BCMA & Vault**| [`backend/domains/pharmacy`](file:///v:/avinya_hms/backend/domains/pharmacy) | Medication catalog, FEFO dispensation, bedside BCMA 5-rights barcode verification, Schedule H/X perpetual vault with dual-witness wastage. |
+| **Billing & Multi-Tariff CDM** | [`backend/domains/billing`](file:///v:/avinya_hms/backend/domains/billing) | Multi-tariff MoU rate cards, daily room rent caps, idempotent charge capture event ledger, automated midnight census runs, line-item GST. |
 | **Insurance & TPA** | [`backend/domains/insurance`](file:///v:/avinya_hms/backend/domains/insurance) | TPA insurance policies, pre-authorization workflows, co-pay calculation, claim reconciliation. |
 | **Surgery & OT** | [`backend/domains/surgery`](file:///v:/avinya_hms/backend/domains/surgery) | OT scheduling, surgical team rosters, Pre-Anesthetic Checkup (PAC) clearance, WHO surgical safety checklists. |
 | **Blood Bank** | [`backend/domains/bloodbank`](file:///v:/avinya_hms/backend/domains/bloodbank) | Donor registry, component separation (PRBC, Platelets, FFP), cross-matching compatibility verification. |
@@ -49,7 +49,9 @@ The core backend application is built using **Python 3.11** and **FastAPI**, wit
 | **Finance & AP** | [`backend/domains/finance`](file:///v:/avinya_hms/backend/domains/finance) | Accounts payable, vendor invoices, payment vouchers, 3-way matching. |
 | **Procurement & PO** | [`backend/domains/procurement`](file:///v:/avinya_hms/backend/domains/procurement) | Purchase requisitions, purchase orders, goods receipt notes (GRN), vendor catalogs. |
 | **Realtime Streams** | [`backend/domains/realtime`](file:///v:/avinya_hms/backend/domains/realtime) | WebSocket connection manager, authenticated channel subscriptions, emergency broadcasts via Redis Pub/Sub. |
-| **Equipment & LIS/HL7**| [`backend/domains/integrations`](file:///v:/avinya_hms/backend/domains/integrations) | Medical equipment maintenance, HL7 v2.x message parser, device telemetry feeds. |
+| **Equipment & HL7 MLLP** | [`backend/domains/integrations`](file:///v:/avinya_hms/backend/domains/integrations) | Native TCP/MLLP socket listener, unsolicited ORU^R01 parser, equipment test mappings, telemetry feeds. |
+| **ABDM & NHCX Gateway** | [`backend/domains/abdm`](file:///v:/avinya_hms/backend/domains/abdm) | ABDM M1 (ABHA profile), M2 (Consent artifacts), M3 (FHIR R4 bundles), and NHCX claims exchange gateway. |
+| **Quality & Accreditations**| [`backend/domains/quality`](file:///v:/avinya_hms/backend/domains/quality) | NABH 5th Ed & JCI 7th Ed quality indicators (CAUTI, CLABSI, VAP, SSI, Falls, Med Errors) and adverse incident CAPA register. |
 | **Tenant Policies** | [`backend/domains/policies`](file:///v:/avinya_hms/backend/domains/policies) | Hospital operational rules, department directories, license entitlement enforcement. |
 | **Audit Logging** | [`backend/domains/audit`](file:///v:/avinya_hms/backend/domains/audit) | SIEM audit log export with DNS-resolved SSRF protections, clinical access logs. |
 

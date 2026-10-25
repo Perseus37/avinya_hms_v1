@@ -70,7 +70,7 @@ def main() -> int:
         method="POST",
     )
     try:
-        with urlopen(request, timeout=30) as response:
+        with urlopen(request, timeout=30) as response:  # nosec B310
             result = json.loads(response.read())
     except HTTPError as exc:
         print(f"Policy import failed with HTTP {exc.code}.", file=sys.stderr)

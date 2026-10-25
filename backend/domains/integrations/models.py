@@ -6,6 +6,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.core.audit import AuditMixin
 from backend.core.database import Base
+from backend.domains.identity.models import Department
+from backend.domains.billing.models import ServiceCatalog
 
 
 class ProtocolEnum(str, PyEnum):
@@ -48,6 +50,8 @@ class HL7IntegrationLog(AuditMixin, Base):
     status: Mapped[str] = mapped_column(String(50), nullable=False)
     error_details: Mapped[Optional[str]] = mapped_column(Text)
 
+    equipment: Mapped[Optional["EquipmentMaster"]] = relationship()
+
 
 class EquipmentTestMapping(AuditMixin, Base):
     """Mapping of equipment-specific analyte test code to internal HMS Service Catalog."""
@@ -68,6 +72,3 @@ class EquipmentTestMapping(AuditMixin, Base):
 
     equipment: Mapped["EquipmentMaster"] = relationship()
     service: Mapped["ServiceCatalog"] = relationship()
-
-
-    equipment: Mapped[Optional["EquipmentMaster"]] = relationship()
