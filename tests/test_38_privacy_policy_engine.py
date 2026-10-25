@@ -61,6 +61,7 @@ NON_PATIENT_OR_DEFERRED_GET_ROUTES = {
     "/api/auth/roles",
     "/api/auth/users",
     "/api/auth/users/{user_id}",
+    "/api/billing/rcm/charge-events",
     "/api/biomedical-waste/bags",
     "/api/biomedical-waste/compliance/summary",
     "/api/biomedical-waste/manifests",
@@ -524,6 +525,7 @@ def test_opd_patient_reads_are_classified_except_doctor_leave_schedule():
 
 def test_billing_pharmacy_diagnostics_and_insurance_reads_are_classified():
     non_patient_routes = {
+        "GET /api/billing/rcm/charge-events",
         "GET /api/pharmacy/controlled-substances/movements",
         "GET /api/pharmacy/controlled-substances/vault",
         "GET /api/pharmacy/medications",

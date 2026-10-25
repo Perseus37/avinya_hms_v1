@@ -94,6 +94,7 @@ SCRUBBED_DATA_TABLES: frozenset[str] = frozenset({
     "biomedical_waste_manifests",
     "birth_records",
     "blood_cross_match_orders",
+    "charge_capture_events",
     "clinical_early_warning_scores",
     "clinical_notes",
     "controlled_substance_movement_logs",
@@ -346,6 +347,15 @@ def scrub_sandbox_database(sandbox_db: str) -> Dict[str, int]:
                         notes = 'Sandbox narcotics movement record',
                         disposal_method = 'SANDBOX_NEUTRALIZATION'
                     WHERE wastage_reason IS NOT NULL OR notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "charge_capture_events" in table_names:
+            session.execute(
+                text("""
+                    UPDATE charge_capture_events
+                    SET description = 'Sandbox RCM charge line'
                 """)
             )
             stats["scrubbed_tables"] += 1

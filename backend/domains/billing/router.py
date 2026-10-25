@@ -15,6 +15,17 @@ from backend.domains.encounters.models import PatientEncounter
 from backend.domains.identity.models import User
 from backend.domains.patients.models import Patient
 from backend.domains.billing.schemas import InvoiceCreate, InvoiceLineItemCreate, InvoiceResponse, PaymentReceiptCreate, PaymentReceiptResponse, InvoiceDiscountRequest, ApplyDepositToInvoiceRequest, PatientDepositCreate, DepositRefundRequest, PatientDepositResponse, RefundVoucherResponse
+from backend.domains.billing.rcm_schemas import (
+    ChargeCaptureEventResponse,
+    ClinicalChargePostRequest,
+    ClinicalChargePostResponse,
+    MidnightCensusRunRequest,
+    MidnightCensusRunResponse,
+    SurgeryChargePostRequest,
+    SurgeryChargePostResponse,
+    TariffResolutionRequest,
+    TariffResolutionResponse,
+)
 from backend.schemas.common import PaginatedResponse
 from backend.domains.billing.services import resolve_patient_service_price_paise
 from backend.domains.privacy.runtime import evaluate_tenant_patient_data_uses
@@ -646,4 +657,128 @@ def list_patient_refund_vouchers(
         .where(RefundVoucher.patient_id == patient_id)
         .order_by(RefundVoucher.id.desc())
     )
+    return list(db.execute(stmt).scalars().all())
+
+
+# =============================================================================
+# Revenue Cycle Management (RCM) & Charge Master (CDM) Automation Endpoints
+# =============================================================================
+
+@router.post(
+    "/rcm/post-clinical-charge",
+    response_model=ClinicalChargePostResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_automated_clinical_charge(
+    payload: ClinicalChargePostRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("billing:write", "clinical:write", "nursing:write", "surgery:write")),
+):
+    """
+    Event-driven charge capture endpoint:
+    Posts charges to patient encounter draft invoice upon clinical actions (surgery, lab verification, etc.).
+    Guarantees idempotency via source_reference to prevent double billing.
+    """
+    from backend.domains.billing.rcm_services import post_clinical_charge
+    return post_clinical_charge(
+        session=db,
+        encounter_id=payload.encounter_id,
+        event_type=payload.event_type,
+        source_reference=payload.source_reference,
+        description=payload.description,
+        unit_price_paise=payload.unit_price_paise,
+        quantity=payload.quantity,
+        service_id=payload.service_id,
+        gst_rate_percent=payload.gst_rate_percent or 0,
+        hsn_sac_code=payload.hsn_sac_code,
+        user_id=current_user.id,
+    )
+
+
+@router.post(
+    "/rcm/midnight-census-charges",
+    response_model=MidnightCensusRunResponse,
+    status_code=status.HTTP_200_OK,
+)
+def run_inpatient_midnight_census_charges(
+    payload: MidnightCensusRunRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("billing:write", "admin:write")),
+):
+    """
+    Executes automated daily midnight census room charge posting across all active IPD admissions.
+    Honors insurance plan room-rent caps if the patient is under an active insurance policy.
+    """
+    from backend.domains.billing.rcm_services import execute_midnight_census_charge_run
+    return execute_midnight_census_charge_run(
+        session=db,
+        census_date=payload.census_date,
+        user_id=current_user.id,
+    )
+
+
+@router.post(
+    "/rcm/resolve-tariff",
+    response_model=TariffResolutionResponse,
+    status_code=status.HTTP_200_OK,
+)
+def resolve_service_charge_tariff(
+    payload: TariffResolutionRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("billing:read", "clinical:read", "insurance:read")),
+):
+    """
+    Pre-bill multi-tariff resolution engine:
+    Evaluates patient coverage and applies negotiated plan rate cards, room-rent caps, or standard base pricing.
+    """
+    from backend.domains.billing.rcm_services import resolve_service_tariff
+    return resolve_service_tariff(
+        session=db,
+        encounter_id=payload.encounter_id,
+        service_id=payload.service_id,
+        quantity=payload.quantity,
+    )
+
+
+@router.post(
+    "/rcm/surgeries/{surgery_id}/post-charges",
+    response_model=SurgeryChargePostResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_surgical_case_completion_charges(
+    surgery_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("billing:write", "surgery:write")),
+):
+    """
+    Posts automated OT theatre hourly facility charges and procedure fee upon surgery completion.
+    """
+    from backend.domains.billing.rcm_services import post_surgery_completion_charges
+    return post_surgery_completion_charges(
+        session=db,
+        surgery_id=surgery_id,
+        user_id=current_user.id,
+    )
+
+
+@router.get(
+    "/rcm/charge-events",
+    response_model=list[ChargeCaptureEventResponse],
+    status_code=status.HTTP_200_OK,
+)
+def list_charge_capture_events(
+    encounter_id: Optional[int] = None,
+    patient_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(RequirePermission("billing:read", "auditor:read")),
+):
+    """
+    Retrieves full audit ledger of all automated clinical charge capture events.
+    """
+    from backend.domains.billing.models import ChargeCaptureEvent
+    stmt = select(ChargeCaptureEvent).order_by(ChargeCaptureEvent.id.desc())
+    if encounter_id is not None:
+        stmt = stmt.where(ChargeCaptureEvent.encounter_id == encounter_id)
+    if patient_id is not None:
+        stmt = stmt.where(ChargeCaptureEvent.patient_id == patient_id)
     return list(db.execute(stmt).scalars().all())
