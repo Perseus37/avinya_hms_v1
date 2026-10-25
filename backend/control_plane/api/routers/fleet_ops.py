@@ -167,10 +167,9 @@ def list_registered_tenants(
     )
 
     items = []
+    dynamic_modules = get_module_catalog(control_db)
     for t in tenants:
         fn = fed_nodes.get(t.branch_code)
-        # Add this above the try block:
-        dynamic_modules = get_module_catalog(control_db)
         try:
             mods = json.loads(t.enabled_modules_json) if t.enabled_modules_json else {"all": True}
             active_mod_count = len(dynamic_modules) if mods.get("all") is True else sum(1 for v in mods.values() if v)
