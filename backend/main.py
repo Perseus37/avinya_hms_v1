@@ -339,6 +339,7 @@ for target in (v1_app, app):
         service_ops_router.mortuary_router,
         dependencies=[Depends(RequireLicensedModule("mortuary"))],
     )
+    target.include_router(service_ops_router.bmw_router)
     target.include_router(privacy_router)
     target.include_router(
         workforce_router,

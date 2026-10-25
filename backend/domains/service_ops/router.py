@@ -1,3 +1,4 @@
+from backend.domains.service_ops.biomedical_waste_router import bmw_router
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
