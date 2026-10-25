@@ -81,6 +81,7 @@ NON_PATIENT_OR_DEFERRED_GET_ROUTES = {
     "/api/diagnostics/delta-configs",
     "/api/equipment/",
     "/api/equipment/logs",
+    "/api/equipment/mappings",
     "/api/federation/clients",
     "/api/fhir/R4/metadata",
     "/api/insurance/plans",

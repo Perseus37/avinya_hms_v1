@@ -19,22 +19,18 @@ from backend.security.envelope import decrypt_tenant_secret
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("avinya.hl7_listener")
 
+from backend.domains.integrations.service import (
+    build_hl7_ack,
+    build_hl7_ack_str,
+    parse_hl7_message,
+    process_hl7_oru_r01_in_session,
+    redact_hl7_security as _redact_hl7_security,
+)
+
 # MLLP Framing Bytes
 VT = b'\x0b'
 FS_CR = b'\x1c\x0d'
 MAX_MLLP_MESSAGE_BYTES = 1024 * 1024
-
-def parse_hl7_message(raw_msg: str) -> dict:
-    """Basic parser to extract the Sending Facility (Tenant), Patient, and Result segments."""
-    segments = raw_msg.strip().split("\r")
-    parsed = {"MSH": [], "PID": [], "OBR": [], "OBX": []}
-    
-    for segment in segments:
-        fields = segment.split("|")
-        seg_type = fields[0]
-        if seg_type in parsed:
-            parsed[seg_type].append(fields)
-    return parsed
 
 def extract_mllp_frames(buffer: bytes) -> tuple[list[bytes], bytes]:
     """Extract complete MLLP frames, discarding stray bytes and bounding incomplete frames."""
@@ -124,15 +120,12 @@ def process_and_route_result(raw_msg: str, tenant_db_name: str | None = None):
     """Routes the HL7 result to the correct tenant database based on MSH-4."""
     try:
         parsed = parse_hl7_message(raw_msg)
-        
-        # MSH-4 contains the Sending Facility (Our Branch Code)
-        # MSH-10 contains the Message Control ID
-        msh = parsed["MSH"][0]
-        if len(msh) <= 9:
+        msh = parsed.get("MSH", [])
+        if not msh or len(msh[0]) <= 9:
             return "UNKNOWN", False, "Invalid HL7 MSH segment"
-        branch_code = msh[3]
-        msg_control_id = msh[9]
-        
+        branch_code = msh[0][3]
+        msg_control_id = msh[0][9]
+
         if tenant_db_name is None:
             tenant_config = _tenant_hl7_config(branch_code)
             tenant_db_name = tenant_config[0] if tenant_config else None
@@ -143,72 +136,14 @@ def process_and_route_result(raw_msg: str, tenant_db_name: str | None = None):
         # Connect to the specific Hospital's Database
         t_engine = tenant_engine_pool.get_engine(tenant_db_name)
         TSession = sessionmaker(bind=t_engine)
-        
-        with TSession() as t_db:
-            updated_count = 0
-            pid = parsed.get("PID", [])
-            patient_identifier = (
-                pid[0][3].split("^")[0].strip()
-                if pid and len(pid[0]) > 3
-                else ""
-            )
-            if not patient_identifier:
-                return msg_control_id, False, "Missing PID patient identifier"
-            # OBX-3 is the Test Code, OBX-5 is the Result Value
-            for obx in parsed.get("OBX", []):
-                if len(obx) <= 5:
-                    continue
-                # Assuming OBR-2 or OBX-3 links to our diagnostic_tasks.id
-                task_id_str = obx[3].split("^")[0] 
-                result_val = obx[5]
-                
-                if task_id_str.isdigit():
-                    task = t_db.execute(
-                        select(DiagnosticTask)
-                        .join(
-                            DiagnosticOrder,
-                            DiagnosticOrder.id == DiagnosticTask.order_id,
-                        )
-                        .join(Patient, Patient.id == DiagnosticOrder.patient_id)
-                        .where(
-                            DiagnosticTask.id == int(task_id_str),
-                            Patient.mrn == patient_identifier,
-                        )
-                    ).scalar_one_or_none()
-                    if task:
-                        if task.status in {TaskStatusEnum.VERIFIED, TaskStatusEnum.CANCELLED}:
-                            t_db.rollback()
-                            return msg_control_id, False, "Result task is not eligible for update"
-                        task.result_value = result_val
-                        task.status = TaskStatusEnum.RESULT_ENTERED
-                        updated_count += 1
 
-            if not updated_count:
-                return msg_control_id, False, "No eligible result tasks were found"
-            
-            # Log the payload in the hospital's local audit trail
-            t_db.add(HL7IntegrationLog(
-                message_control_id=msg_control_id,
-                raw_payload=_redact_hl7_security(raw_msg),
-                status="SUCCESS"
-            ))
-            t_db.commit()
-            
-        return msg_control_id, True, ""
+        with TSession() as t_db:
+            ctrl_id, success, error_msg, _ = process_hl7_oru_r01_in_session(t_db, raw_msg)
+            return ctrl_id, success, error_msg
 
     except Exception:
         logger.exception("HL7 processing failed.")
         return "UNKNOWN", False, "HL7 processing failed"
-
-
-def build_hl7_ack(msg_control_id: str, success: bool, error_msg: str) -> bytes:
-    """Constructs the HL7 Acknowledgement message expected by the machine."""
-    ack_code = "AA" if success else "AE"
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    control_id = re.sub(r"[\x00-\x1f\x7f|]", "", msg_control_id)[:80]
-    safe_error = re.sub(r"[\x00-\x1f\x7f|]", " ", error_msg)[:120]
-    ack_msg = f"MSH|^~\\&|AVINYA_LIS|SERVER|||{ts}||ACK||P|2.3\rMSA|{ack_code}|{control_id}|{safe_error}\r"
-    return VT + ack_msg.encode('utf-8') + FS_CR
 
 
 async def handle_mllp_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
