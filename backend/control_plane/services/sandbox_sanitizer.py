@@ -36,6 +36,7 @@ MASTER_AND_CONFIG_TABLES: frozenset[str] = frozenset({
     "departments",
     "diagnoses_master",
     "equipment_master",
+    "equipment_test_mappings",
     "floors",
     "hospital_policy_settings",
     "insurance_plan_tariffs",
