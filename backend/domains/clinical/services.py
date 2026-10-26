@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import re
 from typing import Any, Optional
 
 from fastapi import HTTPException
@@ -209,7 +210,14 @@ def _match_drug_to_class(drug_name: Optional[str], drug_class: frozenset[str]) -
     name_clean = drug_name.strip().lower()
     if not name_clean:
         return False
-    return any(member in name_clean or (len(name_clean) >= 3 and name_clean in member) for member in drug_class)
+    for member in drug_class:
+        if name_clean == member:
+            return True
+        if re.search(r"\b" + re.escape(member) + r"\b", name_clean):
+            return True
+        if re.search(r"\b" + re.escape(name_clean) + r"\b", member):
+            return True
+    return False
 
 
 def evaluate_drug_interactions(
@@ -464,7 +472,7 @@ def check_drug_disease_contraindications(
         # Check drug match
         matched_drug = None
         for nd in normalized_drugs:
-            if any(k in nd or nd in k for k in rule.drug_keywords):
+            if any(k == nd or re.search(r"\b" + re.escape(k) + r"\b", nd) for k in rule.drug_keywords):
                 matched_drug = nd
                 break
 

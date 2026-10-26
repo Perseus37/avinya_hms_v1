@@ -1,8 +1,5 @@
 """Tests for CPOE Clinical Drug-Drug Interaction (DDI) & Duplicate Therapy Checks (M-11)."""
 
-import pytest
-from datetime import datetime, timezone
-
 
 def _create_medication(client, headers, code, brand, generic):
     res = client.post(
@@ -253,3 +250,28 @@ def test_ddi_cross_encounter_active_prescription_check(client, doctor_headers, p
     )
     assert res_rx2.status_code == 409
     assert "CLINICAL HARD-STOP" in res_rx2.json()["message"]
+
+
+def test_substring_drug_name_does_not_trigger_false_interaction(client, doctor_headers, pharmacist_headers):
+    """
+    Guarantees word-boundary precision: substring prefix 'hepa' in 'Hepatoglobine'
+    does NOT falsely match 'heparin' to trigger an erroneous anticoagulant interaction with Aspirin.
+    """
+    p, enc = _create_patient_encounter(client, doctor_headers)
+    hepa_tonic = _create_medication(client, pharmacist_headers, "MED_HEPATOGLOBINE", "Hepatoglobine Syrup", "Liver tonic")
+    aspirin = _create_medication(client, pharmacist_headers, "MED_ASPIRIN_SAFE", "Ecosprin 75", "Aspirin")
+
+    res = client.post(
+        "/v1/api/pharmacy/prescriptions",
+        headers=doctor_headers,
+        json={
+            "encounter_id": enc["id"],
+            "items": [
+                {"medication_id": hepa_tonic["id"], "dosage_instruction": "10ml daily", "requested_quantity": 1},
+                {"medication_id": aspirin["id"], "dosage_instruction": "75mg daily", "requested_quantity": 10},
+            ],
+        },
+    )
+    # Should succeed without clinical hard-stop or anticoagulant warning
+    assert res.status_code == 201, res.text
+
