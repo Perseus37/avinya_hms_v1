@@ -28,6 +28,9 @@ services:
     image: avinya-hms-api:latest
     restart: "no"
     env_file: .env
+    environment:
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
     depends_on:
       db:
         condition: service_healthy
@@ -76,6 +79,9 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
+      CLAMD_HOST: clamav
       TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
       PGTZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
     command:
@@ -114,6 +120,8 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
       TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
       PGTZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
     command: ["python", "-m", "backend.domains.integrations.listener"]
@@ -132,6 +140,9 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
+      CLAMD_HOST: clamav
       TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
       PGTZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
     command: ["python", "-m", "backend.worker"]
@@ -151,6 +162,8 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
       TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
       PGTZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
     command: ["uvicorn", "backend.control_plane.app:app", "--host", "0.0.0.0", "--port", "${CONTROL_PLANE_PORT:?CONTROL_PLANE_PORT is required}"]
@@ -175,6 +188,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      POSTGRES_HOST: db
       TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
       PGTZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
     command:
