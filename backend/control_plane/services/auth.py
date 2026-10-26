@@ -6,6 +6,7 @@ from typing import Optional
 
 import jwt
 from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi.security import HTTPBearer
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
@@ -314,8 +315,16 @@ def create_operator_auth_router():
     return router
 
 
+control_plane_bearer_scheme = HTTPBearer(
+    auto_error=False,
+    scheme_name="OperatorBearer",
+    description="Paste your Operator JWT Bearer token obtained from /api/auth/confirm or /api/auth/verify-login",
+)
+
+
 def verify_control_plane_secret(
     request: Request,
+    _bearer: Optional[object] = Depends(control_plane_bearer_scheme),
     x_control_plane_secret: Optional[str] = Header(
         default=None, alias="X-Control-Plane-Secret"
     ),
