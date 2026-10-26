@@ -34,7 +34,7 @@ class PatientConsentRecord(Base):
     purpose: Mapped[str] = mapped_column(String(255), nullable=False)
     decision: Mapped[str] = mapped_column(String(20), nullable=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False)
-    evidence_reference: Mapped[str | None] = mapped_column(String(100))
+    evidence_reference: Mapped[str | None] = mapped_column(String(255))
     scope_type: Mapped[str] = mapped_column(
         String(20), nullable=False, default="patient", server_default="patient"
     )
@@ -48,7 +48,7 @@ class PatientConsentRecord(Base):
     form_version: Mapped[str | None] = mapped_column(String(100))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     recorded_by_user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"), nullable=False
+        ForeignKey("users.id"), nullable=False, index=True
     )
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -150,7 +150,7 @@ class PrivacyDecisionAudit(Base):
     purpose_code: Mapped[str | None] = mapped_column(String(64))
     mode: Mapped[str] = mapped_column(String(20), nullable=False)
     result: Mapped[str] = mapped_column(String(20), nullable=False)
-    reason_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(255), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )

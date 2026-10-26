@@ -373,6 +373,63 @@ def test_news2_scoring_critical_deterioration_triggers_rrt(client, doctor_header
     assert scores[0]["is_rrt_alert_triggered"] is True
 
 
+def test_news2_scale_2_and_physiological_bounds_validation(client, doctor_headers):
+    """N-47: Physiological bounds checking, empty vital rejection, and SpO2 Scale 2."""
+    from backend.domains.clinical.services import calculate_news2_score
+
+    # 1. All empty vitals must raise ValueError
+    with pytest.raises(ValueError, match="At least one measured physiological vital parameter"):
+        calculate_news2_score()
+
+    # 2. Implausible physiological bounds must raise ValueError
+    with pytest.raises(ValueError, match="Respiratory rate.*out of plausible"):
+        calculate_news2_score(respiratory_rate=120)
+
+    with pytest.raises(ValueError, match="SpO2.*out of plausible"):
+        calculate_news2_score(spo2_percent=105)
+
+    with pytest.raises(ValueError, match="Systolic blood pressure.*out of plausible"):
+        calculate_news2_score(bp_systolic=15)
+
+    with pytest.raises(ValueError, match="Pulse.*out of plausible"):
+        calculate_news2_score(pulse_bpm=5)
+
+    with pytest.raises(ValueError, match="Temperature.*out of plausible"):
+        calculate_news2_score(temperature_f=130.0)
+
+    # 3. SpO2 Scale 1 vs Scale 2 for COPD / Hypercapnic Respiratory Failure
+    # At 90% SpO2 on room air:
+    # Scale 1 considers this hypoxic (pts = 3)
+    res_scale1 = calculate_news2_score(spo2_percent=90, spo2_scale=1, respiratory_rate=16)
+    assert res_scale1["sub_scores"]["spo2"] == 3
+
+    # Scale 2 considers 88-92% the target normal range (pts = 0)
+    res_scale2 = calculate_news2_score(spo2_percent=90, spo2_scale=2, respiratory_rate=16)
+    assert res_scale2["sub_scores"]["spo2"] == 0
+
+    # 4. API endpoint rejects out-of-bounds vitals with 422
+    p = _create_patient(client, doctor_headers, name="Bounds Test Patient")
+    enc = _create_encounter(client, doctor_headers, p["id"])
+
+    res_invalid = client.post(
+        f"/v1/api/clinical/encounters/{enc['id']}/vitals/news2",
+        headers=doctor_headers,
+        json={"respiratory_rate": 200, "spo2_percent": 98},
+    )
+    assert res_invalid.status_code == 422
+    assert "out of plausible physiological range" in res_invalid.json()["message"]
+
+    # 5. API endpoint with Scale 2 succeeds
+    res_copd = client.post(
+        f"/v1/api/clinical/encounters/{enc['id']}/vitals/news2",
+        headers=doctor_headers,
+        json={"respiratory_rate": 16, "spo2_percent": 90, "spo2_scale": 2, "bp_systolic": 120, "pulse_bpm": 75},
+    )
+    assert res_copd.status_code == 201
+    assert res_copd.json()["news2_score"] == 0
+
+
+
 # -----------------------------------------------------------------------------
 # 4. LIS Delta Checking Tests
 # -----------------------------------------------------------------------------

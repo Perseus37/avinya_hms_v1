@@ -429,3 +429,84 @@ def test_controlled_substance_dual_witness_wastage_security_controls(client, sup
     assert len(movements) == 1
     assert movements[0]["movement_type"] == "WASTAGE_DESTROYED"
     assert movements[0]["witness_verified"] is True
+
+
+def test_bcma_safety_controls_dose_mismatch_generic_rejection_and_duplicates(client, superuser_headers, nurse_headers):
+    """
+    N-43: Comprehensive bedside safety checks:
+    1. Rejecting raw generic drug names (preventing generic confusion)
+    2. Detecting dose mismatch when nurse administers incorrect quantity
+    3. Blocking duplicate/repeat administration within scheduled interval
+    """
+    patient = _create_patient(client, superuser_headers, name="Safety Check Patient")
+    encounter = _create_encounter(client, superuser_headers, patient["id"])
+    med = _create_medication(
+        client,
+        superuser_headers,
+        code="MED_AMPICILLIN",
+        brand="Ampicillin 250mg",
+        generic="Ampicillin",
+        ndc="BARCODE-AMPI-555",
+    )
+    rx = _create_prescription(client, superuser_headers, encounter["id"], med["id"], instructions="250mg IV push")
+    rx_item_id = rx["items"][0]["id"]
+
+    # 1. Reject loose generic name scan
+    res_generic = client.post(
+        "/v1/api/pharmacy/bcma/verify-and-administer",
+        headers=nurse_headers,
+        json={
+            "encounter_id": encounter["id"],
+            "prescription_item_id": rx_item_id,
+            "scanned_patient_barcode": patient["mrn"],
+            "scanned_medication_barcode": "ampicillin",  # raw generic name
+            "dose_given": "250mg",
+        },
+    )
+    assert res_generic.status_code == 409
+    assert "RIGHT DRUG VIOLATION" in res_generic.text
+
+    # 2. Reject dose mismatch (giving 1000mg when 250mg ordered)
+    res_dose = client.post(
+        "/v1/api/pharmacy/bcma/verify-and-administer",
+        headers=nurse_headers,
+        json={
+            "encounter_id": encounter["id"],
+            "prescription_item_id": rx_item_id,
+            "scanned_patient_barcode": patient["mrn"],
+            "scanned_medication_barcode": "BARCODE-AMPI-555",
+            "dose_given": "1000mg",
+        },
+    )
+    assert res_dose.status_code == 409
+    assert "RIGHT DOSE VIOLATION" in res_dose.text
+
+    # 3. Successful correct administration
+    res_ok = client.post(
+        "/v1/api/pharmacy/bcma/verify-and-administer",
+        headers=nurse_headers,
+        json={
+            "encounter_id": encounter["id"],
+            "prescription_item_id": rx_item_id,
+            "scanned_patient_barcode": patient["mrn"],
+            "scanned_medication_barcode": "BARCODE-AMPI-555",
+            "dose_given": "250mg",
+        },
+    )
+    assert res_ok.status_code in (200, 201), res_ok.text
+
+    # 4. Immediate duplicate repeat administration blocked
+    res_dup = client.post(
+        "/v1/api/pharmacy/bcma/verify-and-administer",
+        headers=nurse_headers,
+        json={
+            "encounter_id": encounter["id"],
+            "prescription_item_id": rx_item_id,
+            "scanned_patient_barcode": patient["mrn"],
+            "scanned_medication_barcode": "BARCODE-AMPI-555",
+            "dose_given": "250mg",
+        },
+    )
+    assert res_dup.status_code == 409
+    assert "Duplicate administration detected" in res_dup.text
+

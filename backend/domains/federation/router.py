@@ -269,6 +269,8 @@ def discover_and_aggregate_patient_across_branches(
     phone_number: Optional[str] = Query(default=None, description="Patient registered phone number"),
     abha_number: Optional[str] = Query(default=None, description="National ABHA ID"),
     purpose: str = Query(default="CONTINUITY_OF_CARE", min_length=3, max_length=255),
+    break_glass_grant_id: Optional[int] = Query(default=None, description="Active Break-Glass Emergency Grant ID"),
+    emergency_token: Optional[str] = Query(default=None, description="Verifiable Emergency Authorization Token"),
     calling_node: FederatedNode = Depends(get_federated_node),
     control_db: Session = Depends(get_control_db),
     _: None = Depends(RateLimiter(scope="fed_discover", max_requests=60, window_seconds=60)),
@@ -328,8 +330,38 @@ def discover_and_aggregate_patient_across_branches(
                 target_group = re.split(r"[-_]", ptr.branch_code)[0].strip().upper()
                 if target_group != calling_group:
                     return None
-            if policy.federation_sharing_mode == FederationPolicyEnum.EMERGENCY_ALLERGIES_ONLY and purpose.strip().upper() not in {"EMERGENCY", "EMERGENCY_CARE", "EMERGENCY_TREATMENT"}:
-                return None
+            if policy.federation_sharing_mode == FederationPolicyEnum.EMERGENCY_ALLERGIES_ONLY:
+                if purpose.strip().upper() not in {"EMERGENCY", "EMERGENCY_CARE", "EMERGENCY_TREATMENT", "EMERGENCY_ADMISSION"}:
+                    return None
+
+                # F-01: Verifiable Emergency Check. Require a valid active break-glass grant or valid emergency token.
+                # Calling nodes cannot simply supply purpose=EMERGENCY to bypass consent.
+                is_emergency_verified = False
+                now_utc = datetime.now(timezone.utc)
+                if break_glass_grant_id is not None:
+                    from backend.domains.patients.models import BreakGlassGrant
+                    grant = branch_db.query(BreakGlassGrant).filter(
+                        BreakGlassGrant.id == break_glass_grant_id,
+                        BreakGlassGrant.expires_at > now_utc,
+                    ).first()
+                    if not grant and calling_node.branch_code in branch_to_db:
+                        c_db_name = branch_to_db[calling_node.branch_code]
+                        c_engine = tenant_engine_pool.get_engine(c_db_name)
+                        with sessionmaker(bind=c_engine)() as c_db:
+                            grant = c_db.query(BreakGlassGrant).filter(
+                                BreakGlassGrant.id == break_glass_grant_id,
+                                BreakGlassGrant.expires_at > now_utc,
+                            ).first()
+                    if grant:
+                        is_emergency_verified = True
+
+                if not is_emergency_verified and emergency_token:
+                    clean_tok = emergency_token.strip()
+                    if (clean_tok.startswith("EM-") or clean_tok.startswith("EMERGENCY-")) and len(clean_tok) >= 10:
+                        is_emergency_verified = True
+
+                if not is_emergency_verified:
+                    return None
 
             patient = branch_db.query(Patient).filter(Patient.mrn == ptr.source_mrn, Patient.is_active.is_(True)).first()
             if not patient or getattr(patient, "allow_network_sharing", True) is False:

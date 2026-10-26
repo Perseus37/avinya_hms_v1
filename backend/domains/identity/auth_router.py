@@ -852,6 +852,7 @@ def update_user_status(
 @router.post("/users/{user_id}/unlock", status_code=200)
 def unlock_user(
     user_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     redis_client=Depends(get_redis),
     current_user: User = Depends(RequirePermission("iam:write")),
@@ -875,14 +876,19 @@ def unlock_user(
             data_use_point="identity.user.unlock",
             mode="ENFORCE",
             result="ALLOW",
-            reason_code=f"ADMIN_UNLOCK:unlocked_user_id={user.id}:email={user.email}",
+            reason_code=f"ADMIN_UNLOCK:unlocked_user_id={user.id}:email={user.email}"[:255],
         )
     )
     logger.info("Admin %s explicitly unlocked user %s (id=%d)", current_user.email, user.email, user.id)
     db.commit()
     if redis_client:
         try:
+            # N-08: Reset rate-limiter counter using the limiter's own key resolution
+            _mfa_failure_limiter.reset_actor(request, redis_client, f"user:{user.id}")
             redis_client.delete(f"auth_mfa_failure:user:{user.id}")
+            tenant = resolve_tenant_context(request)
+            if tenant and hasattr(tenant, "subdomain_slug"):
+                redis_client.delete(f"rl:auth_mfa_failure:{tenant.subdomain_slug}:user:{user.id}")
         except Exception:
             pass
     return {"status": "success", "message": f"User {user.email} has been unlocked."}

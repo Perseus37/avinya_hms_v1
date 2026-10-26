@@ -367,7 +367,8 @@ def activate_privacy_policy_audit_only(
 
         latest_map = {}
         for record in all_prior:
-            key = (record.patient_id, record.consent_type, record.purpose, record.scope_type, record.scope_key)
+            # N-14: Grouping key matches the decision engine (ignores consent_type so a subsequent withdrawal overrides prior grant)
+            key = (record.patient_id, record.purpose, record.scope_type, record.scope_key)
             if key not in latest_map:
                 latest_map[key] = record
 
@@ -378,6 +379,7 @@ def activate_privacy_policy_audit_only(
             if old_c.expires_at is not None and old_c.expires_at <= now:
                 # Expired consent is not carried over
                 continue
+            orig_ref = (old_c.evidence_reference or "LEGACY")[:120]
             db.add(
                 PatientConsentRecord(
                     patient_id=old_c.patient_id,
@@ -385,7 +387,7 @@ def activate_privacy_policy_audit_only(
                     purpose=old_c.purpose,
                     decision="GRANTED",
                     source=old_c.source,
-                    evidence_reference=f"CARRYOVER:{old_c.evidence_reference or 'LEGACY'}|ORIG_DATE:{old_c.recorded_at.isoformat()}",
+                    evidence_reference=f"CARRYOVER:{orig_ref}|ORIG_DATE:{old_c.recorded_at.isoformat()}"[:255],
                     scope_type=old_c.scope_type,
                     scope_key=old_c.scope_key,
                     consenter_type=old_c.consenter_type,
@@ -682,7 +684,9 @@ def execute_retention_run(
         raise HTTPException(status_code=404, detail="Privacy policy revision not found.")
     if revision.policy_type != "RETENTION" or revision.status != "APPROVED":
         raise HTTPException(status_code=409, detail="Only an approved retention policy can be executed.")
-    # N-05: Three-party separation of duties (actor cannot be creator or approver)
+    if not revision.approved_at or not revision.approval_reference:
+        raise HTTPException(status_code=409, detail="Retention policy must have a recorded approval and reference.")
+    # N-05: Two-person separation of duties (actor cannot be creator/configurer)
     if revision.configured_by_user_id == actor.id:
         raise HTTPException(
             status_code=409, detail="A different user must authorize retention execution (cannot be the user who configured it)."

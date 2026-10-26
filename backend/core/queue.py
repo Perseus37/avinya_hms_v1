@@ -13,14 +13,11 @@ import uuid
 from typing import Any, Callable, Dict, Optional
 
 import redis
-from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
-from backend.core.config import settings
 from backend.core.database import (
     ControlSessionLocal,
     get_redis,
-    redis_pool,
     tenant_engine_pool,
 )
 from backend.core.metrics import QUEUE_JOBS_TOTAL, QUEUE_PENDING_TASKS
@@ -331,7 +328,7 @@ def handle_retention_execute(payload: dict[str, Any]) -> dict[str, Any]:
     from datetime import datetime, timezone
     from backend.core.config import settings
     from backend.control_plane.models import TenantRegistry
-    from backend.domains.identity.models import User
+    from backend.domains.identity.models import User, UserStatusEnum
     from backend.domains.privacy.models import PrivacyPolicyRevision
     from backend.domains.privacy.retention_service import execute_retention_policy_revision
 
@@ -369,28 +366,29 @@ def handle_retention_execute(payload: dict[str, Any]) -> dict[str, Any]:
         if not revision:
             raise ValueError(f"Approved retention policy revision {policy_revision_id} not found.")
 
-        # Resolve system or operator actor with strict separation of duties
+        # Resolve system or operator actor with strict separation of duties (N-05, N-33)
         actor_id = payload.get("actor_user_id")
         actor = None
         if actor_id:
-            actor = tenant_db.query(User).filter(User.id == actor_id, User.is_active == True).first()
+            actor = tenant_db.query(User).filter(User.id == actor_id, User.status == UserStatusEnum.ACTIVE).first()
 
         # If no actor provided or if the actor configured this revision, find a distinct active user
-        if not actor or (revision.configured_by_user_id and actor.id == revision.configured_by_user_id):
-            distinct_actor = tenant_db.query(User).filter(
-                User.is_active == True,
-                User.id != revision.configured_by_user_id,
-            ).first()
+        disallowed_ids = {revision.configured_by_user_id} if revision.configured_by_user_id else set()
+        if not actor or actor.id in disallowed_ids:
+            query = tenant_db.query(User).filter(User.status == UserStatusEnum.ACTIVE)
+            if disallowed_ids:
+                query = query.filter(~User.id.in_(disallowed_ids))
+            distinct_actor = query.first()
             if distinct_actor:
                 actor = distinct_actor
             elif not actor:
-                actor = tenant_db.query(User).first()
+                actor = tenant_db.query(User).filter(User.status == UserStatusEnum.ACTIVE).first() or tenant_db.query(User).first()
 
         if not actor:
             raise ValueError("No user found in tenant database to attribute retention run.")
 
-        # Ensure two-person rule for live destructive execution
-        if not dry_run and revision.configured_by_user_id and actor.id == revision.configured_by_user_id:
+        # Ensure two-person separation of duties for live destructive execution
+        if not dry_run and actor.id in disallowed_ids:
             raise PermissionError("Two-person separation of duties violation: retention executor cannot be the user who configured the policy revision.")
 
         result = execute_retention_policy_revision(

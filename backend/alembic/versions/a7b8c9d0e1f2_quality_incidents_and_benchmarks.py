@@ -188,6 +188,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
     op.drop_index("ix_quality_indicator_benchmarks_indicator_code", table_name="quality_indicator_benchmarks")
     op.drop_table("quality_indicator_benchmarks")
     op.drop_index("ix_clinical_quality_incidents_encounter_id", table_name="clinical_quality_incidents")
@@ -198,3 +199,8 @@ def downgrade() -> None:
     op.drop_index("ix_clinical_quality_incidents_type", table_name="clinical_quality_incidents")
     op.drop_index("ix_clinical_quality_incidents_incident_code", table_name="clinical_quality_incidents")
     op.drop_table("clinical_quality_incidents")
+
+    # N-49: Cleanly drop created PostgreSQL enum types on rollback
+    sa.Enum(name="clinicalincidentstatusenum").drop(bind, checkfirst=True)
+    sa.Enum(name="clinicalincidentseverityenum").drop(bind, checkfirst=True)
+    sa.Enum(name="clinicalincidenttypeenum").drop(bind, checkfirst=True)

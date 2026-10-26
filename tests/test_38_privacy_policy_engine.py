@@ -1572,10 +1572,36 @@ def test_retention_hard_delete_refuses_patients_with_clinical_encounters(
             is_active=False,
             updated_at=old_date,
         )
-        db.add_all([p_with_enc, p_empty])
+        p_with_allergy = Patient(
+            mrn="HARD-DEL-ALLERGY",
+            full_name="Patient With Allergy Only",
+            gender=GenderEnum.OTHER,
+            date_of_birth=old_date,
+            is_active=False,
+            updated_at=old_date,
+        )
+        db.add_all([p_with_enc, p_empty, p_with_allergy])
         db.commit()
         db.refresh(p_with_enc)
         db.refresh(p_empty)
+        db.refresh(p_with_allergy)
+
+        from backend.domains.patients.models import AllergyMaster, PatientAllergy, AllergySeverityEnum
+        alg_master = db.query(AllergyMaster).first()
+        if not alg_master:
+            alg_master = AllergyMaster(code="ALG-PEANUT", allergen="Peanuts", category="FOOD")
+            db.add(alg_master)
+            db.commit()
+            db.refresh(alg_master)
+        db.add(PatientAllergy(
+            patient_id=p_with_allergy.id,
+            allergy_id=alg_master.id,
+            severity=AllergySeverityEnum.SEVERE,
+            recorded_by_user_id=doctor.id,
+            reaction_description="Severe urticaria",
+        ))
+        db.commit()
+        p_allergy_id = p_with_allergy.id
 
         enc = PatientEncounter(
             patient_id=p_with_enc.id,
@@ -1640,9 +1666,10 @@ def test_retention_hard_delete_refuses_patients_with_clinical_encounters(
     )
     assert exec_res.status_code == 200
 
-    # Verify: Patient with encounter is NOT deleted; Patient without encounter IS deleted!
+    # Verify: Patient with encounter or allergy is NOT deleted; Patient without dependencies IS deleted!
     with Session(engine) as db:
         assert db.get(Patient, p_enc_id) is not None
+        assert db.get(Patient, p_allergy_id) is not None
         assert db.get(Patient, p_empty_id) is None
 
 
