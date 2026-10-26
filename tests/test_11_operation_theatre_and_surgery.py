@@ -248,6 +248,15 @@ def test_03_completing_surgery_auto_bills_procedure_ot_room_and_implants_and_pri
     assert comp_res.status_code == 200
     assert comp_res.json()["status"] == "COMPLETED"
 
+    # Terminal state enforcement: cannot re-open or transition a COMPLETED surgery (400)
+    terminal_res = client.patch(
+        f"/v1/api/ot/surgeries/{surg['id']}/status",
+        headers=doctor_headers,
+        json={"status": "SCHEDULED"},
+    )
+    assert terminal_res.status_code == 400
+    assert "terminal state" in terminal_res.json()["message"].lower()
+
     # Verify DRAFT invoice has Procedure (8,000,000) + OT Room (500,000) + Implant (4,500,000) = 13,000,000 paise (₹1,30,000)
     inv = client.get(f"/v1/api/billing/invoices?patient_id={p['id']}", headers=billing_headers).json()["items"][0]
     assert inv["total_amount_paise"] == 13000000

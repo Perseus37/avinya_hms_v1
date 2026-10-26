@@ -209,6 +209,15 @@ def issue_blood_bag_for_transfusion(
             detail=f"Blood bag must be in CROSS_MATCHED state to issue (current: {cm.blood_bag.status.value}).",
         )
 
+    bag_expiry_utc = cm.blood_bag.expiry_date if cm.blood_bag.expiry_date.tzinfo else cm.blood_bag.expiry_date.replace(tzinfo=timezone.utc)
+    if bag_expiry_utc <= datetime.now(timezone.utc):
+        cm.blood_bag.status = BloodBagStatusEnum.DISCARDED
+        db.commit()
+        raise HTTPException(
+            status_code=409,
+            detail=f"Blood bag '{cm.blood_bag.bag_number}' has EXPIRED (expiry: {cm.blood_bag.expiry_date.isoformat()}). Cannot issue for transfusion.",
+        )
+
     cm.blood_bag.status = BloodBagStatusEnum.ISSUED
     cm.issued_at = datetime.now(timezone.utc)
     cm.issued_by_id = current_user.id

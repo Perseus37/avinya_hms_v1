@@ -24,6 +24,7 @@ from backend.domains.pharmacy.models import InventoryBatch, MedicationMaster
 from backend.domains.finance.models import ExpenseRecord, ExpenseCategoryEnum, ExpenseStatusEnum
 from backend.domains.procurement.ai_parser import DonutInvoiceParser
 from backend.domains.billing.models import Invoice, InvoiceLineItem, InvoiceStatusEnum
+from backend.domains.billing.rcm_services import recalculate_invoice_totals
 from backend.domains.reports.pdf import render_html_pdf
 from backend.domains.reports.templates import render_sandboxed_template
 
@@ -336,13 +337,22 @@ def return_patient_indent_stock(db: Session, indent: StoreIndent, return_request
                 total_credit_paise += credit_value
 
                 if matching_line.quantity <= return_item.return_quantity:
+                    if matching_line in invoice.line_items:
+                        invoice.line_items.remove(matching_line)
                     db.delete(matching_line)
                 else:
                     matching_line.quantity -= return_item.return_quantity
                     matching_line.total_price_paise -= credit_value
+                    if matching_line.gst_rate_percent and matching_line.gst_rate_percent > 0:
+                        matching_line.tax_amount_paise = round(
+                            (matching_line.total_price_paise * matching_line.gst_rate_percent) / 100
+                        )
 
     if invoice:
-        invoice.total_amount_paise = max(0, invoice.total_amount_paise - total_credit_paise)
+        db.flush()
+        recalculate_invoice_totals(invoice)
+        if invoice.discount_amount_paise and invoice.discount_amount_paise > invoice.total_amount_paise:
+            invoice.discount_amount_paise = invoice.total_amount_paise
 
     # Re-evaluate Indent Status
     if all(i.issued_quantity == 0 for i in indent.items):

@@ -39,6 +39,15 @@ def test_01_accounts_payable_maker_checker_workflow(client, superuser_headers):
     )
     assert rej_ok.status_code == 200
 
+    # Cannot re-adjudicate an already decided expense (409)
+    rej_again = client.patch(
+        f"/v1/api/finance/ap/expenses/{expense_id}/adjudicate",
+        headers=superuser_headers,
+        json={"status": "APPROVED"}
+    )
+    assert rej_again.status_code == 409
+    assert "pending_approval" in rej_again.json()["message"].lower()
+
 
 def test_02_recurring_expense_cron_generation(client, superuser_headers, multi_tenant_env):
     """Scenario 2: Recurring template trigger evaluates dates and generates automated ExpenseRecords."""

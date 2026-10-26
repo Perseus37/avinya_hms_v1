@@ -194,3 +194,49 @@ def test_03_pacs_dicom_study_attaches_to_radiology_task_and_blocks_lab_tasks(
     get_res = client.get(f"/v1/api/diagnostics/tasks/{rad_task_id}/dicom-study", headers=doctor_headers)
     assert get_res.status_code == 200
     assert get_res.json()["accession_number"] == "ACC-HYD-2026-0091"
+
+
+def test_04_expired_blood_bag_issue_rejected_with_409(client, superuser_headers, doctor_headers):
+    """
+    Scenario 4: A blood bag cross-matched earlier that has now passed its expiry date
+    must be rejected at issue time with HTTP 409 and marked as EXPIRED.
+    """
+    from sqlalchemy.orm import Session
+    from backend.core.database import tenant_engine_pool
+    from backend.domains.bloodbank.models import BloodBagInventory
+
+    now = datetime.now(timezone.utc)
+    bag = client.post(
+        "/v1/api/blood-bank/bags",
+        headers=superuser_headers,
+        json={
+            "bag_number": "BAG-EXPIRED-TEST-01",
+            "component_type": "PRBC",
+            "blood_group": "O+",
+            "volume_ml": 350,
+            "collection_date": (now - timedelta(days=10)).isoformat(),
+            "expiry_date": (now + timedelta(days=20)).isoformat(),
+            "processing_fee_paise": 150000,
+        },
+    ).json()
+
+    _, enc = _create_patient_with_blood_group(client, doctor_headers, blood_group="O+")
+    cm = client.post(
+        "/v1/api/blood-bank/cross-match",
+        headers=superuser_headers,
+        json={"encounter_id": enc["id"], "blood_bag_id": bag["id"], "ordered_by_doctor_id": 2},
+    ).json()
+
+    # Simulate bag expiring in the refrigerator before issue
+    engine = tenant_engine_pool.get_engine("hms_default")
+    with Session(engine) as session:
+        db_bag = session.get(BloodBagInventory, bag["id"])
+        db_bag.expiry_date = now - timedelta(hours=1)
+        session.commit()
+
+    issue_res = client.patch(
+        f"/v1/api/blood-bank/cross-match/{cm['id']}/issue",
+        headers=superuser_headers,
+    )
+    assert issue_res.status_code == 409
+    assert "expired" in issue_res.json()["message"].lower()

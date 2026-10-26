@@ -766,6 +766,11 @@ def settle_insurance_claim(
         raise HTTPException(status_code=404, detail="Insurance claim not found.")
     if claim.status == ClaimStatusEnum.SETTLED:
         raise HTTPException(status_code=409, detail="Insurance claim is already settled.")
+    if claim.status == ClaimStatusEnum.REJECTED:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot settle an insurance claim that has been REJECTED by insurer/TPA.",
+        )
 
     if payload.settled_amount_paise > claim.insurer_payable_paise:
         raise HTTPException(

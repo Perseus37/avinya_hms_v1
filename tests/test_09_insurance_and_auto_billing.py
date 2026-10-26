@@ -379,6 +379,11 @@ def test_08_diagnostics_package_order_auto_bills_bundle_price_and_reverses_on_ca
     cancel_res = client.delete(f"/v1/api/diagnostics/orders/{order['id']}", headers=doctor_headers)
     assert cancel_res.status_code == 200
 
+    # Re-cancelling an already cancelled diagnostic order is rejected with 400
+    recancel_res = client.delete(f"/v1/api/diagnostics/orders/{order['id']}", headers=doctor_headers)
+    assert recancel_res.status_code == 400
+    assert "cancelled" in recancel_res.json()["message"].lower()
+
     inv_after = client.get(f"/v1/api/billing/invoices/{inv['id']}", headers=billing_headers).json()
     assert inv_after["total_amount_paise"] == 0
     assert len(inv_after["line_items"]) == 0
@@ -711,3 +716,102 @@ def test_14_block_cross_patient_deposit_application_and_exhausted_deposit_reuse(
         headers=billing_headers,
         json={"deposit_id": dep_a["id"]},
     ).status_code == 400
+
+
+def test_15_reverse_advance_deposit_restores_balance_and_blocks_direct_insurance_reverse(
+    client, superuser_headers, doctor_headers, billing_headers
+):
+    """Scenario 15: Reversing an ADVANCE_ADJUSTMENT payment receipt restores the deposit balance and status."""
+    cat = client.post("/v1/api/diagnostics/categories", headers=superuser_headers, json={"department_id": 1, "code": "CAT_DEP_R", "name": "Rev Cat"}).json()
+    svc = client.post("/v1/api/diagnostics/catalog", headers=superuser_headers, json={"category_id": cat["id"], "code": "SVC_R_1K", "name": "Lab Test", "service_type": "LAB", "base_price_paise": 100000, "is_order_set": False}).json()
+
+    p, _ = _setup_patient_and_encounter(client, doctor_headers, encounter_type="OPD")
+    dep = client.post("/v1/api/billing/deposits", headers=billing_headers, json={"patient_id": p["id"], "amount_paise": 100000, "payment_method": "CASH"}).json()
+
+    inv = client.post("/v1/api/billing/invoices", headers=billing_headers, json={"patient_id": p["id"]}).json()
+    client.post(f"/v1/api/billing/invoices/{inv['id']}/items", headers=billing_headers, json={"service_id": svc["id"], "description": "Lab Test", "quantity": 1, "unit_price_paise": 100000})
+    client.patch(f"/v1/api/billing/invoices/{inv['id']}/finalize", headers=billing_headers)
+
+    # Apply deposit to invoice
+    apply_res = client.post(
+        f"/v1/api/billing/invoices/{inv['id']}/apply-deposit",
+        headers=billing_headers,
+        json={"deposit_id": dep["id"]},
+    )
+    assert apply_res.status_code == 201
+    receipt_id = apply_res.json()["id"]
+
+    # Verify deposit is EXHAUSTED
+    dep_mid = client.get(f"/v1/api/billing/patients/{p['id']}/deposits", headers=billing_headers).json()[0]
+    assert dep_mid["remaining_balance_paise"] == 0
+    assert dep_mid["status"] == "EXHAUSTED"
+
+    # Reverse payment receipt
+    rev_res = client.delete(
+        f"/v1/api/billing/invoices/{inv['id']}/payments/{receipt_id}",
+        headers=superuser_headers,
+    )
+    assert rev_res.status_code == 200
+
+    # Verify deposit balance is restored and status ACTIVE
+    dep_after = client.get(f"/v1/api/billing/patients/{p['id']}/deposits", headers=billing_headers).json()[0]
+    assert dep_after["remaining_balance_paise"] == 100000
+    assert dep_after["status"] == "ACTIVE"
+
+
+def test_16_rejected_claim_settlement_blocked(
+    client, superuser_headers, doctor_headers, billing_headers
+):
+    """Scenario 16: Settling an insurance claim that has been REJECTED returns HTTP 400."""
+    from sqlalchemy.orm import Session
+    from backend.core.database import tenant_engine_pool
+    from backend.domains.insurance.models import InsuranceClaim, ClaimStatusEnum
+
+    prov = client.post("/v1/api/insurance/providers", headers=superuser_headers, json={"code": "INS_REJ_TEST", "name": "Rej Insurer", "provider_type": "INSURER"}).json()
+    p, enc = _setup_patient_and_encounter(client, doctor_headers)
+    now = datetime.now(timezone.utc)
+
+    pol = client.post(
+        "/v1/api/insurance/policies",
+        headers=billing_headers,
+        json={
+            "patient_id": p["id"],
+            "provider_id": prov["id"],
+            "policy_number": "POL-REJ-01",
+            "member_id": "MEM-REJ-01",
+            "sum_insured_paise": 1000000,
+            "copay_percentage": 10,
+            "valid_from": (now - timedelta(days=10)).isoformat(),
+            "valid_till": (now + timedelta(days=100)).isoformat(),
+        },
+    ).json()
+
+    cat = client.post("/v1/api/diagnostics/categories", headers=superuser_headers, json={"department_id": 1, "code": "CAT_REJ", "name": "Rej Cat"}).json()
+    svc = client.post("/v1/api/diagnostics/catalog", headers=superuser_headers, json={"category_id": cat["id"], "code": "SVC_REJ_50K", "name": "Rej Lab", "service_type": "LAB", "base_price_paise": 50000, "is_order_set": False}).json()
+
+    inv = client.post("/v1/api/billing/invoices", headers=billing_headers, json={"patient_id": p["id"]}).json()
+    client.post(f"/v1/api/billing/invoices/{inv['id']}/items", headers=billing_headers, json={"service_id": svc["id"], "description": "Rej Lab", "quantity": 1, "unit_price_paise": 50000})
+    client.patch(f"/v1/api/billing/invoices/{inv['id']}/finalize", headers=billing_headers)
+
+    clm = client.post(
+        "/v1/api/insurance/claims",
+        headers=billing_headers,
+        json={"invoice_id": inv["id"], "policy_id": pol["id"]},
+    ).json()
+
+    # Transition claim to REJECTED directly in database
+    engine = tenant_engine_pool.get_engine("hms_default")
+    with Session(engine) as session:
+        db_clm = session.get(InsuranceClaim, clm["id"])
+        db_clm.status = ClaimStatusEnum.REJECTED
+        session.commit()
+
+    # Attempt to settle rejected claim -> 400 Bad Request
+    settle_res = client.patch(
+        f"/v1/api/insurance/claims/{clm['id']}/settle",
+        headers=billing_headers,
+        json={"settled_amount_paise": 40000, "settlement_utr_reference": "NEFT-REJ-FAIL"},
+    )
+    assert settle_res.status_code == 400
+    assert "rejected" in settle_res.json()["message"].lower()
+
