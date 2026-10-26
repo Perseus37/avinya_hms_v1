@@ -34,7 +34,7 @@ def upgrade() -> None:
         sa.Column("tax_amount_paise", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("total_charge_paise", sa.Integer(), nullable=False),
         sa.Column("tariff_applied", sa.String(length=100), nullable=False, server_default="BASE_CATALOG"),
-        sa.Column("is_insurance_covered", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("is_insurance_covered", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("posted_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
