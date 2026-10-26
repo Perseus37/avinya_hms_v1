@@ -19,7 +19,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # 1. Add controlled substance and barcode columns to medication_master
-    op.add_column("medication_master", sa.Column("is_controlled_substance", sa.Boolean(), nullable=False, server_default=sa.text("0")))
+    op.add_column("medication_master", sa.Column("is_controlled_substance", sa.Boolean(), nullable=False, server_default=sa.false()))
     op.add_column("medication_master", sa.Column("ndc_or_barcode", sa.String(length=100), nullable=True))
     op.create_index("ix_medication_master_ndc_or_barcode", "medication_master", ["ndc_or_barcode"])
 
@@ -32,7 +32,7 @@ def upgrade() -> None:
         sa.Column("current_balance_units", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("unit_of_measure", sa.String(length=30), nullable=False, server_default="AMPOULE"),
         sa.Column("tamper_seal_number", sa.String(length=50), nullable=True),
-        sa.Column("is_locked", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("is_locked", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("created_by_id", sa.Integer(), nullable=True),
@@ -53,7 +53,7 @@ def upgrade() -> None:
         sa.Column("prescription_item_id", sa.Integer(), sa.ForeignKey("prescription_items.id"), nullable=True),
         sa.Column("primary_user_id", sa.Integer(), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("witness_user_id", sa.Integer(), sa.ForeignKey("users.id"), nullable=True),
-        sa.Column("witness_verified", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("witness_verified", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("wastage_reason", sa.String(length=255), nullable=True),
         sa.Column("disposal_method", sa.String(length=100), nullable=True),
         sa.Column("batch_number", sa.String(length=50), nullable=True),
@@ -79,7 +79,7 @@ def upgrade() -> None:
         sa.Column("scanned_medication_barcode", sa.String(length=100), nullable=False),
         sa.Column("patient_matched", sa.Boolean(), nullable=False),
         sa.Column("medication_matched", sa.Boolean(), nullable=False),
-        sa.Column("dose_matched", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("dose_matched", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("time_status", sa.String(length=30), nullable=False, server_default="ON_TIME"),
         sa.Column("verification_status", sa.String(length=50), nullable=False),
         sa.Column("override_reason", sa.String(length=500), nullable=True),
