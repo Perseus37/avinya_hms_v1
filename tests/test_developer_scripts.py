@@ -112,3 +112,33 @@ def test_bootstrap_reset_guard_in_production(monkeypatch):
     with pytest.raises(RuntimeError, match="strictly disallowed in production"):
         bootstrap_main(["--reset"])
 
+
+def test_totp_script_with_secret():
+    from backend.scripts.totp import main as totp_main, get_code_for_secret
+
+    code, remaining = get_code_for_secret("JBSWY3DPEHPK3PXP")
+    assert len(code) == 6
+    assert code.isdigit()
+    assert 0 <= remaining <= 30
+
+    ret = totp_main(["JBSWY3DPEHPK3PXP"])
+    assert ret == 0
+
+
+def test_totp_script_with_operator(monkeypatch):
+    from unittest.mock import MagicMock, patch
+    from backend.scripts.totp import main as totp_main
+    from backend.security.envelope import encrypt_tenant_secret
+
+    mock_db = MagicMock()
+    mock_op = MagicMock()
+    mock_op.email = "admin@avinya-hms.com"
+    mock_op.mfa_secret = encrypt_tenant_secret("JBSWY3DPEHPK3PXP")
+    mock_db.execute.return_value.scalar_one_or_none.return_value = mock_op
+
+    with patch("backend.scripts.totp.ControlSessionLocal") as mock_session_ctx:
+        mock_session_ctx.return_value.__enter__.return_value = mock_db
+        ret = totp_main(["--operator", "admin@avinya-hms.com"])
+        assert ret == 0
+
+

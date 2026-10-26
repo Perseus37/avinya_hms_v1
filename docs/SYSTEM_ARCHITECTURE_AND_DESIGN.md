@@ -3,7 +3,7 @@
 
 **Repository:** `sai1-crypto/avinya_hms`  
 **Current Milestone Version:** `v2.0.0-ENTERPRISE` (Commit [`e2fbd09`](file:///v:/avinya_hms) on `main`, PR #125)  
-**Test Suite Verification:** 441 Passed, 2 Skipped (100% Green across 63 test suites), 0 Bandit High/Medium, 0 pip-audit CVEs  
+**Test Suite Verification:** 443 Passed, 2 Skipped (100% Green across 63 test suites), 0 Bandit High/Medium, 0 pip-audit CVEs  
 **Target Environment:** Multi-Tenant Healthcare Enterprise (Cloud / Hybrid On-Premises)  
 **Document Classification:** Engineering Architecture Specification & Technical Handover  
 **Date:** 26 October 2026  
