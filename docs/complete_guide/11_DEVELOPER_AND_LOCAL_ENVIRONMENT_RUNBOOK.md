@@ -216,7 +216,7 @@ python -m backend.scripts.bootstrap --reset
 To log into the Control Plane UI or invoke operator APIs locally:
 ```bash
 python -m backend.scripts.create_control_plane_operator \
-  --email "admin@avinya.local" \
+  --email "admin@avinya-hms.com" \
   --password "AdminPassword123!" \
   --role "superadmin"
 ```
