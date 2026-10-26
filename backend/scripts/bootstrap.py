@@ -1,3 +1,4 @@
+import argparse
 import logging
 import sys
 from pathlib import Path
@@ -27,6 +28,32 @@ from backend.control_plane.services.catalogs import seed_control_plane
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("avinya.bootstrap")
+
+
+def reset_physical_databases():
+    """Drops existing databases in development to allow a clean rebuild."""
+    if settings.ENVIRONMENT.lower() in {"production", "prod"}:
+        raise RuntimeError("Database reset (--reset) is strictly disallowed in production.")
+    conn = psycopg2.connect(
+        user=settings.POSTGRES_USER,
+        password=settings.POSTGRES_PASSWORD,
+        host=settings.POSTGRES_HOST,
+        port=settings.POSTGRES_PORT,
+        database="postgres",
+    )
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    with conn.cursor() as cur:
+        default_tenant = (
+            f"{settings.TENANT_DATABASE_PREFIX}{settings.DEFAULT_TENANT_SLUG}"
+        )
+        for db_name in [settings.CONTROL_PLANE_DB_NAME, default_tenant]:
+            cur.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()",
+                (db_name,),
+            )
+            cur.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+            logger.info(f"Dropped database for reset: {db_name}")
+    conn.close()
 
 
 def provision_physical_databases():
@@ -155,5 +182,19 @@ def bootstrap_system():
     logger.info("Bootstrap complete.")
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Avinya HMS Bootstrap and Seeder")
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Drop and rebuild development databases before running migrations and seed",
+    )
+    args = parser.parse_args(argv)
+    if args.reset:
+        reset_physical_databases()
     bootstrap_system()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -3,7 +3,14 @@
 import argparse
 import getpass
 import sys
+from pathlib import Path
 
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+_REPO_DIR = _BACKEND_DIR.parent
+if str(_REPO_DIR) not in sys.path:
+    sys.path.insert(0, str(_REPO_DIR))
+
+from pydantic import EmailStr, TypeAdapter
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
@@ -25,29 +32,56 @@ def _validate_password(password: str) -> None:
         raise ValueError("Password must use at least three character classes.")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--email", required=True)
-    parser.add_argument("--name", required=True)
+    parser.add_argument("--email", required=True, help="Operator corporate email address")
+    parser.add_argument(
+        "--name",
+        default=None,
+        help="Operator full display name (defaults to formatted email username if omitted)",
+    )
+    parser.add_argument(
+        "--password",
+        default=None,
+        help="Operator password (if omitted, prompts interactively via getpass)",
+    )
     parser.add_argument(
         "--role",
         default="superadmin",
         choices=["superadmin", "ops", "support", "billing", "viewer"],
         help="Operator RBAC role (default: superadmin)",
     )
-    args = parser.parse_args()
-    email = args.email.strip().lower()
-    if "@" not in email or len(email) > 255:
-        parser.error("--email must be a valid email address.")
-
-    password = getpass.getpass("Operator password: ")
-    confirmation = getpass.getpass("Confirm operator password: ")
-    if password != confirmation:
-        parser.error("Passwords do not match.")
+    args = parser.parse_args(argv)
+    raw_email = args.email.strip().lower()
     try:
-        _validate_password(password)
-    except ValueError as exc:
-        parser.error(str(exc))
+        email = str(TypeAdapter(EmailStr).validate_python(raw_email))
+    except Exception:
+        parser.error(
+            f"'{raw_email}' is not a valid RFC-compliant email address. "
+            "Please use a standard domain (e.g. admin@avinya-hms.com or admin@example.org)."
+        )
+
+    full_name = (
+        args.name.strip()
+        if args.name and args.name.strip()
+        else email.split("@")[0].replace(".", " ").title()
+    ) or "Administrator"
+
+    if args.password is not None:
+        password = args.password
+        try:
+            _validate_password(password)
+        except ValueError as exc:
+            parser.error(str(exc))
+    else:
+        password = getpass.getpass("Operator password: ")
+        confirmation = getpass.getpass("Confirm operator password: ")
+        if password != confirmation:
+            parser.error("Passwords do not match.")
+        try:
+            _validate_password(password)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     try:
         with ControlSessionLocal() as db:
@@ -60,7 +94,7 @@ def main() -> int:
             db.add(
                 ControlPlaneOperator(
                     email=email,
-                    full_name=args.name.strip(),
+                    full_name=full_name,
                     role=args.role,
                     password_hash=pwd_context.hash(password),
                 )
@@ -73,7 +107,7 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    print(f"Created operator {email} with role '{args.role}'; MFA enrollment is required at first sign-in.")
+    print(f"Created operator {email} ('{full_name}') with role '{args.role}'; MFA enrollment is required at first sign-in.")
     return 0
 
 

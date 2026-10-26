@@ -559,7 +559,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Stage 1: Migrate only the configured default tenant as canary",
     )
-    parser.add_argument("--fleet", action="store_true", help="Stage 2: Push verified head revision to all tenant DBs")
+    parser.add_argument(
+        "--fleet",
+        "--all-tenants",
+        dest="fleet",
+        action="store_true",
+        help="Stage 2: Push verified head revision to all tenant DBs",
+    )
     parser.add_argument("--tenant", type=str, default=None, help="Push head revision to one specific tenant slug")
     parser.add_argument("-m", "--message", type=str, default=None, help="Revision comment (non-interactive)")
     args = parser.parse_args(argv)
