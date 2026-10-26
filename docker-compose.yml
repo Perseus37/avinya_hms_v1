@@ -130,6 +130,8 @@ services:
     command: ["python", "-m", "backend.domains.integrations.listener"]
     ports:
       - "${HL7_PORT:-2575}:${HL7_PORT:-2575}"
+    healthcheck:
+      disable: true
     profiles:
       - integrations
     depends_on:
@@ -152,6 +154,8 @@ services:
     volumes:
       - hms_backups:/app/backups
       - hms_attachments:/app/attachments
+    healthcheck:
+      disable: true
     depends_on:
       db-init:
         condition: service_completed_successfully
