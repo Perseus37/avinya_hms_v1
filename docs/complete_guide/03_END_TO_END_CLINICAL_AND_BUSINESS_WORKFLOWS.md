@@ -144,13 +144,13 @@ The platform evaluates vital signs using the **National Early Warning Score 2 (N
   - *Total Score >= 7 (High Clinical Risk):* **Emergency Alarm.** Automatically alerts the hospital Rapid Response Team (RRT) or Intensive Care Consultant for immediate bedside evaluation and potential ICU transfer.
 
 ### 3.3 Drug-Disease Contraindication Engine
-Avinya HMS cross-references prescribed active generic molecules against the patient's active ICD-10 diagnoses:
+Avinya HMS cross-references prescribed active generic molecules against the patient's active ICD-10 diagnoses using exact word-boundary regex matching (`\b<member>\b`) to eliminate false-positive substring alerts:
 - **Beta-blockers (e.g., Propranolol, Atenolol):** Hard stop in patients with active Bronchial Asthma (`J45`) due to bronchospasm risk.
 - **NSAIDs (e.g., Ibuprofen, Diclofenac):** Major warning/hard stop in patients with active Peptic Ulcer Disease (`K27`) or Severe Renal Failure (`N18.5`).
 - **Metformin:** Hard stop in patients with acute lactic acidosis or advanced chronic kidney disease.
 
 ### 3.4 Cross-Encounter Drug-Drug Interaction (DDI) Engine
-The DDI engine checks for potential interactions not just within the current prescription, but across **all active medications from all recent hospital visits and inpatient stays**.
+The DDI engine checks for potential interactions not just within the current prescription, but across **all active medications from all recent hospital visits and inpatient stays**, utilizing strict word-boundary token matching.
 - **Severity Levels:**
   - `CRITICAL_HARD_STOP`: Absolute contraindication (e.g., Sildenafil + Nitrates). The system physically refuses to sign the prescription.
   - `MAJOR_WARNING`: Serious potential toxicity. Requires explicit physician clinical override with a mandatory documented justification string (minimum 15 characters).
@@ -199,7 +199,7 @@ sequenceDiagram
 To prevent medication administration errors, Avinya HMS implements optical **Barcode Medication Administration (BCMA)**:
 1. **Right Patient:** Verifies scanned wristband barcode matches the inpatient encounter.
 2. **Right Drug:** Verifies scanned medication barcode resolves to the physician's prescribed order.
-3. **Right Dose:** Verifies scanned unit strength matches the prescribed dosage.
+3. **Right Dose:** Verifies scanned unit strength matches the prescribed dosage using strict tokenized numeric float and unit verification (`(quantity, unit)`). This eliminates substring matching vulnerabilities (e.g., preventing 25mg from matching inside 125mg or 250mg).
 4. **Right Route:** Verifies formulation (e.g., IV injection vs oral tablet) matches prescribed route.
 5. **Right Time:** Verifies administration occurs within the authorized clinical window (e.g., scheduled time ±60 minutes).
 - **Strict Hard Stops:** A mismatch in Patient or Drug triggers an immediate, un-bypassable hard stop (`422 Unprocessable Entity`), locking the screen and alerting the ward supervisor.
@@ -310,6 +310,11 @@ Every charge event is tagged with an idempotent `source_reference` (e.g., `CENSU
 - **Statutory GST Breakdown:** Compliant with Indian taxation laws, computing Central GST (CGST) and State GST (SGST) for intra-state care, or Integrated GST (IGST) for inter-state patients.
 - **Accounts Receivable (AR) Aging:** Automatically aggregates outstanding patient balances into aging buckets: `0-30 Days`, `31-60 Days`, `61-90 Days`, and `90+ Days` (delinquent), incorporating tax liabilities into revenue forecasting.
 
+### 6.4 Patient Advance Deposits, Returns & Tax Rebalancing
+- **Patient Advance Deposits:** Supports collecting advance deposits (`PatientDeposit`) with real-time drawdown against finalized UNPAID/PARTIAL invoices (`ADVANCE_ADJUSTMENT`). When an advance payment receipt is reversed, the platform automatically restores the drawn-down balance on `PatientDeposit` and transitions `EXHAUSTED` deposits back to `ACTIVE`. Direct manual deletion of `INSURANCE` receipts is blocked to preserve claim reconciliation integrity.
+- **Automated Return GST Recalculation:** When medications or ward store indents are returned, the system updates line items and automatically re-invokes `recalculate_invoice_totals(invoice)` to recalculate CGST, SGST, IGST, and tax-exempt status, ensuring financial ledger consistency.
+- **Idempotent Inpatient Bed Charge Runs:** `auto_bill_ipd_bed_stay` checks for existing charges per bed stay segment, preventing duplicate line items upon discharge retries.
+
 ---
 
 ## 7. Regulatory Gateways: ABDM (M1-M3) & NHCX
@@ -367,8 +372,8 @@ Major and sentinel events mandate documented **Root Cause Analysis (RCA)** (e.g.
 ## 9. Operational Support Services: BMW, Blood Bank, Surgery, Workforce & AP
 
 - **Biomedical Waste (BMW) Tracking:** Manages hazardous biomedical waste using statutory color-coded categorization (Yellow, Red, White, Blue). Every waste bag is barcoded, weighed at ward collection, and reconciled against authorized Common Bio-medical Waste Treatment Facility (CBWTF) pickup manifests.
-- **Blood Bank & Transfusion Safety:** Tracks voluntary blood donors, mandatory viral serology screening (HIV, Hepatitis B, Hepatitis C, Syphilis, Malaria), blood component separation (PRBC, Platelets, FFP), and recipient cross-matching compatibility testing.
-- **Operation Theatre (OT) & WHO Checklists:** OT scheduling, surgical team rostering, Pre-Anesthetic Checkup (PAC) clearance gates, and digital enforcement of the **World Health Organization (WHO) Surgical Safety Checklist** (Sign-In before induction, Time-Out before skin incision, Sign-Out before wound closure).
+- **Blood Bank & Transfusion Safety:** Tracks voluntary blood donors, mandatory viral serology screening (HIV, Hepatitis B, Hepatitis C, Syphilis, Malaria), blood component separation (PRBC, Platelets, FFP), recipient cross-matching compatibility testing, and **issue-time UTC expiry validation** (marking expired bags as `DISCARDED` and aborting ward/OT issue with `HTTP 409 Conflict`).
+- **Operation Theatre (OT) & WHO Checklists:** OT scheduling, surgical team rostering, Pre-Anesthetic Checkup (PAC) clearance gates, digital enforcement of the **World Health Organization (WHO) Surgical Safety Checklist** (Sign-In before induction, Time-Out before skin incision, Sign-Out before wound closure), and **strict terminal state machine guards** preventing modifications once a surgical case reaches `COMPLETED` or `CANCELLED`.
 - **Workforce & Statutory Payroll:** Staff biometric attendance tracking, leave balances, and statutory deductions (Employee Provident Fund, Employee State Insurance, Professional Tax, TDS) with locked pay periods preventing retroactive tampering.
 - **Accounts Payable & 3-Way Matching:** Purchase Orders (PO), Goods Receipt Notes (GRN), and Vendor Invoices reconciled via automated 3-way matching before payment voucher release.
 

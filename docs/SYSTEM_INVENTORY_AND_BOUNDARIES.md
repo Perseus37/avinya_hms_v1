@@ -2,7 +2,8 @@
 ## What the System Contains vs. What it Does NOT Contain
 
 **Repository:** `sai1-crypto/avinya_hms`  
-**Milestone Version:** `v2.0.0-ENTERPRISE` (Commit [`79ac432`](file:///v:/avinya_hms) on `main`)  
+**Milestone Version:** `v2.0.0-ENTERPRISE` (Commit [`e2fbd09`](file:///v:/avinya_hms) on `main`, PR #125)  
+**Test Suite Verification:** 434 Passed, 2 Skipped (100% Green across 62 test suites), 0 Bandit High/Medium, 0 pip-audit CVEs  
 **Document Classification:** Product & Technical Boundaries Specification  
 **Date:** 26 October 2026  
 

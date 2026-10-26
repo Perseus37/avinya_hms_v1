@@ -23,7 +23,7 @@ docs/complete_guide/
 ├── 07_MASTER_OPERATIONS_RUNBOOK.md                    <-- Daily maintenance SOPs, PostgreSQL tuning, Redis & SLAs
 ├── 08_API_AND_INTEGRATION_REFERENCE.md                <-- Native HL7 v2 MLLP (:2575), FHIR R4, ABDM & Webhooks
 ├── 09_DATABASE_SCHEMA_AND_DATA_DICTIONARY.md          <-- 70+ tables, constraints, fields & sandbox classification
-├── 10_TESTING_QA_AND_RELEASE_GOVERNANCE.md            <-- 421 tests, Bandit SAST, pip-audit, and release gates
+├── 10_TESTING_QA_AND_RELEASE_GOVERNANCE.md            <-- 434 tests (100% green), Bandit SAST, pip-audit, and release gates
 └── 11_DEVELOPER_AND_LOCAL_ENVIRONMENT_RUNBOOK.md      <-- Local dev setup, hot-reload, Alembic migrations, test data seeding & debugging
 ```
 

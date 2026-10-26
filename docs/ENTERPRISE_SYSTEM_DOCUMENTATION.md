@@ -6,8 +6,9 @@
 **Target Environments:** Cloud Native (AWS / GCP / Azure), Hybrid Cloud, On-Premises Air-Gapped Hospital Clusters  
 **Compliance & Regulatory Mandates:** India DPDP Act 2023, Ayushman Bharat Digital Mission (ABDM M1–M3), National Health Claims Exchange (NHCX), NABH 5th Edition, JCI 7th Edition, ISO 27001 / HIPAA Security Safeguards  
 **Repository:** `sai1-crypto/avinya_hms`  
-**Certified Milestone Release:** PR #99 (`dev` ➔ `main`, Commit `79ac432`)  
-**Publication Date:** October 2026  
+**Certified Milestone Release:** PR #125 (`dev` ➔ `main`, Commit `e2fbd09`)  
+**Test Suite Verification:** 434 Passed, 2 Skipped (100% Green across 62 test suites), 0 Bandit High/Medium, 0 pip-audit CVEs  
+**Publication Date:** 26 October 2026  
 
 ---
 
@@ -268,7 +269,7 @@ Scores are graded into Clinical Risk Categories:
 - **High (Score >= 7):** Immediate emergency bedside call to the Rapid Response Team (RRT) and intensive care transfer.
 
 #### Drug-Disease Contraindication Validation
-The prescribing engine cross-references all candidate drug generic molecules against the patient's active ICD-10 diagnoses:
+The prescribing engine cross-references all candidate drug generic molecules against the patient's active ICD-10 diagnoses using exact word-boundary regex matching (`\b<member>\b`) to eliminate false-positive substring alerts:
 - *Beta-blockers (Propranolol, Atenolol)* flagged as Hard Stops in patients with active Bronchial Asthma (`J45`).
 - *NSAIDs (Ibuprofen, Diclofenac)* flagged in active Peptic Ulcers (`K27`).
 - *ACE Inhibitors* flagged in Angioedema history or severe Renal Failure (`N18.5`).
@@ -316,7 +317,7 @@ sequenceDiagram
 Prior to administering any dose, nurses must scan both the patient's 2D barcode wristband and the medication unit-dose barcode. The BCMA engine verifies:
 1. **Right Patient:** Scanned MRN matches the prescription encounter.
 2. **Right Drug:** Scanned barcode resolves to the active prescribed generic/brand.
-3. **Right Dose:** Dispensed strength matches the order.
+3. **Right Dose:** Dispensed strength matches the order using strict tokenized numeric float and unit verification (`(quantity, unit)`), completely eliminating false-positive substring matches (e.g. preventing 25mg from matching inside 125mg or 250mg).
 4. **Right Route:** Oral, IV, IM, SC routing aligns with medication formulation.
 5. **Right Time:** Administration attempt falls within the configurable window (e.g., ±60 minutes of scheduled dose).
 - *Strict Hard Stops:* Mismatches in Patient or Drug trigger immediate hard stops that cannot be bypassed. Time-window variances require documented clinical justification.
