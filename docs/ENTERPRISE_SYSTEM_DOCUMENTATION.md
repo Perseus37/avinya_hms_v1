@@ -7,7 +7,7 @@
 **Compliance & Regulatory Mandates:** India DPDP Act 2023, Ayushman Bharat Digital Mission (ABDM M1–M3), National Health Claims Exchange (NHCX), NABH 5th Edition, JCI 7th Edition, ISO 27001 / HIPAA Security Safeguards  
 **Repository:** `sai1-crypto/avinya_hms`  
 **Certified Milestone Release:** PR #125 (`dev` ➔ `main`, Commit `e2fbd09`)  
-**Test Suite Verification:** 434 Passed, 2 Skipped (100% Green across 62 test suites), 0 Bandit High/Medium, 0 pip-audit CVEs  
+**Test Suite Verification:** 441 Passed, 2 Skipped (100% Green across 63 test suites), 0 Bandit High/Medium, 0 pip-audit CVEs  
 **Publication Date:** 26 October 2026  
 
 ---
