@@ -93,6 +93,16 @@ flowchart TD
 - **Root Cause:** Only 1 vial of an antibiotic remained on the shelf, and two ward nurses attempted to dispense it simultaneously.
 - **Resolution:** The second transaction receives `409 Conflict`. The nurse must select a different batch lot or submit a Store Indent request to central pharmacy.
 
+#### Scenario C: Transfusion Blood Bag Expiry Hard Stop
+- **Error Payload:** `{"detail": "Blood bag 'BAG-OPOS-042' has EXPIRED (expiry: 2026-10-26T12:00:00Z). Cannot issue for transfusion."}`
+- **Root Cause:** A cross-matched blood bag passed its shelf-life expiry date while stored in the blood bank refrigerator prior to ward issue.
+- **Resolution:** The system automatically transitions the bag to `DISCARDED`. The transfusion order is halted. The clinical team must re-order a new blood unit and perform a fresh cross-match.
+
+#### Scenario D: Expense Adjudication State Lock
+- **Error Payload:** `{"detail": "Cannot adjudicate an expense in 'REJECTED' state. Only PENDING_APPROVAL expenses can be adjudicated."}`
+- **Root Cause:** An operator attempted to approve or modify an Accounts Payable expense that was already finalized as `APPROVED`, `REJECTED`, or `PAID`.
+- **Resolution:** Finalized accounting records are immutable. Create a new expense draft if a payment adjustment is required.
+
 ---
 
 ### 2.4 HTTP 422 Unprocessable Entity (Clinical Safety Hard Stops)
