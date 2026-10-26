@@ -101,11 +101,11 @@ def execute_retention_category(
     # Category Handler: Privacy Decision Audits (Audit log retention)
     if canon_category == "privacy-decision-audits":
         if action == "delete":
-            # N-06: Never delete retention execution audit proofs
+            # N-06 & N-26: Never delete retention execution or user unlock audit proofs
             candidate_stmt = select(func.count(PrivacyDecisionAudit.id)).where(
                 PrivacyDecisionAudit.occurred_at < cutoff,
                 PrivacyDecisionAudit.result == "ALLOW",
-                PrivacyDecisionAudit.data_use_point != "privacy.retention.execute",
+                PrivacyDecisionAudit.data_use_point.not_in(["privacy.retention.execute", "identity.user.unlock"]),
             )
             candidate_count = db.execute(candidate_stmt).scalar_one() or 0
 
@@ -113,7 +113,7 @@ def execute_retention_category(
                 del_stmt = delete(PrivacyDecisionAudit).where(
                     PrivacyDecisionAudit.occurred_at < cutoff,
                     PrivacyDecisionAudit.result == "ALLOW",
-                    PrivacyDecisionAudit.data_use_point != "privacy.retention.execute",
+                    PrivacyDecisionAudit.data_use_point.not_in(["privacy.retention.execute", "identity.user.unlock"]),
                 )
                 res = db.execute(del_stmt)
                 affected_count = res.rowcount
@@ -132,9 +132,35 @@ def execute_retention_category(
 
     # Category Handler: Patients (Patient Record Retention / Anonymization)
     elif canon_category == "patients":
-        # N-07: Respect clock_start parameter
+        # N-07: Respect all 8 clock_start parameters
+        from backend.domains.encounters.models import PatientEncounter
+        from backend.domains.billing.models import Invoice
+
         if clock_start in ("creation", "created_at"):
             clock_filter = Patient.created_at < cutoff
+        elif clock_start in ("last_activity", "updated_at"):
+            clock_filter = Patient.updated_at < cutoff
+        elif clock_start == "last_encounter":
+            recent_enc_patients = select(PatientEncounter.patient_id).where(PatientEncounter.created_at >= cutoff)
+            clock_filter = Patient.id.not_in(recent_enc_patients)
+        elif clock_start == "discharge":
+            recent_disch_patients = select(PatientEncounter.patient_id).where(
+                func.coalesce(PatientEncounter.ended_at, PatientEncounter.created_at) >= cutoff
+            )
+            clock_filter = Patient.id.not_in(recent_disch_patients)
+        elif clock_start == "invoice":
+            recent_invoice_patients = select(Invoice.patient_id).where(Invoice.created_at >= cutoff)
+            clock_filter = Patient.id.not_in(recent_invoice_patients)
+        elif clock_start == "date_of_death":
+            if hasattr(Patient, "date_of_death"):
+                clock_filter = (Patient.date_of_death.is_not(None)) & (Patient.date_of_death < cutoff)
+            else:
+                clock_filter = Patient.updated_at < cutoff
+        elif clock_start == "age_of_majority":
+            majority_cutoff = cutoff - timedelta(days=18 * 365)
+            clock_filter = (Patient.date_of_birth.is_not(None)) & (Patient.date_of_birth < majority_cutoff)
+        elif clock_start == "contract_end":
+            clock_filter = Patient.updated_at < cutoff
         else:
             clock_filter = Patient.updated_at < cutoff
 
@@ -178,27 +204,32 @@ def execute_retention_category(
 
         elif action == "delete":
             # N-03: Hard delete safety guard.
-            # Refuse deletion for patients with clinical encounters or invoices
+            # Refuse deletion for patients with ANY dependent clinical, billing, allergy, or diagnostic records
             if not dry_run and candidates:
-                from backend.domains.encounters.models import PatientEncounter
-                from backend.domains.billing.models import Invoice
+                from backend.domains.patients.models import PatientAllergy
+                from backend.domains.diagnostics.models import DiagnosticOrder
+                from backend.domains.insurance.models import PatientInsurancePolicy
+                from backend.domains.privacy.models import PatientConsentRecord
 
-                deletable_ids = []
-                for p in candidates:
-                    has_encounters = (
-                        db.execute(
-                            select(func.count(PatientEncounter.id)).where(PatientEncounter.patient_id == p.id)
-                        ).scalar_one()
-                        > 0
-                    )
-                    has_invoices = (
-                        db.execute(
-                            select(func.count(Invoice.id)).where(Invoice.patient_id == p.id)
-                        ).scalar_one()
-                        > 0
-                    )
-                    if not has_encounters and not has_invoices:
-                        deletable_ids.append(p.id)
+                cand_ids = [p.id for p in candidates]
+                referenced_patient_ids = set()
+
+                # Batch checks across all dependent tables to prevent cascading deletions
+                for col in [
+                    PatientEncounter.patient_id,
+                    Invoice.patient_id,
+                    PatientAllergy.patient_id,
+                    DiagnosticOrder.patient_id,
+                    PatientInsurancePolicy.patient_id,
+                    PatientConsentRecord.patient_id,
+                ]:
+                    try:
+                        found_ids = db.execute(select(col).where(col.in_(cand_ids))).scalars().all()
+                        referenced_patient_ids.update(found_ids)
+                    except Exception:
+                        pass
+
+                deletable_ids = [p.id for p in candidates if p.id not in referenced_patient_ids]
 
                 if deletable_ids:
                     db.execute(delete(Patient).where(Patient.id.in_(deletable_ids)))

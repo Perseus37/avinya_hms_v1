@@ -396,3 +396,78 @@ def test_hl7_immutable_verified_task_guard(client, superuser_headers, doctor_hea
     task_data = task_res.json()["items"][0]
     assert task_data["result_value"] == "180"
     assert task_data["status"] == "VERIFIED"
+
+
+def test_hl7_multi_obr_sequential_grouping_and_isolation(client, superuser_headers, doctor_headers):
+    """
+    N-39: Message with multiple OBR segments and sequential OBX segments files each OBX
+    under its respective OBR task, rather than collapsing all results into the first task.
+    """
+    patient = _create_patient(client, superuser_headers, "Multi OBR Patient")
+    service1 = _create_lab_service(client, superuser_headers, "TEST_A", "Test Alpha")
+    service2 = _create_lab_service(client, superuser_headers, "TEST_B", "Test Beta")
+
+    order_res = client.post(
+        "/v1/api/diagnostics/orders",
+        headers=doctor_headers,
+        json={"patient_id": patient["id"], "ordered_service_ids": [service1["id"], service2["id"]]},
+    )
+    assert order_res.status_code == 201
+    order_data = order_res.json()
+    order_id = order_data["id"]
+    task_a_id = order_data["tasks"][0]["id"]
+    task_b_id = order_data["tasks"][1]["id"]
+
+    hl7_msg = (
+        "MSH|^~\\&|ANALYZER|HQ-HYD-01|AVINYA_LIS|SERVER|20261025223000||ORU^R01|MSG-MULTI-001|P|2.3\r"
+        f"PID|1||{patient['mrn']}||Multi^Patient||19880615|F\r"
+        f"OBR|1|{task_a_id}||TEST_A^Alpha|||20261025222000|||||||||||||||||F\r"
+        "OBX|1|NM|A_VAL^Alpha Value||11.5|mg/dL|10.0-15.0|N|||F\r"
+        f"OBR|2|{task_b_id}||TEST_B^Beta|||20261025222100|||||||||||||||||F\r"
+        "OBX|1|NM|B_VAL^Beta Value||99.2|U/L|20.0-80.0|H|||F\r"
+    )
+
+    ingest_res = client.post(
+        "/v1/api/equipment/hl7/oru-r01",
+        headers=superuser_headers,
+        json={"raw_message": hl7_msg},
+    )
+    assert ingest_res.status_code == 200, ingest_res.text
+    data = ingest_res.json()
+    assert data["status"] == "PROCESSED"
+    assert data["matched_tasks_count"] == 2
+
+    # Check that Task A got Alpha and Task B got Beta
+    tasks_res = client.get(f"/v1/api/diagnostics/orders/{order_id}/tasks", headers=doctor_headers)
+    items = {t["id"]: t for t in tasks_res.json()["items"]}
+    assert "11.5" in items[task_a_id]["result_value"]
+    assert "99.2" in items[task_b_id]["result_value"]
+    assert "99.2" not in items[task_a_id]["result_value"]
+
+
+def test_hl7_strict_mrn_patient_matching_rejects_numeric_id_fallback(client, superuser_headers):
+    """
+    N-40: An unknown or numeric MRN that does not match Patient.mrn must NOT bind
+    to an unrelated patient whose internal database ID happens to equal that integer.
+    """
+    patient = _create_patient(client, superuser_headers, "Target Patient")
+    # patient["id"] is numeric (e.g. 1, 2, 3...)
+    # patient["mrn"] is "MRN-..."
+    # We send PID-3 with the numeric ID, which is NOT an MRN!
+    hl7_msg = (
+        "MSH|^~\\&|ANALYZER|HQ-HYD-01|AVINYA_LIS|SERVER|20261025223500||ORU^R01|MSG-N40-001|P|2.3\r"
+        f"PID|1||{patient['id']}||Wrong^Patient||19880615|F\r"
+        "OBR|1|99999||UNKNOWN^Test|||20261025222000|||||||||||||||||F\r"
+        "OBX|1|NM|TEST||1.0||||||F\r"
+    )
+
+    ingest_res = client.post(
+        "/v1/api/equipment/hl7/oru-r01",
+        headers=superuser_headers,
+        json={"raw_message": hl7_msg},
+    )
+    assert ingest_res.status_code == 200
+    data = ingest_res.json()
+    assert data["status"] == "REJECTED"
+    assert "No eligible result tasks were found" in data["error_details"]
+

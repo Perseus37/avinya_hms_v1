@@ -198,6 +198,29 @@ class RateLimiter:
     ) -> None:
         self._check(request, redis_client, actor=actor, increment=increment)
 
+    def get_key(self, request: Request, actor: str) -> str:
+        tenant_slug = settings.DEFAULT_TENANT_SLUG
+        try:
+            from backend.core.database import extract_subdomain_slug
+            tenant_slug = extract_subdomain_slug(request)
+        except Exception:
+            hostname = (request.url.hostname or "").lower().rstrip(".")
+            base_domain = settings.BASE_DOMAIN.strip(".").lower()
+            if hostname.endswith(f".{base_domain}"):
+                candidate = hostname[: -(len(base_domain) + 1)]
+                if candidate and "." not in candidate:
+                    tenant_slug = candidate
+        return f"rl:{self.scope}:{tenant_slug}:{actor}"
+
+    def reset_actor(self, request: Request, redis_client, actor: str) -> None:
+        if not redis_client:
+            return
+        key = self.get_key(request, actor)
+        try:
+            redis_client.delete(key)
+        except Exception:
+            pass
+
     def _check(
         self,
         request: Request,
@@ -243,14 +266,7 @@ class RateLimiter:
                     client_ip = str(candidate)
                     break
         actor = actor or client_ip
-        hostname = (request.url.hostname or "").lower().rstrip(".")
-        base_domain = settings.BASE_DOMAIN.strip(".").lower()
-        tenant_slug = settings.DEFAULT_TENANT_SLUG
-        if hostname.endswith(f".{base_domain}"):
-            candidate = hostname[: -(len(base_domain) + 1)]
-            if candidate and "." not in candidate:
-                tenant_slug = candidate
-        key = f"rl:{self.scope}:{tenant_slug}:{actor}"
+        key = self.get_key(request, actor)
 
         try:
             current = redis_client.get(key)

@@ -8,9 +8,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import logging
+import re
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.domains.encounters.models import PatientEncounter
@@ -22,8 +24,8 @@ from backend.domains.pharmacy.models import (
     ControlledSubstanceMovementLog,
     ControlledSubstanceVault,
     MedicationAdministrationLog,
-    MedicationMaster,
     PrescriptionItem,
+    PrescriptionStatusEnum,
     eMARStatusEnum,
 )
 
@@ -65,6 +67,13 @@ def evaluate_bcma_five_rights(
             detail=f"Prescription item {prescription_item_id} belongs to a different encounter.",
         )
 
+    # N-43: Validate prescription is ACTIVE before bedside administration
+    if rx_item.prescription.status != PrescriptionStatusEnum.ACTIVE:
+        raise HTTPException(
+            status_code=409,
+            detail=f"BCMA CRITICAL HARD-STOP: Prescription {rx_item.prescription_id} is in status '{rx_item.prescription.status.value}'. Only ACTIVE prescriptions can be administered.",
+        )
+
     med = rx_item.medication
     now = datetime.now(timezone.utc)
     messages: list[str] = []
@@ -88,13 +97,11 @@ def evaluate_bcma_five_rights(
             f"RIGHT PATIENT VIOLATION: Scanned barcode '{scanned_patient_barcode}' does not match patient MRN {patient.mrn}."
         )
 
-    # 2. Right Medication Validation
-    # Accepted drug barcodes: Drug Code, NDC/GTIN, Brand Name, Generic Name, MED:{med_id}:{batch}
+    # 2. Right Medication Validation (N-43: reject raw generic name, require NDC, barcode, code, or med:<id>)
     clean_med_scan = scanned_medication_barcode.strip().lower()
     valid_drug_identifiers = {
         med.code.strip().lower(),
         med.brand_name.strip().lower(),
-        med.generic_name.strip().lower(),
         f"med:{med.id}",
         f"med:{med.code.strip().lower()}",
     }
@@ -114,10 +121,19 @@ def evaluate_bcma_five_rights(
             f"RIGHT DRUG VIOLATION: Scanned drug barcode '{scanned_medication_barcode}' does not match prescribed medication '{med.brand_name}' ({med.code})."
         )
 
-    # 3. Right Dose
-    dose_matched = True
+    # 3. Right Dose (N-43: parse and validate dose against prescribed instructions or medication strength)
     prescribed_dose = rx_item.dosage_instruction
     actual_dose = dose_given or prescribed_dose
+    dose_matched = True
+    if dose_given:
+        norm_given = re.sub(r"\s+", "", str(dose_given)).lower()
+        norm_prescribed = re.sub(r"\s+", "", str(prescribed_dose)).lower()
+        norm_strength = re.sub(r"\s+", "", str(med.strength or "")).lower()
+        if (norm_given not in norm_prescribed) and (not norm_strength or norm_given not in norm_strength):
+            dose_matched = False
+            messages.append(
+                f"RIGHT DOSE VIOLATION: Administered dose '{dose_given}' does not match prescribed instruction '{prescribed_dose}' or drug strength '{med.strength}'."
+            )
 
     # 4. Right Time (+/- 60 minutes)
     time_status = "ON_TIME"
@@ -141,7 +157,7 @@ def evaluate_bcma_five_rights(
     else:
         time_status = "PRN"
 
-    is_blocked = not patient_matched or not medication_matched
+    is_blocked = not patient_matched or not medication_matched or not dose_matched
     is_warning = time_status in ("EARLY", "LATE")
 
     return {
@@ -245,6 +261,24 @@ def execute_bcma_administration(
     from backend.domains.clinical.services import check_allergy_hard_stop
     check_allergy_hard_stop(session, patient.id, [med.brand_name, med.generic_name, med.code])
 
+    # N-43: Prevent duplicate bedside administration within scheduled interval
+    dup_query = select(MedicationAdministrationLog).where(
+        MedicationAdministrationLog.prescription_item_id == prescription_item_id,
+        MedicationAdministrationLog.status == eMARStatusEnum.ADMINISTERED,
+    )
+    if scheduled_time:
+        dup_query = dup_query.where(MedicationAdministrationLog.scheduled_time == scheduled_time)
+    else:
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+        dup_query = dup_query.where(MedicationAdministrationLog.administered_at >= cutoff)
+
+    existing_admin = session.execute(dup_query).scalars().first()
+    if existing_admin:
+        raise HTTPException(
+            status_code=409,
+            detail=f"BCMA CRITICAL HARD-STOP: Duplicate administration detected! Dose already administered at {existing_admin.administered_at.isoformat()}.",
+        )
+
     # 4. Create eMAR Administration Record
     emar_log = MedicationAdministrationLog(
         encounter_id=encounter_id,
@@ -323,7 +357,11 @@ def process_controlled_substance_movement(
     if quantity_units <= 0:
         raise HTTPException(status_code=400, detail="Transaction quantity must be strictly greater than 0.")
 
-    vault = session.get(ControlledSubstanceVault, vault_id)
+    # N-44: Row lock vault row in PostgreSQL to prevent race conditions on concurrent dispatches
+    stmt = select(ControlledSubstanceVault).where(ControlledSubstanceVault.id == vault_id)
+    if session.bind and session.bind.dialect.name == "postgresql":
+        stmt = stmt.with_for_update()
+    vault = session.execute(stmt).scalar_one_or_none()
     if not vault:
         raise HTTPException(status_code=404, detail="Controlled substance vault register not found.")
 
@@ -343,6 +381,15 @@ def process_controlled_substance_movement(
                 status_code=400,
                 detail=f"Insufficient narcotic vault balance. Requested: {quantity_units}, Available: {bal_before}.",
             )
+        # N-44: Validate encounter and prescription item existence when provided
+        if encounter_id is not None:
+            enc = session.get(PatientEncounter, encounter_id)
+            if not enc:
+                raise HTTPException(status_code=404, detail=f"Encounter {encounter_id} not found.")
+        if prescription_item_id is not None:
+            rx_i = session.get(PrescriptionItem, prescription_item_id)
+            if not rx_i:
+                raise HTTPException(status_code=404, detail=f"Prescription item {prescription_item_id} not found.")
         bal_after = bal_before - quantity_units
 
     # 3. Dual-Witness Wastage / Destruction
@@ -369,15 +416,48 @@ def process_controlled_substance_movement(
         if not witness_user or witness_user.status != UserStatusEnum.ACTIVE:
             raise HTTPException(status_code=404, detail="Active witness user account not found.")
 
-        # Verify witness credentials
+        # Verify witness credentials with rate-limiting (N-44)
         if not witness_password:
             raise HTTPException(status_code=400, detail="Witness password verification required.")
 
+        from backend.core.database import get_redis
+        try:
+            redis_cli = get_redis()
+        except Exception:
+            redis_cli = None
+        fail_key = f"rl:narcotics_witness_fail:{witness_user.id}"
+        if redis_cli:
+            try:
+                failed_cnt = redis_cli.get(fail_key)
+                if failed_cnt and int(failed_cnt) >= 5:
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail="Too many failed witness password attempts. Account locked temporarily.",
+                    )
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+
         if not pwd_context.verify(witness_password, witness_user.hashed_password):
+            if redis_cli:
+                try:
+                    p = redis_cli.pipeline()
+                    p.incr(fail_key)
+                    p.expire(fail_key, 300)
+                    p.execute()
+                except Exception:
+                    pass
             raise HTTPException(
                 status_code=401,
                 detail="Witness credential verification failed: Invalid witness password.",
             )
+
+        if redis_cli:
+            try:
+                redis_cli.delete(fail_key)
+            except Exception:
+                pass
 
         if not wastage_reason or len(wastage_reason.strip()) < 5:
             raise HTTPException(

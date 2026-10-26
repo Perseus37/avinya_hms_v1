@@ -537,12 +537,38 @@ def calculate_news2_score(
     consciousness: Optional[str] = "ALERT",
     temperature_f: Optional[float] = None,
     on_supplemental_oxygen: bool = False,
+    spo2_scale: int = 1,
 ) -> dict:
     """
     Computes Royal College of Physicians National Early Warning Score 2 (NEWS2).
     Evaluates physiological parameters, classifies aggregated clinical risk (LOW, MEDIUM, HIGH),
     and determines whether an immediate Rapid Response Team (RRT) alert must be triggered.
+    Supports Scale 1 (standard) and Scale 2 (hypercapnic respiratory failure / COPD). (N-47)
     """
+    # 0. Check that at least one measured physiological vital parameter is provided
+    measured_vitals = [respiratory_rate, spo2_percent, bp_systolic, pulse_bpm, temperature_f]
+    if all(v is None for v in measured_vitals):
+        raise ValueError("At least one measured physiological vital parameter must be provided to calculate NEWS2.")
+
+    # Physiological plausibility bounds checking (N-47)
+    if respiratory_rate is not None and not (0 <= respiratory_rate <= 100):
+        raise ValueError(f"Respiratory rate ({respiratory_rate}) out of plausible physiological range (0-100).")
+    if spo2_percent is not None and not (0 <= spo2_percent <= 100):
+        raise ValueError(f"SpO2 ({spo2_percent}%) out of plausible physiological range (0-100).")
+    if bp_systolic is not None and not (20 <= bp_systolic <= 300):
+        raise ValueError(f"Systolic blood pressure ({bp_systolic} mmHg) out of plausible physiological range (20-300).")
+    if pulse_bpm is not None and not (10 <= pulse_bpm <= 300):
+        raise ValueError(f"Pulse ({pulse_bpm} bpm) out of plausible physiological range (10-300).")
+    if temperature_f is not None:
+        if temperature_f > 45.0:  # Fahrenheit
+            if not (60.0 <= temperature_f <= 120.0):
+                raise ValueError(f"Temperature ({temperature_f}°F) out of plausible physiological range (60-120°F).")
+        else:  # Celsius
+            if not (15.0 <= temperature_f <= 50.0):
+                raise ValueError(f"Temperature ({temperature_f}°C) out of plausible physiological range (15-50°C).")
+    if spo2_scale not in (1, 2):
+        raise ValueError(f"spo2_scale must be 1 or 2, got {spo2_scale}.")
+
     total_score = 0
     sub_scores = {}
     any_parameter_is_3 = False
@@ -564,16 +590,34 @@ def calculate_news2_score(
         if pts == 3:
             any_parameter_is_3 = True
 
-    # 2. SpO2 Scale 1 (%)
+    # 2. SpO2 Scale 1 or Scale 2 (%) (N-47)
     if spo2_percent is not None:
-        if spo2_percent <= 91:
-            pts = 3
-        elif 92 <= spo2_percent <= 93:
-            pts = 2
-        elif 94 <= spo2_percent <= 95:
-            pts = 1
-        else:  # >= 96
-            pts = 0
+        if spo2_scale == 2:
+            # Scale 2: Hypercapnic respiratory failure (target 88-92%)
+            if spo2_percent <= 83:
+                pts = 3
+            elif 84 <= spo2_percent <= 85:
+                pts = 2
+            elif 86 <= spo2_percent <= 87:
+                pts = 1
+            elif 88 <= spo2_percent <= 92:
+                pts = 0
+            elif 93 <= spo2_percent <= 94:
+                pts = 1 if on_supplemental_oxygen else 0
+            elif 95 <= spo2_percent <= 96:
+                pts = 2 if on_supplemental_oxygen else 0
+            else:  # >= 97
+                pts = 3 if on_supplemental_oxygen else 0
+        else:
+            # Scale 1: Standard (target >= 96%)
+            if spo2_percent <= 91:
+                pts = 3
+            elif 92 <= spo2_percent <= 93:
+                pts = 2
+            elif 94 <= spo2_percent <= 95:
+                pts = 1
+            else:  # >= 96
+                pts = 0
         sub_scores["spo2"] = pts
         total_score += pts
         if pts == 3:

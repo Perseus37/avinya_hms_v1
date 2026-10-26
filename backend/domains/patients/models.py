@@ -195,11 +195,11 @@ class PatientAllergy(AuditMixin, Base):
         ForeignKey("patients.id", ondelete="CASCADE"), nullable=False
     )
     allergy_id: Mapped[int] = mapped_column(
-        ForeignKey("allergies_master.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("allergies_master.id", ondelete="CASCADE"), nullable=False, index=True
     )
     severity: Mapped[AllergySeverityEnum] = mapped_column(nullable=False)
     reaction_description: Mapped[Optional[str]] = mapped_column(Text)
-    recorded_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    recorded_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(default=True)
 
     patient: Mapped["Patient"] = relationship()

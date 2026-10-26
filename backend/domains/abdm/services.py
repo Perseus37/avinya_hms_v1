@@ -8,7 +8,7 @@ Services for ABDM (M1, M2, M3) & NHCX Claims Exchange:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import secrets
@@ -33,6 +33,14 @@ logger = logging.getLogger("avinya.abdm.services")
 # =============================================================================
 # 1. ABDM M1: ABHA Profile & Scan-Share
 # =============================================================================
+
+def generate_abha_number() -> str:
+    """Generates 14 strictly numeric digits formatted as 91-XXXX-XXXX-XXXX per ABDM standard (N-45)."""
+    d1 = "".join(str(secrets.randbelow(10)) for _ in range(4))
+    d2 = "".join(str(secrets.randbelow(10)) for _ in range(4))
+    d3 = "".join(str(secrets.randbelow(10)) for _ in range(4))
+    return f"91-{d1}-{d2}-{d3}"
+
 
 def generate_or_link_abha(
     session: Session,
@@ -65,9 +73,8 @@ def generate_or_link_abha(
         session.add(patient)
         session.flush()
 
-    # Generate 14-digit ABHA Number format: 91-XXXX-XXXX-XXXX
-    s1, s2, s3 = secrets.token_hex(2).upper(), secrets.token_hex(2).upper(), secrets.token_hex(2).upper()
-    abha_num = f"91-{s1}-{s2}-{s3}"
+    # Generate 14-digit ABHA Number format: 91-XXXX-XXXX-XXXX (strictly numeric digits N-45)
+    abha_num = generate_abha_number()
 
     clean_name = (patient.full_name or "user").lower().replace(" ", "")[:10]
     abha_addr = payload.preferred_abha_address or f"{clean_name}.{secrets.token_hex(2)}@abdm"
@@ -124,13 +131,12 @@ def process_abdm_scan_share(
         mrn = f"MRN-{date_str}-{secrets.token_hex(4).upper()}"
         dob = datetime.fromisoformat(data.get("dob", "1992-05-14T00:00:00Z").replace("Z", "+00:00"))
 
-        s1, s2, s3 = secrets.token_hex(2).upper(), secrets.token_hex(2).upper(), secrets.token_hex(2).upper()
         patient = Patient(
             mrn=mrn,
             full_name=full_name,
             date_of_birth=dob,
             gender=gender_val,
-            abha_number=f"91-{s1}-{s2}-{s3}",
+            abha_number=generate_abha_number(),
             abha_address=abha_addr,
             phone_number=data.get("phone"),
             is_active=True,
@@ -280,16 +286,40 @@ def generate_abdm_fhir_health_data(
         },
     }
 
-    # 3. Prescriptions / Medications
+    # Consented date range boundaries normalized to UTC (N-46)
+    from_dt = (
+        artefact.date_range_from.astimezone(timezone.utc)
+        if artefact.date_range_from.tzinfo
+        else artefact.date_range_from.replace(tzinfo=timezone.utc)
+    )
+    to_dt = (
+        artefact.date_range_to.astimezone(timezone.utc)
+        if artefact.date_range_to.tzinfo
+        else artefact.date_range_to.replace(tzinfo=timezone.utc)
+    )
+    to_dt_buffered = to_dt + timedelta(minutes=5)
+
+    # 3. Prescriptions / Medications (N-46: filter strictly by consented date range)
     if "Prescription" in hi_types:
-        rx_items = (
+        raw_rx_items = (
             session.query(PrescriptionItem)
             .join(Prescription, PrescriptionItem.prescription_id == Prescription.id)
             .join(PatientEncounter, Prescription.encounter_id == PatientEncounter.id)
             .filter(PatientEncounter.patient_id == patient.id)
-            .limit(10)
+            .limit(100)
             .all()
         )
+        rx_items = []
+        for item in raw_rx_items:
+            rx_created = item.prescription.created_at if item.prescription else None
+            if rx_created:
+                rx_utc = rx_created.astimezone(timezone.utc) if rx_created.tzinfo else rx_created.replace(tzinfo=timezone.utc)
+                if (from_dt - timedelta(minutes=1)) <= rx_utc <= to_dt_buffered:
+                    rx_items.append(item)
+            else:
+                rx_items.append(item)
+        rx_items = rx_items[:50]
+
         for item in rx_items:
             med_req = {
                 "fullUrl": f"urn:uuid:med-req-{item.id}",
@@ -307,16 +337,26 @@ def generate_abdm_fhir_health_data(
             }
             entries.append(med_req)
 
-    # 4. Diagnostic Reports / Tasks
+    # 4. Diagnostic Reports / Tasks (N-46: filter strictly by consented date range)
     if "DiagnosticReport" in hi_types:
         from backend.domains.diagnostics.models import DiagnosticOrder
-        diag_tasks = (
+        raw_diag_tasks = (
             session.query(DiagnosticTask)
             .join(DiagnosticOrder, DiagnosticTask.order_id == DiagnosticOrder.id)
             .filter(DiagnosticOrder.patient_id == patient.id)
-            .limit(10)
+            .limit(100)
             .all()
         )
+        diag_tasks = []
+        for task in raw_diag_tasks:
+            order_created = task.order.created_at if task.order else None
+            if order_created:
+                ord_utc = order_created.astimezone(timezone.utc) if order_created.tzinfo else order_created.replace(tzinfo=timezone.utc)
+                if (from_dt - timedelta(minutes=1)) <= ord_utc <= to_dt_buffered:
+                    diag_tasks.append(task)
+            else:
+                diag_tasks.append(task)
+        diag_tasks = diag_tasks[:50]
         for task in diag_tasks:
             diag_rep = {
                 "fullUrl": f"urn:uuid:diag-rep-{task.id}",

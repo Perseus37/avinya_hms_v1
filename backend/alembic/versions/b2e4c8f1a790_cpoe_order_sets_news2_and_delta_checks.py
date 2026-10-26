@@ -114,6 +114,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
     op.drop_column("diagnostic_tasks", "delta_percentage")
     op.drop_column("diagnostic_tasks", "previous_result_value")
     op.drop_column("diagnostic_tasks", "delta_check_flag")
@@ -121,3 +122,8 @@ def downgrade() -> None:
     op.drop_table("clinical_early_warning_scores")
     op.drop_table("order_set_items")
     op.drop_table("order_set_masters")
+
+    # N-49: Cleanly drop created PostgreSQL enum types on rollback
+    sa.Enum(name="earlywarningriskenum").drop(bind, checkfirst=True)
+    sa.Enum(name="ordersetpriorityenum").drop(bind, checkfirst=True)
+    sa.Enum(name="ordersetitemtypeenum").drop(bind, checkfirst=True)

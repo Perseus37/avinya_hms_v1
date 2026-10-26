@@ -1,3 +1,4 @@
+import os
 from typing import Optional
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -108,37 +109,40 @@ class Settings(BaseSettings):
     @field_validator("POSTGRES_HOST")
     @classmethod
     def resolve_postgres_host(cls, value: str) -> str:
-        """Auto-resolves Docker container service names to 127.0.0.1 when running natively on the host."""
+        """Auto-resolves Docker container service names to 127.0.0.1 when running natively on the host in dev/test (N-50)."""
         if value.strip().lower() in {"db", "postgres"}:
-            import socket
-            try:
-                socket.gethostbyname(value)
-            except OSError:
-                return "127.0.0.1"
+            if os.getenv("ENVIRONMENT", "development").strip().lower() not in {"production", "prod"}:
+                import socket
+                try:
+                    socket.gethostbyname(value)
+                except OSError:
+                    return "127.0.0.1"
         return value
 
     @field_validator("REDIS_HOST")
     @classmethod
     def resolve_redis_host(cls, value: str) -> str:
-        """Auto-resolves Docker container service names to 127.0.0.1 when running natively on the host."""
+        """Auto-resolves Docker container service names to 127.0.0.1 when running natively on the host in dev/test (N-50)."""
         if value.strip().lower() in {"redis", "redis-cache"}:
-            import socket
-            try:
-                socket.gethostbyname(value)
-            except OSError:
-                return "127.0.0.1"
+            if os.getenv("ENVIRONMENT", "development").strip().lower() not in {"production", "prod"}:
+                import socket
+                try:
+                    socket.gethostbyname(value)
+                except OSError:
+                    return "127.0.0.1"
         return value
 
     @field_validator("CLAMD_HOST")
     @classmethod
     def resolve_clamd_host(cls, value: str) -> str:
-        """Auto-resolves Docker container service names to 127.0.0.1 when running natively on the host."""
+        """Auto-resolves Docker container service names to 127.0.0.1 when running natively on the host in dev/test (N-50)."""
         if value.strip().lower() in {"clamav"}:
-            import socket
-            try:
-                socket.gethostbyname(value)
-            except OSError:
-                return "127.0.0.1"
+            if os.getenv("ENVIRONMENT", "development").strip().lower() not in {"production", "prod"}:
+                import socket
+                try:
+                    socket.gethostbyname(value)
+                except OSError:
+                    return "127.0.0.1"
         return value
 
     BACKUP_ENCRYPTION_SALT: str

@@ -60,6 +60,27 @@ def test_siem_webhook_ssrf_protection_blocks_loopback(client, superuser_headers)
     assert "SSRF Protection" in res.json()["message"]
 
 
+def test_siem_webhook_ssrf_protection_blocks_cgnat(client, superuser_headers, monkeypatch):
+    """N-34: Verifies CGNAT (100.64.0.0/10) IP addresses are blocked by SSRF guard."""
+    import socket
+    orig_getaddrinfo = socket.getaddrinfo
+
+    def mock_getaddrinfo(host, port, *args, **kwargs):
+        if host == "internal-cgnat-service.local":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("100.64.0.1", 80))]
+        return orig_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", mock_getaddrinfo)
+
+    res = client.post(
+        "/v1/api/audit/siem/webhook-test",
+        headers=superuser_headers,
+        json={"webhook_url": "http://internal-cgnat-service.local/webhook"},
+    )
+    assert res.status_code == 400
+    assert "SSRF Protection" in res.json()["message"]
+
+
 def test_security_events_with_breach_incident(client, superuser_headers):
     """Verifies SIEM export queries successfully when a PrivacyDataBreachIncident exists."""
     from backend.core.database import tenant_engine_pool
