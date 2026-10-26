@@ -29,6 +29,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--email", required=True)
     parser.add_argument("--name", required=True)
+    parser.add_argument(
+        "--role",
+        default="superadmin",
+        choices=["superadmin", "ops", "support", "billing", "viewer"],
+        help="Operator RBAC role (default: superadmin)",
+    )
     args = parser.parse_args()
     email = args.email.strip().lower()
     if "@" not in email or len(email) > 255:
@@ -55,18 +61,19 @@ def main() -> int:
                 ControlPlaneOperator(
                     email=email,
                     full_name=args.name.strip(),
+                    role=args.role,
                     password_hash=pwd_context.hash(password),
                 )
             )
             db.commit()
-    except OperationalError as exc:
+    except OperationalError:
         print(
             "Could not create operator; verify the control-plane database is available "
             "and its Alembic migrations have been applied.",
             file=sys.stderr,
         )
         return 1
-    print(f"Created operator {email}; MFA enrollment is required at first sign-in.")
+    print(f"Created operator {email} with role '{args.role}'; MFA enrollment is required at first sign-in.")
     return 0
 
 

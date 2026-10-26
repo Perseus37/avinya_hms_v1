@@ -81,8 +81,8 @@ class PatientEncounter(AuditMixin, Base):
     status: Mapped[EncounterStatusEnum] = mapped_column(default=EncounterStatusEnum.ACTIVE, nullable=False)
     start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=func.now(), nullable=False)
     end_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    primary_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
-    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
+    primary_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False, index=True)
     chief_complaint_notes: Mapped[Optional[str]] = mapped_column(Text)
 
     patient: Mapped["Patient"] = relationship()

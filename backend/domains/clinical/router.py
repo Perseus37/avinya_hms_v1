@@ -886,6 +886,7 @@ class NEWS2EvaluationRequest(BaseModel):
     consciousness: Optional[str] = "ALERT"
     temperature_f: Optional[float] = None
     on_supplemental_oxygen: bool = False
+    spo2_scale: int = 1
 
 
 @router.post("/order-sets", response_model=OrderSetMasterResponse, status_code=status.HTTP_201_CREATED)
@@ -1132,15 +1133,19 @@ def evaluate_encounter_news2(
             if pulse is None: pulse = vital.pulse_bpm
             if temp is None: temp = vital.temperature_f
 
-    news_result = calculate_news2_score(
-        respiratory_rate=rr,
-        spo2_percent=spo2,
-        bp_systolic=sbp,
-        pulse_bpm=pulse,
-        consciousness=consciousness,
-        temperature_f=temp,
-        on_supplemental_oxygen=payload.on_supplemental_oxygen,
-    )
+    try:
+        news_result = calculate_news2_score(
+            respiratory_rate=rr,
+            spo2_percent=spo2,
+            bp_systolic=sbp,
+            pulse_bpm=pulse,
+            consciousness=consciousness,
+            temperature_f=temp,
+            on_supplemental_oxygen=payload.on_supplemental_oxygen,
+            spo2_scale=payload.spo2_scale,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     score_rec = ClinicalEarlyWarningScore(
         encounter_id=encounter_id,

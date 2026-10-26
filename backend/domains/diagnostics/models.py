@@ -94,8 +94,8 @@ class DiagnosticOrder(AuditMixin, Base):
     __table_args__ = (Index("ix_diagnostic_orders_created_at", "created_at"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
-    ordering_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False, index=True)
+    ordering_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     clinical_notes: Mapped[Optional[str]] = mapped_column(Text)
     status: Mapped[OrderStatusEnum] = mapped_column(
         default=OrderStatusEnum.ACTIVE, nullable=False
@@ -114,9 +114,9 @@ class DiagnosticTask(AuditMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     order_id: Mapped[int] = mapped_column(
-        ForeignKey("diagnostic_orders.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("diagnostic_orders.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    service_id: Mapped[int] = mapped_column(ForeignKey("service_catalog.id"), nullable=False)
+    service_id: Mapped[int] = mapped_column(ForeignKey("service_catalog.id"), nullable=False, index=True)
     status: Mapped[TaskStatusEnum] = mapped_column(
         default=TaskStatusEnum.PENDING, nullable=False
     )

@@ -12,11 +12,9 @@ from backend.domains.diagnostics.models import (
     DiagnosticOrder,
     DiagnosticTask,
     OrderStatusEnum,
-    ServiceCatalog,
     TaskStatusEnum,
 )
 from backend.domains.integrations.models import (
-    EquipmentMaster,
     EquipmentTestMapping,
     HL7IntegrationLog,
 )
@@ -30,6 +28,18 @@ FS_CR = b"\x1c\x0d"
 MAX_MLLP_MESSAGE_BYTES = 1024 * 1024
 
 CRITICAL_PANIC_FLAGS = {"LL", "HH", "PANIC", "CRITICAL", "AA", "A*", "C"}
+
+
+def parse_hl7_segments_ordered(raw_msg: str) -> list[list[str]]:
+    """Splits raw HL7 v2 message into sequential segment lines preserving ordering."""
+    segments: list[list[str]] = []
+    lines = raw_msg.strip().replace("\r\n", "\r").replace("\n", "\r").split("\r")
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        segments.append(line.split("|"))
+    return segments
 
 
 def parse_hl7_message(raw_msg: str) -> dict[str, list[list[str]]]:
@@ -115,7 +125,7 @@ def process_hl7_oru_r01_in_session(
 
         msg_control_id = msh[0][9] if len(msh[0]) > 9 else "UNKNOWN"
 
-        # 1. Patient verification from PID-3
+        # 1. Patient verification from PID-3 (N-40: strict match on MRN, reject fallback to internal ID)
         pid = parsed.get("PID", [])
         patient_identifier = (
             pid[0][3].split("^")[0].strip()
@@ -125,33 +135,49 @@ def process_hl7_oru_r01_in_session(
         if not patient_identifier:
             return msg_control_id, False, "Missing PID patient identifier", []
 
-        # Find patient by MRN or ID
+        # Find patient by MRN strictly (N-40: prevent assigning results to unrelated internal ID)
         patient_stmt = select(Patient).where(Patient.mrn == patient_identifier)
         patient = db.execute(patient_stmt).scalar_one_or_none()
-        if not patient and patient_identifier.isdigit():
-            patient = db.get(Patient, int(patient_identifier))
 
         if not patient:
             return msg_control_id, False, "No eligible result tasks were found", []
 
-        # 2. Extract OBR and OBX segments
-        obr_list = parsed.get("OBR", [])
-        obx_list = parsed.get("OBX", [])
-        if not obx_list:
+        # 2. Extract sequential segments and group OBX under preceding OBR (N-39)
+        ordered_segments = parse_hl7_segments_ordered(raw_msg)
+        obr_groups: List[Dict[str, Any]] = []
+        current_group: Optional[Dict[str, Any]] = None
+
+        for seg in ordered_segments:
+            seg_name = seg[0]
+            if seg_name == "OBR":
+                current_group = {"obr": seg, "obx_list": []}
+                obr_groups.append(current_group)
+            elif seg_name == "OBX":
+                if current_group is None:
+                    current_group = {"obr": None, "obx_list": []}
+                    obr_groups.append(current_group)
+                current_group["obx_list"].append(seg)
+
+        total_obx_count = sum(len(g["obx_list"]) for g in obr_groups)
+        if total_obx_count == 0:
             return msg_control_id, False, "No OBX result segments found in HL7 message", []
 
-        # Map active tasks for this patient
+        # Map active tasks for this patient ordered FIFO by created_at (N-41)
         active_tasks_stmt = (
             select(DiagnosticTask)
             .join(DiagnosticOrder, DiagnosticOrder.id == DiagnosticTask.order_id)
             .where(DiagnosticOrder.patient_id == patient.id)
+            .order_by(DiagnosticTask.created_at.asc(), DiagnosticTask.id.asc())
             .options(joinedload(DiagnosticTask.order), joinedload(DiagnosticTask.service))
         )
         patient_tasks = db.execute(active_tasks_stmt).scalars().all()
         tasks_by_id = {t.id: t for t in patient_tasks}
-        tasks_by_service_code = {
-            t.service.code.upper(): t for t in patient_tasks if t.service and t.service.code
-        }
+
+        # N-41: Filter service code lookup strictly to unverified/uncancelled pending tasks (FIFO order)
+        tasks_by_service_code: Dict[str, List[DiagnosticTask]] = {}
+        for t in patient_tasks:
+            if t.service and t.service.code and t.status not in {TaskStatusEnum.VERIFIED, TaskStatusEnum.CANCELLED}:
+                tasks_by_service_code.setdefault(t.service.code.upper(), []).append(t)
 
         # Check for equipment test mappings if equipment_id provided
         mapping_dict = {}
@@ -168,61 +194,75 @@ def process_hl7_oru_r01_in_session(
         # Target tasks to update: task_id -> list of OBX dicts
         task_observations: Dict[int, List[Dict[str, Any]]] = {}
 
-        # First attempt: Match via OBR Placer / Filler order number
-        obr_task: Optional[DiagnosticTask] = None
-        if obr_list:
-            first_obr = obr_list[0]
-            placer_num = first_obr[2] if len(first_obr) > 2 else ""
-            filler_num = first_obr[3] if len(first_obr) > 3 else ""
-            obr_task_id = _extract_task_id(placer_num) or _extract_task_id(filler_num)
-            if obr_task_id and obr_task_id in tasks_by_id:
-                obr_task = tasks_by_id[obr_task_id]
-
-        for obx in obx_list:
-            if len(obx) <= 5:
+        for group in obr_groups:
+            obr = group["obr"]
+            obx_list = group["obx_list"]
+            if not obx_list:
                 continue
-            set_id = obx[1] if len(obx) > 1 else "1"
-            value_type = obx[2] if len(obx) > 2 else "NM"
-            obs_ident = obx[3] if len(obx) > 3 else ""
-            obs_value = obx[5] if len(obx) > 5 else ""
-            units = obx[6] if len(obx) > 6 else ""
-            ref_range = obx[7] if len(obx) > 7 else ""
-            abnormal_flag = obx[8].strip().upper() if len(obx) > 8 and obx[8] else ""
-            obs_status = obx[11] if len(obx) > 11 else "F"
 
-            parts = obs_ident.split("^")
-            test_code = parts[0].strip()
-            test_name = parts[1].strip() if len(parts) > 1 else test_code
+            obr_task: Optional[DiagnosticTask] = None
+            if obr:
+                placer_num = obr[2] if len(obr) > 2 else ""
+                filler_num = obr[3] if len(obr) > 3 else ""
+                obr_task_id = _extract_task_id(placer_num) or _extract_task_id(filler_num)
+                if obr_task_id and obr_task_id in tasks_by_id:
+                    obr_task = tasks_by_id[obr_task_id]
+                elif len(obr) > 4:
+                    obr_code = obr[4].split("^")[0].strip().upper()
+                    if obr_code in mapping_dict:
+                        srv_id = mapping_dict[obr_code]
+                        for t in patient_tasks:
+                            if t.service_id == srv_id and t.status not in {TaskStatusEnum.VERIFIED, TaskStatusEnum.CANCELLED}:
+                                obr_task = t
+                                break
+                    elif obr_code in tasks_by_service_code and tasks_by_service_code[obr_code]:
+                        obr_task = tasks_by_service_code[obr_code][0]
 
-            # Identify target task
-            matched_task = None
-            task_id_from_obx = _extract_task_id(test_code)
-            if task_id_from_obx and task_id_from_obx in tasks_by_id:
-                matched_task = tasks_by_id[task_id_from_obx]
-            elif obr_task is not None:
-                matched_task = obr_task
-            elif test_code.upper() in tasks_by_service_code:
-                matched_task = tasks_by_service_code[test_code.upper()]
-            elif test_code.upper() in mapping_dict:
-                srv_id = mapping_dict[test_code.upper()]
-                for t in patient_tasks:
-                    if t.service_id == srv_id and t.status not in {TaskStatusEnum.VERIFIED, TaskStatusEnum.CANCELLED}:
-                        matched_task = t
-                        break
+            for obx in obx_list:
+                if len(obx) <= 5:
+                    continue
+                set_id = obx[1] if len(obx) > 1 else "1"
+                value_type = obx[2] if len(obx) > 2 else "NM"
+                obs_ident = obx[3] if len(obx) > 3 else ""
+                obs_value = obx[5] if len(obx) > 5 else ""
+                units = obx[6] if len(obx) > 6 else ""
+                ref_range = obx[7] if len(obx) > 7 else ""
+                abnormal_flag = obx[8].strip().upper() if len(obx) > 8 and obx[8] else ""
+                obs_status = obx[11] if len(obx) > 11 else "F"
 
-            if matched_task:
-                obs_dict = {
-                    "set_id": set_id,
-                    "value_type": value_type,
-                    "test_code": test_code,
-                    "test_name": test_name,
-                    "value": obs_value,
-                    "units": units,
-                    "reference_range": ref_range,
-                    "abnormal_flag": abnormal_flag,
-                    "status": obs_status,
-                }
-                task_observations.setdefault(matched_task.id, []).append(obs_dict)
+                parts = obs_ident.split("^")
+                test_code = parts[0].strip()
+                test_name = parts[1].strip() if len(parts) > 1 else test_code
+
+                # Identify target task for this observation
+                matched_task = None
+                task_id_from_obx = _extract_task_id(test_code)
+                if task_id_from_obx and task_id_from_obx in tasks_by_id:
+                    matched_task = tasks_by_id[task_id_from_obx]
+                elif obr_task is not None:
+                    matched_task = obr_task
+                elif test_code.upper() in mapping_dict:
+                    srv_id = mapping_dict[test_code.upper()]
+                    for t in patient_tasks:
+                        if t.service_id == srv_id and t.status not in {TaskStatusEnum.VERIFIED, TaskStatusEnum.CANCELLED}:
+                            matched_task = t
+                            break
+                elif test_code.upper() in tasks_by_service_code and tasks_by_service_code[test_code.upper()]:
+                    matched_task = tasks_by_service_code[test_code.upper()][0]
+
+                if matched_task:
+                    obs_dict = {
+                        "set_id": set_id,
+                        "value_type": value_type,
+                        "test_code": test_code,
+                        "test_name": test_name,
+                        "value": obs_value,
+                        "units": units,
+                        "reference_range": ref_range,
+                        "abnormal_flag": abnormal_flag,
+                        "status": obs_status,
+                    }
+                    task_observations.setdefault(matched_task.id, []).append(obs_dict)
 
         if not task_observations:
             return msg_control_id, False, "No eligible result tasks were found", []
@@ -249,6 +289,9 @@ def process_hl7_oru_r01_in_session(
                 task.is_critical_panic = True
 
             # Format result value
+            prior_result = task.result_value
+            is_amended = any(itm.get("status") in {"C", "A", "CORRECTED", "AMENDED"} for itm in obs_items)
+
             if len(obs_items) == 1:
                 single_val = obs_items[0]["value"]
                 task.result_value = single_val
@@ -269,6 +312,11 @@ def process_hl7_oru_r01_in_session(
                         primary_numeric_str = itm["value"]
                 task.result_value = "\n".join(summary_lines)
                 task.result_notes = json.dumps(obs_items)
+
+            # N-42: If amended or replacing an existing result, append structured history
+            if (is_amended or prior_result) and prior_result and prior_result != task.result_value:
+                amendment_log = f"[AMENDED {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')} - Prior Result: '{prior_result}']"
+                task.result_notes = f"{task.result_notes or ''} {amendment_log}".strip()
 
             # Evaluate LIS Delta Check if numeric
             if primary_numeric_str:

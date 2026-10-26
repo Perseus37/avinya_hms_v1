@@ -307,8 +307,11 @@ def test_siem_webhook_connectivity(
             ip_str = sockaddr[0]
             try:
                 ip_obj = ipaddress.ip_address(ip_str)
+                cgnat = ipaddress.ip_network("100.64.0.0/10")
                 if (
-                    ip_obj.is_private
+                    not ip_obj.is_global
+                    or ip_obj in cgnat
+                    or ip_obj.is_private
                     or ip_obj.is_loopback
                     or ip_obj.is_link_local
                     or ip_obj.is_multicast

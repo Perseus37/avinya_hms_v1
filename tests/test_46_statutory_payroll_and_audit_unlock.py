@@ -216,3 +216,41 @@ def test_admin_unlock_writes_audit_entry(
     )
     assert res_already_active.status_code == 400
     assert "not currently locked" in res_already_active.json()["message"]
+
+
+def test_admin_unlock_clears_mfa_rate_limiter(
+    client, multi_tenant_env, superuser_headers
+):
+    """N-08: Admin unlock explicitly clears the Redis rate-limiter counter so 429 stops."""
+    from backend.domains.identity.models import User, UserStatusEnum
+
+    engine = multi_tenant_env["tenant_engines"]["hms_default"]
+    with Session(engine) as db:
+        locked_user = User(
+            login_id="locked_mfa_user",
+            email="locked.mfa@example.invalid",
+            full_name="Locked MFA User",
+            hashed_password="dummy_hash_pw",
+            status=UserStatusEnum.LOCKED,
+            failed_login_attempts=5,
+            locked_until=datetime.now(timezone.utc) + timedelta(minutes=30),
+        )
+        db.add(locked_user)
+        db.commit()
+        db.refresh(locked_user)
+        uid = locked_user.id
+
+    redis_cli = multi_tenant_env["redis"]
+    key = f"rl:auth_mfa_failure:default:user:{uid}"
+    redis_cli.set(key, "10")
+    assert int(redis_cli.get(key)) == 10
+
+    res = client.post(
+        f"/v1/api/auth/users/{uid}/unlock",
+        headers=superuser_headers,
+    )
+    assert res.status_code == 200
+
+    val = redis_cli.get(f"rl:auth_mfa_failure:default:user:{uid}")
+    assert val is None, f"Expected key to be deleted, found: {val}"
+

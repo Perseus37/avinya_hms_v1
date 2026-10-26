@@ -86,8 +86,8 @@ class Prescription(AuditMixin, Base):
     __tablename__ = "prescriptions"
     __table_args__ = (Index("ix_prescriptions_created_at", "created_at"),)
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id"), nullable=False)
-    prescribing_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id"), nullable=False, index=True)
+    prescribing_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     status: Mapped[PrescriptionStatusEnum] = mapped_column(default=PrescriptionStatusEnum.ACTIVE, nullable=False)
     clinical_notes: Mapped[Optional[str]] = mapped_column(Text)
 
@@ -105,8 +105,8 @@ class PrescriptionItem(AuditMixin, Base):
         Index("ix_prescription_items_created_at", "created_at"),
     )
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    prescription_id: Mapped[int] = mapped_column(ForeignKey("prescriptions.id", ondelete="CASCADE"), nullable=False)
-    medication_id: Mapped[int] = mapped_column(ForeignKey("medication_master.id"), nullable=False)
+    prescription_id: Mapped[int] = mapped_column(ForeignKey("prescriptions.id", ondelete="CASCADE"), nullable=False, index=True)
+    medication_id: Mapped[int] = mapped_column(ForeignKey("medication_master.id"), nullable=False, index=True)
     dosage_instruction: Mapped[str] = mapped_column(String(255), nullable=False)
     requested_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     dispensed_quantity: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

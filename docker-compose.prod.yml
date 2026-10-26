@@ -101,7 +101,7 @@ services:
     volumes:
       - hms_clamav_db:/var/lib/clamav
     healthcheck:
-      test: ["CMD-SHELL", "clamdscan --ping=1 --wait=10 >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "clamdscan --ping 1 >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 15s
       retries: 5
@@ -172,6 +172,8 @@ services:
       - "${HL7_PORT:-2575}:${HL7_PORT:-2575}"
     profiles:
       - integrations
+    healthcheck:
+      disable: true
     depends_on:
       db:
         condition: service_healthy
@@ -191,6 +193,8 @@ services:
     volumes:
       - hms_backups:/app/backups
       - ${ATTACHMENTS_HOST_PATH:?ATTACHMENTS_HOST_PATH is required}:/app/attachments
+    healthcheck:
+      disable: true
     depends_on:
       db-init:
         condition: service_completed_successfully

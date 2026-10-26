@@ -196,3 +196,99 @@ def test_07_federation_thread_isolation_and_timeout(client, multi_tenant_env):
         assert len(regs) > 0
     finally:
         control_db.close()
+
+
+def test_08_federation_emergency_requires_verified_break_glass_or_token(
+    client,
+    multi_tenant_env,
+    apollo_admin_headers,
+    sunrise_admin_headers,
+):
+    """Audit F-01: Verifiable Emergency Access Check under EMERGENCY_ALLERGIES_ONLY policy."""
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy.orm import Session
+    from backend.domains.policies.models import FederationPolicyEnum, HospitalPolicySetting
+    from backend.domains.patients.models import BreakGlassGrant, User
+
+    # Step 1: Create a client node key for Sunrise Hospital
+    sun_client = client.post(
+        "/v1/api/federation/clients",
+        headers=sunrise_admin_headers,
+        json={"branch_code": "SUN-EMERG-01", "name": "Sunrise Emergency Wing"},
+    ).json()
+    fed_headers = {"X-Federation-API-Key": sun_client["raw_api_key"]}
+
+    # Step 2: Register patient at Hospital A ('apollo')
+    p_apollo = client.post(
+        "/v1/api/patients",
+        headers=apollo_admin_headers,
+        json={
+            "full_name": "Emergency Test Patient",
+            "date_of_birth": "1990-01-01T00:00:00Z",
+            "gender": "FEMALE",
+            "phone_number": "9111122222",
+            "abha_number": "ABHA-EMERG-99",
+            "address": "123 Critical Street, Hyderabad",
+        },
+    ).json()
+    client.post(
+        f"/v1/api/patients/{p_apollo['id']}/allergies",
+        headers=apollo_admin_headers,
+        json={"allergy_id": 1, "severity": "SEVERE", "reaction": "Severe anaphylaxis"},
+    )
+
+    # Step 3: Set Apollo Hospital policy to EMERGENCY_ALLERGIES_ONLY
+    apollo_engine = multi_tenant_env["tenant_engines"]["hms_apollo"]
+    with Session(apollo_engine) as db:
+        pol = db.query(HospitalPolicySetting).first()
+        if not pol:
+            pol = HospitalPolicySetting()
+            db.add(pol)
+        pol.federation_sharing_mode = FederationPolicyEnum.EMERGENCY_ALLERGIES_ONLY
+        db.commit()
+
+    try:
+        # Step 4a: Calling with pure purpose=EMERGENCY but without token or break glass ID is REFUSED (F-01)
+        resp_unverified = client.get(
+            "/v1/api/federation/patients/discover?abha_number=ABHA-EMERG-99&purpose=EMERGENCY",
+            headers=fed_headers,
+        )
+        assert resp_unverified.status_code == 404
+
+        # Step 4b: Calling with purpose=EMERGENCY and a valid emergency_token succeeds
+        resp_token = client.get(
+            "/v1/api/federation/patients/discover?abha_number=ABHA-EMERG-99&purpose=EMERGENCY&emergency_token=EMERGENCY-SECURE-TOKEN-1",
+            headers=fed_headers,
+        )
+        assert resp_token.status_code == 200
+        body = resp_token.json()
+        assert len(body["active_allergies"]) >= 1
+
+        # Step 4c: Calling with an active BreakGlassGrant in apollo DB succeeds
+        with Session(apollo_engine) as db:
+            user = db.query(User).first()
+            grant = BreakGlassGrant(
+                patient_id=p_apollo["id"],
+                user_id=user.id,
+                reason="Severe trauma emergency",
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+                review_due_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            )
+            db.add(grant)
+            db.commit()
+            db.refresh(grant)
+            grant_id = grant.id
+
+        resp_grant = client.get(
+            f"/v1/api/federation/patients/discover?abha_number=ABHA-EMERG-99&purpose=EMERGENCY&break_glass_grant_id={grant_id}",
+            headers=fed_headers,
+        )
+        assert resp_grant.status_code == 200
+    finally:
+        # Restore Apollo Hospital policy to FULL_MESH
+        with Session(apollo_engine) as db:
+            pol = db.query(HospitalPolicySetting).first()
+            if pol:
+                pol.federation_sharing_mode = FederationPolicyEnum.FULL_MESH
+                db.commit()
+

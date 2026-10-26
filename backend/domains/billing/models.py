@@ -131,7 +131,7 @@ class InvoiceLineItem(AuditMixin, Base):
     )
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     invoice_id: Mapped[int] = mapped_column(ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False)
-    service_id: Mapped[Optional[int]] = mapped_column(ForeignKey("service_catalog.id"))
+    service_id: Mapped[Optional[int]] = mapped_column(ForeignKey("service_catalog.id"), index=True)
     description: Mapped[str] = mapped_column(String(255), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     unit_price_paise: Mapped[int] = mapped_column(Integer, nullable=False)

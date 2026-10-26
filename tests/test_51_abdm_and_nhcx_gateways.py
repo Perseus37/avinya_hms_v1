@@ -8,6 +8,7 @@ Tests for Enterprise Track 4:
 
 from datetime import datetime, timedelta, timezone
 import json
+import re
 import pytest
 
 
@@ -63,6 +64,7 @@ def test_abdm_m1_generate_and_link_abha(client, superuser_headers):
     assert res_new.status_code == 201, res_new.text
     data_new = res_new.json()
     assert data_new["abha_number"].startswith("91-")
+    assert re.match(r"^\d{2}-\d{4}-\d{4}-\d{4}$", data_new["abha_number"]) is not None, f"ABHA must be 14 numeric digits: {data_new['abha_number']}"
     assert data_new["abha_address"] == "arun.kumar@abdm"
     assert data_new["full_name"] == "Arun Kumar"
     assert data_new["status"] == "ABHA_LINKED"
