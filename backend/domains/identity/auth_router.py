@@ -368,6 +368,15 @@ def login(
                     minutes=settings.LOGIN_LOCKOUT_MINUTES
                 )
                 _revoke_user_sessions(db, user.id)
+                # F-05: Alert on account lockout with source IP for threat response
+                client_ip = request.client.host if request.client else "unknown"
+                logger.warning(
+                    "SECURITY_ALERT: User account %s (id=%d) locked out after %d failed login attempts from IP %s",
+                    user.email,
+                    user.id,
+                    user.failed_login_attempts,
+                    client_ip,
+                )
             db.commit()
         raise HTTPException(status_code=401, detail="Invalid credentials")
 

@@ -671,7 +671,7 @@ def restore_tenant_from_snapshot(
 
     def _execute_restore():
         try:
-            # R-08: Automatic pre-restore safety snapshot before destructive restore
+            # R-08 / N-35: Mandatory pre-restore safety snapshot before destructive restore (fails closed)
             try:
                 from backend.scripts.backup_service import create_encrypted_backup
                 safety_path = create_encrypted_backup(tenant_db_name, encrypted_backup_key)
@@ -681,7 +681,13 @@ def restore_tenant_from_snapshot(
                     f"Created pre-restore safety snapshot {Path(safety_path).name} before overwriting {tenant_db_name}.",
                 )
             except Exception as snap_exc:
-                logger.warning("Could not create pre-restore safety snapshot for %s: %s", tenant_slug, snap_exc)
+                logger.error("Mandatory pre-restore safety snapshot failed for %s: %s; aborting restore", tenant_slug, snap_exc)
+                _record_backup_task_audit(
+                    "PRE_RESTORE_SAFETY_SNAPSHOT_FAILED",
+                    tenant_slug,
+                    f"Aborted restore because safety snapshot failed ({snap_exc})",
+                )
+                raise RuntimeError(f"Pre-restore safety snapshot failed: {snap_exc}") from snap_exc
 
             restore_encrypted_backup(
                 str(target_path), tenant_db_name, encrypted_backup_key, promote_to_cloud=False
@@ -712,12 +718,12 @@ def restore_tenant_from_snapshot(
     control_db.commit()
     return {"status": "success", "message": f"Snapshot '{safe_name}' queued for restoration into {tenant.db_name}."}
 
-def _scrub_sandbox_tenant_data(sandbox_db: str) -> None:
+def _scrub_sandbox_tenant_data(sandbox_db: str, sandbox_password: Optional[str] = None) -> None:
     """
-    R-02 / F-02: Scrubs and anonymizes all production patient and user data in the newly cloned sandbox database.
+    R-02 / F-02 / N-37: Scrubs and anonymizes all production patient and user data in the newly cloned sandbox database.
     Prevents live patient PII/PHI, passwords, MFA secrets, or real staff contact info from persisting in UAT/sandbox environments.
     """
-    scrub_sandbox_database(sandbox_db)
+    scrub_sandbox_database(sandbox_db, sandbox_password=sandbox_password)
 
 
 @router.post("/tenants/{slug}/clone-sandbox")
@@ -762,8 +768,9 @@ def clone_hospital_to_sandbox_environment(
         p_session.connection().connection.set_isolation_level(0)
         p_session.execute(text(f'CREATE DATABASE "{sandbox_db}" WITH TEMPLATE "{src_tenant.db_name}"'))
 
-    # F-02: Scrub production patient PII/PHI and sensitive user contacts from cloned sandbox database
-    _scrub_sandbox_tenant_data(sandbox_db)
+    # F-02 / N-37: Scrub production patient PII/PHI and sensitive user contacts with unique random per-sandbox password
+    sandbox_admin_password = f"Sbx_{secrets.token_urlsafe(12)}!9"
+    _scrub_sandbox_tenant_data(sandbox_db, sandbox_password=sandbox_admin_password)
 
     sandbox_jwt = secrets.token_hex(32)
     sandbox_backup = secrets.token_urlsafe(32)
@@ -802,6 +809,7 @@ def clone_hospital_to_sandbox_environment(
         "sandbox_subdomain_slug": sandbox_slug,
         "sandbox_url": settings.tenant_url(sandbox_slug),
         "database_name": sandbox_db,
+        "temporary_admin_password": sandbox_admin_password,
     }
 
 @router.get("/fleet/schema-status")

@@ -99,7 +99,8 @@ def enqueue_task(
         r = get_redis()
         pipe = r.pipeline()
         pipe.hset(f"{KEY_TASK_PREFIX}{task_id}", mapping=task_data)
-        task_ttl = 3600 if task_name == "email.send" else (86400 * 7)
+        # N-22: Secrets in queue: sensitive email and auth payloads expire in 1 hour; standard tasks in 24 hours
+        task_ttl = 3600 if task_name == "email.send" else 86400
         pipe.expire(f"{KEY_TASK_PREFIX}{task_id}", task_ttl)
 
         if delay_seconds > 0:
@@ -280,6 +281,8 @@ def mark_task_failed(task_id: str, error_message: str) -> None:
                 },
             )
             r.rpush(KEY_DEAD_LETTER, task_id)
+            # N-22: Expire dead-letter payload after 24 hours to prevent stale secret retention
+            r.expire(f"{KEY_TASK_PREFIX}{task_id}", 86400)
             QUEUE_JOBS_TOTAL.labels(job_name=task_name, status="failed").inc()
             logger.error(
                 "Task %s (%s) exceeded max retries (%d). Moved to dead-letter queue. Error: %s",

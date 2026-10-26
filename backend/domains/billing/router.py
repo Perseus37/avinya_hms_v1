@@ -181,8 +181,14 @@ def add_line_item(
     db.add(item)
     invoice.total_amount_paise += total_price
     invoice.tax_amount_paise += tax_paise
-    invoice.cgst_amount_paise = invoice.tax_amount_paise // 2
-    invoice.sgst_amount_paise = invoice.tax_amount_paise - invoice.cgst_amount_paise
+    if getattr(invoice, "is_interstate", False):
+        invoice.igst_amount_paise = invoice.tax_amount_paise
+        invoice.cgst_amount_paise = 0
+        invoice.sgst_amount_paise = 0
+    else:
+        invoice.cgst_amount_paise = invoice.tax_amount_paise // 2
+        invoice.sgst_amount_paise = invoice.tax_amount_paise - invoice.cgst_amount_paise
+        invoice.igst_amount_paise = 0
     invoice.is_tax_exempt = (invoice.tax_amount_paise == 0)
     db.commit()
     return {"status": "success", "message": "Line item appended to invoice."}
@@ -228,8 +234,14 @@ def remove_line_item(
 
     invoice.total_amount_paise = max(0, invoice.total_amount_paise - item.total_price_paise)
     invoice.tax_amount_paise = max(0, invoice.tax_amount_paise - (item.tax_amount_paise or 0))
-    invoice.cgst_amount_paise = invoice.tax_amount_paise // 2
-    invoice.sgst_amount_paise = invoice.tax_amount_paise - invoice.cgst_amount_paise
+    if getattr(invoice, "is_interstate", False):
+        invoice.igst_amount_paise = invoice.tax_amount_paise
+        invoice.cgst_amount_paise = 0
+        invoice.sgst_amount_paise = 0
+    else:
+        invoice.cgst_amount_paise = invoice.tax_amount_paise // 2
+        invoice.sgst_amount_paise = invoice.tax_amount_paise - invoice.cgst_amount_paise
+        invoice.igst_amount_paise = 0
     invoice.is_tax_exempt = (invoice.tax_amount_paise == 0)
     db.delete(item)
     db.commit()

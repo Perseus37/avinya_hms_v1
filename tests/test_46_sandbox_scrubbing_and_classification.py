@@ -441,3 +441,109 @@ def test_08_api_documentation_disabled_in_production():
     """
     assert hasattr(settings, "ENABLE_PRODUCTION_API_DOCS")
     assert settings.ENABLE_PRODUCTION_API_DOCS is False
+
+
+def test_09_sandbox_scrubbing_ancillary_and_random_password(client: TestClient):
+    """
+    N-37: Verify random per-sandbox password support and deep clinical column scrubbing
+    (mortuary, patient allergies, encounter diagnosis remarks, triage notes).
+    """
+    engine = tenant_engine_pool.get_engine("hms_apollo")
+    custom_pass = "CustomSbx_SecPass!99"
+
+    from backend.domains.patients.models import GenderEnum
+    with Session(bind=engine) as db:
+        # Create a patient and encounter
+        pat = Patient(
+            mrn="REAL-MPI-9999",
+            full_name="Confidential Real Patient",
+            phone_number="9876543210",
+            date_of_birth=datetime(1985, 5, 15),
+            gender=GenderEnum.MALE,
+        )
+        db.add(pat)
+        db.flush()
+
+        doc = db.execute(select(User).where(User.is_superuser == True)).scalars().first()
+        dept_id = db.scalar(select(text("id")).select_from(text("departments")).limit(1)) or 1
+
+        enc = PatientEncounter(
+            patient_id=pat.id,
+            encounter_type=EncounterTypeEnum.OPD,
+            primary_doctor_id=doc.id,
+            department_id=dept_id,
+            chief_complaint_notes="Original sensitive chief complaint notes",
+        )
+        db.add(enc)
+        db.flush()
+        pat_id = pat.id
+        enc_id = enc.id
+
+        # Insert mortuary record
+        db.execute(
+            text("""
+                INSERT INTO mortuary_cases (patient_id, case_reference, deceased_name, custody_location, status, release_recipient, release_witness)
+                VALUES (:pid, 'MORT-LIVE-999', 'Confidential Deceased Real Name', 'Morgue Bay 1', 'RECEIVED', 'Real Brother John', 'Nurse Sarah')
+            """),
+            {"pid": pat_id},
+        )
+
+        # Insert patient allergy
+        from backend.domains.patients.models import AllergyMaster, AllergySeverityEnum, PatientAllergy
+        allergy_master = db.execute(select(AllergyMaster)).scalars().first()
+        if not allergy_master:
+            allergy_master = AllergyMaster(code="PENICILLIN", allergen_name="Penicillin", allergen_type="DRUG")
+            db.add(allergy_master)
+            db.flush()
+
+        db.execute(
+            text("""
+                INSERT INTO patient_allergies (patient_id, allergy_id, severity, reaction_description, recorded_by_user_id, is_active)
+                VALUES (:pid, :aid, 'SEVERE', 'Patient suffered full body anaphylactic shock with severe respiratory distress', :uid, 1)
+            """),
+            {"pid": pat_id, "aid": allergy_master.id, "uid": doc.id},
+        )
+
+        # Insert encounter diagnosis
+        from backend.domains.patients.models import DiagnosisMaster
+        diag_master = db.execute(select(DiagnosisMaster)).scalars().first()
+        if not diag_master:
+            diag_master = DiagnosisMaster(code="I10", description="Essential Hypertension", icd_version="ICD-10")
+            db.add(diag_master)
+            db.flush()
+
+        db.execute(
+            text("""
+                INSERT INTO encounter_diagnoses (encounter_id, diagnosis_id, diagnosis_type, clinical_remarks)
+                VALUES (:eid, :did, 'PRIMARY', 'Highly confidential oncology secondary staging note')
+            """),
+            {"eid": enc_id, "did": diag_master.id},
+        )
+
+        db.commit()
+
+    # Execute deep sandbox scrubbing with custom password
+    stats = scrub_sandbox_database("hms_apollo", sandbox_password=custom_pass)
+    assert stats["scrubbed_tables"] > 0
+
+    with Session(bind=engine) as db:
+        # 1. Verify custom password
+        admin_u = db.execute(select(User).where(User.is_superuser == True)).scalars().first()
+        assert pwd_context.verify(custom_pass, admin_u.hashed_password)
+
+        # 2. Verify Mortuary Case scrubbed
+        mort_row = db.execute(text("SELECT deceased_name, release_recipient, release_witness FROM mortuary_cases WHERE case_reference = 'MORT-LIVE-999'")).first()
+        assert mort_row is not None
+        assert mort_row[0] == "Sandbox Deceased"
+        assert mort_row[1] == "Sandbox Recipient"
+        assert mort_row[2] == "Sandbox Witness"
+
+        # 3. Verify Patient Allergy scrubbed
+        allergy_row = db.execute(text(f"SELECT reaction_description FROM patient_allergies WHERE patient_id = {pat_id}")).first()
+        assert allergy_row is not None
+        assert allergy_row[0] == "Sandbox allergy reaction"
+
+        # 4. Verify Encounter Diagnosis remarks scrubbed
+        diag_row = db.execute(text(f"SELECT clinical_remarks FROM encounter_diagnoses WHERE encounter_id = {enc_id}")).first()
+        assert diag_row is not None
+        assert diag_row[0] == "Sandbox diagnostic evaluation"

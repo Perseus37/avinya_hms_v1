@@ -55,12 +55,20 @@ def ensure_postgres_db_exists(db_name: str) -> str:
     return build_db_url(db_name)
 
 
+def _get_connect_args(url_str: str) -> dict:
+    # PR-05: Enforce database timeouts on PostgreSQL connections (statement_timeout: 30s, lock_timeout: 10s)
+    if url_str.startswith(("postgresql", "postgres")):
+        return {"options": "-c statement_timeout=30000 -c lock_timeout=10000"}
+    return {}
+
+
 # Control Plane Engine (hms_control_plane)
 control_engine = create_engine(
     build_db_url(settings.CONTROL_PLANE_DB_NAME),
     pool_pre_ping=True,
     pool_size=5,
     max_overflow=10,
+    connect_args=_get_connect_args(settings.DATABASE_URL),
 )
 ControlSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=control_engine)
 
@@ -84,12 +92,14 @@ class TenantEngineRegistry:
 
             from sqlalchemy.pool import NullPool
             
-            # ARCH-001: Prevent connection pool exhaustion across 4x Gunicorn workers
+            # ARCH-001 / PR-05: Prevent connection pool exhaustion across 4x Gunicorn workers and enforce DB timeouts
+            url = build_db_url(db_name)
             tenant_engine = create_engine(
-                build_db_url(db_name),
+                url,
                 poolclass=NullPool,
                 pool_pre_ping=True,
                 pool_recycle=1800,
+                connect_args=_get_connect_args(url),
             )
             self._engines[db_name] = tenant_engine
             return tenant_engine
