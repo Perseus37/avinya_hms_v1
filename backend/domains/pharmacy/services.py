@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import logging
 import re
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -30,6 +30,53 @@ from backend.domains.pharmacy.models import (
 )
 
 logger = logging.getLogger("avinya.pharmacy.services")
+
+
+def _extract_dose_tokens(text: Optional[str]) -> List[Tuple[float, str]]:
+    """
+    Extracts structured (quantity, unit) pairs from dosage text.
+    Handles '125 mg', '250mg IV push', '1 tablet twice daily', '50mcg/ml', '0.5 ml', '25mg'.
+    Units are normalized to lowercase and singularized ('tablets' -> 'tablet').
+    """
+    if not text:
+        return []
+    matches = re.findall(r"(\d+(?:\.\d+)?)\s*([a-zA-Z]+(?:/[a-zA-Z]+)?)?", str(text))
+    tokens = []
+    for num_str, unit in matches:
+        try:
+            val = float(num_str)
+            clean_unit = unit.lower().rstrip("s") if unit else ""
+            tokens.append((val, clean_unit))
+        except ValueError:
+            pass
+    return tokens
+
+
+def _is_dose_match(given_text: str, target_text: Optional[str]) -> bool:
+    """
+    Compares administered dose against target instruction or drug strength.
+    Uses numeric quantity and unit comparison to prevent false substring positives
+    (e.g., '25 mg' matching inside '125 mg' or '50mg' matching inside '250mg').
+    """
+    if not target_text:
+        return False
+    given_tokens = _extract_dose_tokens(given_text)
+    target_tokens = _extract_dose_tokens(target_text)
+
+    if given_tokens and target_tokens:
+        for g_val, g_unit in given_tokens:
+            for t_val, t_unit in target_tokens:
+                if g_val == t_val:
+                    if not g_unit or not t_unit or g_unit == t_unit:
+                        return True
+        return False
+
+    norm_given = re.sub(r"\s+", "", str(given_text)).strip().lower()
+    norm_target = re.sub(r"\s+", "", str(target_text)).strip().lower()
+    if norm_given == norm_target:
+        return True
+    pattern = r"\b" + re.escape(str(given_text).strip().lower()) + r"\b"
+    return bool(re.search(pattern, str(target_text).lower()))
 
 
 def evaluate_bcma_five_rights(
@@ -126,10 +173,9 @@ def evaluate_bcma_five_rights(
     actual_dose = dose_given or prescribed_dose
     dose_matched = True
     if dose_given:
-        norm_given = re.sub(r"\s+", "", str(dose_given)).lower()
-        norm_prescribed = re.sub(r"\s+", "", str(prescribed_dose)).lower()
-        norm_strength = re.sub(r"\s+", "", str(med.strength or "")).lower()
-        if (norm_given not in norm_prescribed) and (not norm_strength or norm_given not in norm_strength):
+        matched_prescription = _is_dose_match(dose_given, prescribed_dose)
+        matched_strength = _is_dose_match(dose_given, med.strength)
+        if not matched_prescription and not matched_strength:
             dose_matched = False
             messages.append(
                 f"RIGHT DOSE VIOLATION: Administered dose '{dose_given}' does not match prescribed instruction '{prescribed_dose}' or drug strength '{med.strength}'."
@@ -357,10 +403,8 @@ def process_controlled_substance_movement(
     if quantity_units <= 0:
         raise HTTPException(status_code=400, detail="Transaction quantity must be strictly greater than 0.")
 
-    # N-44: Row lock vault row in PostgreSQL to prevent race conditions on concurrent dispatches
-    stmt = select(ControlledSubstanceVault).where(ControlledSubstanceVault.id == vault_id)
-    if session.bind and session.bind.dialect.name == "postgresql":
-        stmt = stmt.with_for_update()
+    # N-44: Row lock vault row to prevent race conditions on concurrent dispatches
+    stmt = select(ControlledSubstanceVault).where(ControlledSubstanceVault.id == vault_id).with_for_update()
     vault = session.execute(stmt).scalar_one_or_none()
     if not vault:
         raise HTTPException(status_code=404, detail="Controlled substance vault register not found.")

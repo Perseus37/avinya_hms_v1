@@ -5,7 +5,6 @@ Tests for Enterprise Track 2:
 """
 
 from datetime import datetime, timedelta, timezone
-import pytest
 
 
 def _create_patient(client, headers, name="BCMA Test Patient", dob="1988-06-15T00:00:00Z", gender="FEMALE"):
@@ -480,6 +479,21 @@ def test_bcma_safety_controls_dose_mismatch_generic_rejection_and_duplicates(cli
     )
     assert res_dose.status_code == 409
     assert "RIGHT DOSE VIOLATION" in res_dose.text
+
+    # 2b. Reject substring false-positive dose (giving 25mg when 250mg ordered)
+    res_sub_dose = client.post(
+        "/v1/api/pharmacy/bcma/verify-and-administer",
+        headers=nurse_headers,
+        json={
+            "encounter_id": encounter["id"],
+            "prescription_item_id": rx_item_id,
+            "scanned_patient_barcode": patient["mrn"],
+            "scanned_medication_barcode": "BARCODE-AMPI-555",
+            "dose_given": "25mg",
+        },
+    )
+    assert res_sub_dose.status_code == 409
+    assert "RIGHT DOSE VIOLATION" in res_sub_dose.text
 
     # 3. Successful correct administration
     res_ok = client.post(
