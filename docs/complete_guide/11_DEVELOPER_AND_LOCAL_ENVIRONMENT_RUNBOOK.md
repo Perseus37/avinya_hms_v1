@@ -98,6 +98,12 @@ pip install -r requirements-dev.txt
    ```
 3. Open `.env` and replace the placeholder `SECRET_KEY` and `MASTER_KEY` with the generated 256-bit entropy token. Keep `ENVIRONMENT=development` to enable Swagger UI documentation at `/docs`.
 
+> [!TIP]
+> **Host Networking vs. Docker Container Networking:**
+> - When running native Python commands (like Uvicorn or `python -m backend.scripts.bootstrap`) on your host machine while database services run in Docker, your local scripts connect to Docker's published ports via `127.0.0.1` (`localhost`).
+> - The codebase includes automatic host fallback in `backend/core/config.py`: if `POSTGRES_HOST` or `REDIS_HOST` are set to `db` or `redis` and cannot be resolved in host DNS, the runtime automatically connects to `127.0.0.1`.
+> - If you run the entire stack within Docker (`docker compose up -d`), Docker Compose automatically routes containers to `db` and `redis` over its internal bridge network.
+
 ---
 
 ## 4. Running the Stack Locally in Development Mode
@@ -302,3 +308,4 @@ When testing authenticated endpoints in Swagger UI or Postman:
 ---
 
 *For production deployment and cluster operations, refer to [Chapter 7: Master Operations Runbook](07_MASTER_OPERATIONS_RUNBOOK.md). For full navigation, return to the [Master Guide Index](README.md).*
+
