@@ -8,7 +8,7 @@ import jwt
 from sqlalchemy.orm import Session, sessionmaker
 from backend.core.config import settings
 from backend.control_plane.models import TenantRegistry
-from backend.core.database import ControlSessionLocal, get_redis, tenant_engine_pool
+from backend.core.database import ControlSessionLocal, extract_subdomain_slug, get_redis, tenant_engine_pool
 from backend.domains.identity.models import AuthSession, User, UserStatusEnum
 from backend.core.dependencies import user_has_permission
 
@@ -136,8 +136,15 @@ async def websocket_event_stream(
     await connection_limit.acquire()
     pubsub = None
     try:
-        # F-11: Validate tenant existence to prevent unbounded subscriptions to non-existent tenants
-        is_valid_tenant = await asyncio.to_thread(_validate_tenant_slug, tenant_slug)
+        # F-11: Derive tenant slug securely from request host/headers before falling back to query param
+        derived_slug = extract_subdomain_slug(websocket)
+        effective_slug = (
+            derived_slug
+            if (derived_slug and derived_slug != settings.DEFAULT_TENANT_SLUG)
+            else (tenant_slug.strip().lower() if tenant_slug else settings.DEFAULT_TENANT_SLUG)
+        )
+
+        is_valid_tenant = await asyncio.to_thread(_validate_tenant_slug, effective_slug)
         if not is_valid_tenant:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
@@ -152,7 +159,7 @@ async def websocket_event_stream(
         if normalized_stream != "waiting_room":
             try:
                 authorized = await asyncio.to_thread(
-                    _authenticate_ws, token, tenant_slug, normalized_stream
+                    _authenticate_ws, token, effective_slug, normalized_stream
                 )
             except Exception:
                 logger.exception("WebSocket authentication failed.")
@@ -168,9 +175,9 @@ async def websocket_event_stream(
         pubsub = redis_client.pubsub()
 
         channel_pattern = (
-            f"tenant:{tenant_slug.strip().lower()}:*"
+            f"tenant:{effective_slug}:*"
             if normalized_stream == "all"
-            else f"tenant:{tenant_slug.strip().lower()}:{normalized_stream}"
+            else f"tenant:{effective_slug}:{normalized_stream}"
         )
         if normalized_stream == "all":
             pubsub.psubscribe(channel_pattern)
@@ -187,7 +194,7 @@ async def websocket_event_stream(
                             authorized = await asyncio.to_thread(
                                 _authenticate_ws,
                                 token,
-                                tenant_slug,
+                                effective_slug,
                                 normalized_stream,
                             )
                             if not authorized:

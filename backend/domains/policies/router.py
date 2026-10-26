@@ -1,5 +1,4 @@
 import csv
-import io
 import json
 from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status, Request
@@ -7,6 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.core.config import settings
 from backend.core.database import get_db
 from backend.core.dependencies import RequirePermission, enforce_tenant_resource_quota
 from backend.domains.diagnostics.models import ServiceCatalog
@@ -299,8 +299,17 @@ class BulkImportSummaryResponse(BaseModel):
 
 import codecs
 
-# SEC-005: Parse files as streaming generators to prevent OOM memory exhaustion DOS
+# SEC-005 / PR-09: Parse files as streaming generators with size caps to prevent OOM memory exhaustion DOS
 def _parse_file_rows(filename: str, file_obj):
+    file_obj.seek(0, 2)
+    size = file_obj.tell()
+    file_obj.seek(0)
+    max_bytes = getattr(settings, "MAX_ATTACHMENT_UPLOAD_BYTES", 10 * 1024 * 1024)
+    if size > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Uploaded file exceeds maximum allowed size ({max_bytes} bytes).",
+        )
     if filename.endswith(".json"):
         return json.load(file_obj)
     return csv.DictReader(codecs.iterdecode(file_obj, "utf-8-sig"))
