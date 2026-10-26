@@ -286,10 +286,21 @@ async def request_correlation_middleware(request: Request, call_next):
         process_time = latency_sec * 1000
         response.headers["X-Request-ID"] = req_id
         response.headers["X-Process-Time-Ms"] = f"{process_time:.2f}"
+        # PR-06: Global enterprise security headers
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
+        if getattr(settings, "ENVIRONMENT", "") in ("production", "prod"):
+            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
         logger.info("Completed %s %s - Status: %s in %.2fms", request.method, request.url.path, response.status_code, process_time)
 
         try:
-            norm_path = normalize_metric_path(request.url.path)
+            route = request.scope.get("route")
+            if route and hasattr(route, "path"):
+                norm_path = str(route.path)
+            else:
+                norm_path = normalize_metric_path(request.url.path)
             HTTP_REQUESTS_TOTAL.labels(
                 method=request.method,
                 endpoint=norm_path,

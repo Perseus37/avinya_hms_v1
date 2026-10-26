@@ -13,7 +13,7 @@ must belong to:
 
 from datetime import datetime, timezone
 import logging
-from typing import Dict, Set
+from typing import Any, Dict, Optional, Set
 from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import Session
 
@@ -172,13 +172,13 @@ def get_unclassified_tables(table_names: Set[str]) -> Set[str]:
     return set(table_names) - ALL_CLASSIFIED_TABLES
 
 
-def scrub_sandbox_database(sandbox_db: str) -> Dict[str, int]:
+def scrub_sandbox_database(sandbox_db: str, sandbox_password: Optional[str] = None) -> Dict[str, Any]:
     """
     Executes deep anonymization and credential reset across all tables in a cloned sandbox database.
     Guarantees no live PHI/PII or real access credentials remain in non-production.
     """
     engine = tenant_engine_pool.get_engine(sandbox_db)
-    stats: Dict[str, int] = {"purged_tables": 0, "scrubbed_tables": 0}
+    stats: Dict[str, Any] = {"purged_tables": 0, "scrubbed_tables": 0}
 
     with Session(bind=engine) as session:
         inspector = inspect(session.connection())
@@ -190,10 +190,11 @@ def scrub_sandbox_database(sandbox_db: str) -> Dict[str, int]:
                 session.execute(text(f'DELETE FROM "{tbl}"'))  # nosec B608
                 stats["purged_tables"] += 1
 
-        # 2. WIPE USERS, PASSWORDS, AND MFA
+        # 2. WIPE USERS, PASSWORDS, AND MFA (N-37)
         if "users" in table_names:
             from backend.domains.identity.models import User
-            dummy_hash = pwd_context.hash(DUMMY_SANDBOX_PASSWORD)
+            eff_password = sandbox_password or DUMMY_SANDBOX_PASSWORD
+            dummy_hash = pwd_context.hash(eff_password)
             users = session.execute(select(User)).scalars().all()
             for u in users:
                 u.hashed_password = dummy_hash
@@ -514,6 +515,485 @@ def scrub_sandbox_database(sandbox_db: str) -> Dict[str, int]:
                     UPDATE attendance_records
                     SET note = 'Sandbox attendance'
                     WHERE note IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        # 9. CLINICAL & ANCILLARY FREE-TEXT SCRUBBING (N-37)
+        if "mortuary_cases" in table_names:
+            session.execute(
+                text("""
+                    UPDATE mortuary_cases
+                    SET deceased_name = 'Sandbox Deceased',
+                        release_recipient = CASE WHEN release_recipient IS NOT NULL THEN 'Sandbox Recipient' ELSE NULL END,
+                        release_witness = CASE WHEN release_witness IS NOT NULL THEN 'Sandbox Witness' ELSE NULL END
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "patient_allergies" in table_names:
+            session.execute(
+                text("""
+                    UPDATE patient_allergies
+                    SET reaction_description = 'Sandbox allergy reaction'
+                    WHERE reaction_description IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "patient_comorbidities" in table_names:
+            session.execute(
+                text("""
+                    UPDATE patient_comorbidities
+                    SET clinical_remarks = 'Sandbox comorbidity notes'
+                    WHERE clinical_remarks IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "encounter_diagnoses" in table_names:
+            session.execute(
+                text("""
+                    UPDATE encounter_diagnoses
+                    SET clinical_remarks = 'Sandbox diagnostic evaluation'
+                    WHERE clinical_remarks IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "encounter_physical_exams" in table_names:
+            session.execute(
+                text("""
+                    UPDATE encounter_physical_exams
+                    SET findings_notes = 'Sandbox normal physical findings'
+                    WHERE findings_notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "encounter_vitals" in table_names:
+            session.execute(
+                text("""
+                    UPDATE encounter_vitals
+                    SET notes = 'Sandbox vitals checked'
+                    WHERE notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "er_triage_assessments" in table_names:
+            session.execute(
+                text("""
+                    UPDATE er_triage_assessments
+                    SET chief_complaint = 'Sandbox ER presentation',
+                        triage_notes = 'Sandbox triage assessment'
+                    WHERE chief_complaint IS NOT NULL OR triage_notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "fluid_balance_logs" in table_names:
+            session.execute(
+                text("""
+                    UPDATE fluid_balance_logs
+                    SET notes = 'Sandbox fluid balance'
+                    WHERE notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "dietary_orders" in table_names:
+            session.execute(
+                text("""
+                    UPDATE dietary_orders
+                    SET allergy_notes = CASE WHEN allergy_notes IS NOT NULL THEN 'Sandbox dietary allergy note' ELSE NULL END,
+                        instructions = CASE WHEN instructions IS NOT NULL THEN 'Sandbox dietary instructions' ELSE NULL END
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "medication_administration_logs" in table_names:
+            session.execute(
+                text("""
+                    UPDATE medication_administration_logs
+                    SET notes = 'Sandbox verified administration'
+                    WHERE notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "prescription_items" in table_names:
+            session.execute(
+                text("""
+                    UPDATE prescription_items
+                    SET dosage_instruction = 'Sandbox standard dosage instruction'
+                    WHERE dosage_instruction IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        # 10. APPOINTMENTS & SCHEDULING (N-37)
+        if "appointments" in table_names:
+            session.execute(
+                text("""
+                    UPDATE appointments
+                    SET reason_for_visit = 'Sandbox routine consultation'
+                    WHERE reason_for_visit IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "appointment_waitlist_entries" in table_names:
+            session.execute(
+                text("""
+                    UPDATE appointment_waitlist_entries
+                    SET reason_for_visit = 'Sandbox consultation waitlist'
+                    WHERE reason_for_visit IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "appointment_status_history" in table_names:
+            session.execute(
+                text("""
+                    UPDATE appointment_status_history
+                    SET reason = 'Sandbox status update'
+                    WHERE reason IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "appointment_waitlist_history" in table_names:
+            session.execute(
+                text("""
+                    UPDATE appointment_waitlist_history
+                    SET reason = 'Sandbox waitlist update'
+                    WHERE reason IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        # 11. SURGICAL SUITE & IMPLANTS (N-37)
+        if "surgical_schedules" in table_names:
+            session.execute(
+                text("""
+                    UPDATE surgical_schedules
+                    SET pre_op_diagnosis_notes = 'Sandbox scheduled procedure'
+                    WHERE pre_op_diagnosis_notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "surgical_implant_logs" in table_names:
+            session.execute(
+                text("""
+                    UPDATE surgical_implant_logs
+                    SET manufacturer = 'Sandbox Medical Implants',
+                        serial_or_batch_number = 'SBX-IMPLANT-000'
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "who_surgical_safety_checklists" in table_names:
+            stats["scrubbed_tables"] += 1
+
+        # 12. MEDICAL PROFILES & ROLES (N-37)
+        if "doctor_profiles" in table_names:
+            session.execute(
+                text("""
+                    UPDATE doctor_profiles
+                    SET medical_registration_number = 'MED-SBX-000'
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "doctor_leaves" in table_names:
+            session.execute(
+                text("""
+                    UPDATE doctor_leaves
+                    SET reason = 'Sandbox doctor leave'
+                    WHERE reason IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "nursing_shift_assignments" in table_names:
+            session.execute(
+                text("""
+                    UPDATE nursing_shift_assignments
+                    SET handoff_notes = 'Sandbox nursing shift handoff'
+                    WHERE handoff_notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "user_roles" in table_names:
+            stats["scrubbed_tables"] += 1
+
+        # 13. BLOOD BANK & LOGISTICS (N-37)
+        if "blood_cross_match_orders" in table_names:
+            session.execute(
+                text("""
+                    UPDATE blood_cross_match_orders
+                    SET reaction_notes = 'Sandbox cross-match complete'
+                    WHERE reaction_notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "ambulance_dispatches" in table_names:
+            session.execute(
+                text("""
+                    UPDATE ambulance_dispatches
+                    SET pickup_location = 'Sandbox Pickup Suite',
+                        destination = 'Sandbox Emergency Department',
+                        notes = 'Sandbox routine transport'
+                    WHERE pickup_location IS NOT NULL OR notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "biomedical_waste_bags" in table_names:
+            session.execute(
+                text("""
+                    UPDATE biomedical_waste_bags
+                    SET waste_description = 'Sandbox segregated clinical waste'
+                    WHERE waste_description IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "biomedical_waste_manifests" in table_names:
+            session.execute(
+                text("""
+                    UPDATE biomedical_waste_manifests
+                    SET cbwtf_operator_name = 'Sandbox Waste Disposal Corp',
+                        cbwtf_driver_name = 'Sandbox Driver',
+                        notes = 'Sandbox authorized waste manifest'
+                    WHERE cbwtf_operator_name IS NOT NULL OR notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "cssd_sterilization_batches" in table_names:
+            session.execute(
+                text("""
+                    UPDATE cssd_sterilization_batches
+                    SET release_notes = 'Sandbox sterilization cycle validated'
+                    WHERE release_notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        # 14. INVOICES, DEPOSITS & EXPENSES (N-37)
+        if "invoice_line_items" in table_names:
+            session.execute(
+                text("""
+                    UPDATE invoice_line_items
+                    SET description = 'Sandbox billable item'
+                    WHERE description IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "patient_deposits" in table_names:
+            session.execute(
+                text("""
+                    UPDATE patient_deposits
+                    SET transaction_reference = 'SBX-DEP-000',
+                        notes = 'Sandbox patient deposit'
+                    WHERE transaction_reference IS NOT NULL OR notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "payment_receipts" in table_names:
+            session.execute(
+                text("""
+                    UPDATE payment_receipts
+                    SET transaction_reference = 'SBX-TXN-000'
+                    WHERE transaction_reference IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "insurance_claims" in table_names:
+            session.execute(
+                text("""
+                    UPDATE insurance_claims
+                    SET settlement_utr_reference = 'SBX-UTR-000',
+                        remarks = 'Sandbox claim evaluation'
+                    WHERE settlement_utr_reference IS NOT NULL OR remarks IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "finance_expenses" in table_names:
+            session.execute(
+                text("""
+                    UPDATE finance_expenses
+                    SET vendor_name = 'Sandbox Vendor',
+                        receipt_reference = 'SBX-EXP-000',
+                        rejection_reason = CASE WHEN rejection_reason IS NOT NULL THEN 'Sandbox expense note' ELSE NULL END
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "finance_recurring_expenses" in table_names:
+            session.execute(
+                text("""
+                    UPDATE finance_recurring_expenses
+                    SET vendor_name = 'Sandbox Vendor'
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        # 15. PAYROLL (N-37)
+        if "payroll_periods" in table_names:
+            stats["scrubbed_tables"] += 1
+
+        if "payroll_lines" in table_names:
+            session.execute(
+                text("""
+                    UPDATE payroll_lines
+                    SET calculation_note = 'Sandbox salary calculation',
+                        statutory_details_json = '{}'
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "payroll_calculation_events" in table_names:
+            session.execute(
+                text("""
+                    UPDATE payroll_calculation_events
+                    SET input_snapshot = '{}',
+                        output_snapshot = '{}'
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        # 16. PROCUREMENT & PHARMACY (N-37)
+        if "inventory_batches" in table_names:
+            session.execute(
+                text("""
+                    UPDATE inventory_batches
+                    SET batch_number = 'SBX-BATCH-000'
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "pharmacy_return_logs" in table_names:
+            session.execute(
+                text("""
+                    UPDATE pharmacy_return_logs
+                    SET return_reason = 'Sandbox protocol return'
+                    WHERE return_reason IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "procurement_indents" in table_names:
+            session.execute(
+                text("""
+                    UPDATE procurement_indents
+                    SET remarks = 'Sandbox indent'
+                    WHERE remarks IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "procurement_indent_items" in table_names:
+            stats["scrubbed_tables"] += 1
+
+        if "procurement_purchase_orders" in table_names:
+            session.execute(
+                text("""
+                    UPDATE procurement_purchase_orders
+                    SET payment_terms = 'Sandbox standard terms'
+                    WHERE payment_terms IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "procurement_po_items" in table_names:
+            session.execute(
+                text("""
+                    UPDATE procurement_po_items
+                    SET item_description = 'Sandbox ordered item'
+                    WHERE item_description IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "procurement_grn" in table_names:
+            session.execute(
+                text("""
+                    UPDATE procurement_grn
+                    SET inspection_notes = 'Sandbox GRN inspection verified',
+                        invoice_number = 'SBX-INV-000'
+                    WHERE inspection_notes IS NOT NULL OR invoice_number IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "procurement_grn_items" in table_names:
+            session.execute(
+                text("""
+                    UPDATE procurement_grn_items
+                    SET batch_number = 'SBX-BATCH-000',
+                        rejection_reason = NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "procurement_vendor_invoices" in table_names:
+            session.execute(
+                text("""
+                    UPDATE procurement_vendor_invoices
+                    SET invoice_number = 'SBX-VEND-000',
+                        document_file_url = 'https://docs.sandbox.local/inv/sbx',
+                        notes = 'Sandbox vendor invoice'
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "procurement_vendor_invoice_items" in table_names:
+            session.execute(
+                text("""
+                    UPDATE procurement_vendor_invoice_items
+                    SET item_description = 'Sandbox invoiced item',
+                        batch_number = 'SBX-BATCH-000'
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "service_demand_requests" in table_names:
+            session.execute(
+                text("""
+                    UPDATE service_demand_requests
+                    SET reason = 'Sandbox demand request',
+                        resolution_notes = 'Sandbox resolved',
+                        external_facility_name = 'Sandbox Regional Facility'
+                    WHERE reason IS NOT NULL OR resolution_notes IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "service_demand_status_history" in table_names:
+            session.execute(
+                text("""
+                    UPDATE service_demand_status_history
+                    SET reason = 'Sandbox status update'
+                    WHERE reason IS NOT NULL
+                """)
+            )
+            stats["scrubbed_tables"] += 1
+
+        if "federated_clients" in table_names:
+            session.execute(
+                text("""
+                    UPDATE federated_clients
+                    SET api_key_hash = 'SANDBOX_SCRUBBED_KEY_' || id
                 """)
             )
             stats["scrubbed_tables"] += 1

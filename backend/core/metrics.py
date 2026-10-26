@@ -67,11 +67,14 @@ APP_INFO.info({
 _UUID_REGEX = re.compile(r"/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?=/|$)")
 _NUMERIC_ID_REGEX = re.compile(r"/\d+(?=/|$)")
 _HEX_TOKEN_REGEX = re.compile(r"/[0-9a-fA-F]{32,64}(?=/|$)")
+_ABHA_REGEX = re.compile(r"/\d{2}-\d{4}-\d{4}-\d{4}(?=/|$)")
+_ENTITY_CODE_REGEX = re.compile(r"/[A-Za-z]{2,6}-\d+(?=/|$)")
+_FILE_EXT_REGEX = re.compile(r"/[^/]+\.(?:enc|dump|json|csv|pdf|txt|xml)(?=/|$)")
 
 
 def normalize_metric_path(path: str) -> str:
     """
-    Collapses dynamic URL path segments (UUIDs, integer entity IDs, hex hashes)
+    Collapses dynamic URL path segments (UUIDs, entity IDs, hashes, ABHA IDs, barcodes, files)
     into static placeholders to ensure Prometheus label cardinality remains bounded.
     """
     if not path:
@@ -80,6 +83,9 @@ def normalize_metric_path(path: str) -> str:
     clean_path = path.split("?")[0]
     clean_path = _UUID_REGEX.sub("/{uuid}", clean_path)
     clean_path = _HEX_TOKEN_REGEX.sub("/{hash}", clean_path)
+    clean_path = _ABHA_REGEX.sub("/{abha}", clean_path)
+    clean_path = _ENTITY_CODE_REGEX.sub("/{ref}", clean_path)
+    clean_path = _FILE_EXT_REGEX.sub("/{file}", clean_path)
     clean_path = _NUMERIC_ID_REGEX.sub("/{id}", clean_path)
     return clean_path
 

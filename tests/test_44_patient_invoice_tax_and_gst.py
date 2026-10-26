@@ -233,3 +233,39 @@ def test_discount_application_on_taxable_invoice(client, superuser_headers, bill
     assert paid_inv["amount_paid_paise"] == 9800
 
 
+def test_interstate_invoice_igst_calculation():
+    """
+    N-30: Verify that inter-state supplies route 100% of GST to IGST
+    with CGST=0 and SGST=0 per Indian GST statutory requirements.
+    """
+    from backend.domains.billing.models import Invoice, InvoiceLineItem
+    from backend.domains.billing.rcm_services import recalculate_invoice_totals
+
+    inv = Invoice(
+        patient_id=1,
+        invoice_number="INV-INTERSTATE-001",
+        total_amount_paise=0,
+        tax_amount_paise=0,
+    )
+    inv.line_items = [
+        InvoiceLineItem(
+            description="Consultation Inter-State",
+            quantity=1,
+            unit_price_paise=100000,
+            total_price_paise=100000,
+            gst_rate_percent=18,
+            tax_amount_paise=18000,
+            hsn_sac_code="9993",
+        )
+    ]
+
+    # Recalculate as inter-state supply
+    recalculate_invoice_totals(inv, is_interstate=True)
+    assert inv.total_amount_paise == 100000
+    assert inv.tax_amount_paise == 18000
+    assert inv.igst_amount_paise == 18000
+    assert inv.cgst_amount_paise == 0
+    assert inv.sgst_amount_paise == 0
+    assert inv.is_tax_exempt is False
+
+

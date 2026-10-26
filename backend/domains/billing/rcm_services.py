@@ -167,16 +167,24 @@ def get_or_create_draft_invoice(
     return new_invoice
 
 
-def recalculate_invoice_totals(invoice: Invoice) -> None:
-    """Synchronizes invoice total amount, GST components, and tax exemptions from line items."""
+def recalculate_invoice_totals(invoice: Invoice, is_interstate: bool = False) -> None:
+    """Synchronizes invoice total amount, GST components, and tax exemptions from line items (N-30)."""
     total_line_amount = sum(item.total_price_paise for item in invoice.line_items)
     total_tax_amount = sum(item.tax_amount_paise for item in invoice.line_items)
 
     invoice.total_amount_paise = total_line_amount
     invoice.tax_amount_paise = total_tax_amount
-    invoice.cgst_amount_paise = total_tax_amount // 2
-    invoice.sgst_amount_paise = total_tax_amount - invoice.cgst_amount_paise
-    invoice.igst_amount_paise = 0
+
+    interstate = is_interstate or getattr(invoice, "is_interstate", False)
+    if interstate:
+        invoice.igst_amount_paise = total_tax_amount
+        invoice.cgst_amount_paise = 0
+        invoice.sgst_amount_paise = 0
+    else:
+        invoice.cgst_amount_paise = total_tax_amount // 2
+        invoice.sgst_amount_paise = total_tax_amount - invoice.cgst_amount_paise
+        invoice.igst_amount_paise = 0
+
     invoice.is_tax_exempt = (total_tax_amount == 0)
 
 

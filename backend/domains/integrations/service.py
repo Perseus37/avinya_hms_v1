@@ -369,7 +369,8 @@ def process_hl7_oru_r01_in_session(
 
         return msg_control_id, True, "", updated_results
 
-    except Exception as exc:
+    except Exception:
         logger.exception("HL7 ORU^R01 processing failed.")
         db.rollback()
-        return "UNKNOWN", False, f"HL7 processing failed: {str(exc)}", []
+        # N-48: Return sanitized, generic HL7 error message without internal system details
+        return "UNKNOWN", False, "HL7 processing failed: Internal laboratory interface error.", []
