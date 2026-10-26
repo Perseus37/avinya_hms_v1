@@ -163,6 +163,42 @@ In development mode (`ENVIRONMENT=development`), interactive OpenAPI documentati
 | **Vite Dev Server (Frontend)**| `http://127.0.0.1:5173/`   | Live Vite HMR development server. |
 | **MLLP Lab Analyzer Socket**| `tcp://127.0.0.1:2575`       | Raw TCP socket receiving HL7 v2 `ORU^R01` messages. |
 
+### 5.1 Authenticating & Testing Endpoints in Swagger UI (`/docs`):
+
+The OpenAPI Swagger interface is configured with first-class **HTTP Bearer** and **Tenant Subdomain** security schemes:
+
+```mermaid
+flowchart LR
+    LOGIN["1. POST /v1/api/auth/login"] --> TOKEN["2. Copy 'access_token'"]
+    TOKEN --> AUTH_BTN["3. Click 'Authorize' in Swagger UI"]
+    AUTH_BTN --> PASTE["4. Paste into 'HTTPBearer' & Enter Tenant Slug"]
+    PASTE --> TEST["5. 'Try it out' on Any Clinical / Billing Endpoint"]
+```
+
+#### Step-by-Step Testing Workflow:
+1. **Acquire a JWT Access Token:**
+   * In Swagger UI (`http://localhost:8000/docs`), expand **`POST /v1/api/auth/login`**.
+   * Click **Try it out** and submit the tenant user credentials:
+     ```json
+     {
+       "username": "admin@example.invalid",
+       "password": "YourHospitalPassword"
+     }
+     ```
+   * Execute the request and copy the `access_token` string from the JSON response.
+2. **Authorize Swagger UI:**
+   * Click the green **Authorize** button at the top-right corner of Swagger UI.
+   * **`HTTPBearer` field:** Paste the `access_token` string (do not include the `"Bearer "` prefix).
+   * **`TenantSubdomain` field (Optional):** Enter the tenant slug (e.g. `default` or the newly created hospital slug like `apollo`). *Note: If you access Swagger UI directly via `http://<slug>.localhost:8000/docs`, the tenant is automatically resolved from the Host header without needing this header.*
+   * Click **Authorize**, then **Close**.
+3. **Execute Any Endpoint:**
+   * All subsequent requests executed in Swagger UI will automatically attach `Authorization: Bearer <token>` and `X-Hospital-Subdomain: <slug>`.
+   * You can now invoke endpoints across all 26 domains (e.g. `GET /v1/api/patients/`, `POST /v1/api/billing/invoices`, `GET /v1/api/pharmacy/inventory/batches`).
+
+#### Testing Control Plane Endpoints (`http://localhost:8080/docs`):
+* Click **Authorize** at the top right of the Control Plane Swagger UI.
+* Paste your operator session token obtained from `POST /api/auth/confirm` into the **`OperatorBearer`** field. All fleet, provisioning, and tenant management endpoints will authenticate automatically.
+
 ---
 
 ## 6. Database & Migration Workflows for Developers

@@ -2,8 +2,9 @@ import hashlib
 import ipaddress
 import json
 from datetime import datetime, timezone
+from typing import Any, Optional
 from fastapi import Depends, Header, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, APIKeyHeader
 import jwt
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -14,7 +15,18 @@ from backend.core.database import TenantContext, get_control_db, get_db, get_red
 from backend.domains.facility.models import Bed
 from backend.domains.identity.models import AuthSession, Permission, Role, User, UserStatusEnum
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/api/auth/login")
+http_bearer = HTTPBearer(
+    auto_error=True,
+    scheme_name="HTTPBearer",
+    description="Paste your JWT Bearer token obtained from /v1/api/auth/login (without 'Bearer ' prefix)",
+)
+tenant_header_scheme = APIKeyHeader(
+    name="X-Hospital-Subdomain",
+    auto_error=False,
+    scheme_name="TenantSubdomain",
+    description="Tenant subdomain slug (e.g. 'default' or your newly created hospital slug)",
+)
+oauth2_scheme = http_bearer
 
 
 def validate_pagination(page: int = 1, page_size: int = 20) -> tuple[int, int]:
@@ -31,10 +43,16 @@ def validate_pagination(page: int = 1, page_size: int = 20) -> tuple[int, int]:
 
 def get_current_user(
     request: Request,
-    token: str = Depends(oauth2_scheme),
+    token: Any = Depends(http_bearer),
+    _tenant_header: Optional[str] = Depends(tenant_header_scheme),
     db: Session = Depends(get_db),
 ) -> User:
     """Verifies the JWT using the specific hospital tenant's cryptographic signing key."""
+    raw_token = (
+        token.credentials
+        if hasattr(token, "credentials")
+        else str(token)
+    )
     tenant: TenantContext = resolve_tenant_context(request)
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -42,7 +60,7 @@ def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(token, tenant.jwt_secret_key, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(raw_token, tenant.jwt_secret_key, algorithms=[settings.ALGORITHM])
         user_id: str = payload.get("sub")
         token_tenant: str = payload.get("tenant_slug")
         token_id = payload.get("jti")
