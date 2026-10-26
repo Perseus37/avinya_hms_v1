@@ -43,6 +43,20 @@ flowchart TD
 4. **`billing`:** Financial administration. Can configure hospital pricing tiers, view Stripe invoice statuses, and manage licensing seat quotas.
 5. **`viewer`:** Read-only access to operational dashboards and system telemetry.
 
+### Operator MFA Enrollment & Authentication Lifecycle:
+All Control Plane access requires mandatory Multi-Factor Authentication (RFC 6238 TOTP):
+1. **First-Time Sign-In:** When a new operator signs into `:8080` (or `POST /api/auth/login`), the API detects un-enrolled MFA and responds with `{"mfa_setup_required": true}`.
+2. **Secret Generation:** The console displays an **Authenticator secret** (e.g. `45Y63XXTZNWQ47GN...`).
+3. **Generating the 6-Digit Code:**
+   * **In Production / Mobile App:** Operators scan or enter the Base32 secret into their corporate authenticator (Google Authenticator, Microsoft Authenticator, 1Password, or Bitwarden).
+   * **In Local Development / Terminal:** Systems engineers can run the built-in generator:
+     ```bash
+     python -m backend.scripts.totp --operator <operator_email>
+     # Or pass the secret directly:
+     python -m backend.scripts.totp <authenticator_secret>
+     ```
+4. **Session Issuance:** The submitted 6-digit code is verified via `POST /api/auth/mfa/confirm`. Upon successful verification, `mfa_enabled` is set to `True` and a server-tracked session token is issued in `control_plane_operator_sessions`. Subsequent logins prompt for the rolling code via `POST /api/auth/mfa/verify-login`.
+
 ---
 
 ## 2. Zero-Touch Tenant Provisioning in Under 60 Seconds

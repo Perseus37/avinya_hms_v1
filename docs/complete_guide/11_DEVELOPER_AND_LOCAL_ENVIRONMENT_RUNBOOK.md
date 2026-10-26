@@ -212,14 +212,42 @@ python -m backend.scripts.bootstrap --reset
 
 ## 7. Seeding Mock Data & Testing Workflows
 
-### 7.1 Creating a Local Control Plane Superadmin Operator:
-To log into the Control Plane UI or invoke operator APIs locally:
+### 7.1 Creating a Local Control Plane Superadmin Operator & MFA Sign-In:
+
+#### Step 1: Provision the Operator Account
+To create a named operator in the Control Plane database:
 ```bash
 python -m backend.scripts.create_control_plane_operator \
   --email "admin@avinya-hms.com" \
   --password "AdminPassword123!" \
   --role "superadmin"
 ```
+
+#### Step 2: Access the Nexus Web Console
+Open **`http://localhost:8080`** in your browser. Enter your credentials (`admin@avinya-hms.com` and `AdminPassword123!`) and click **Continue securely**.
+
+#### Step 3: Completing Initial MFA Enrollment
+Because Avinya enforces zero-trust operator access, every operator requires RFC 6238 TOTP Multi-Factor Authentication. On your first sign-in, the console presents:
+> *"Set up an authenticator app, then enter its current six-digit code."*
+
+Along with an **Authenticator secret** (e.g. `45Y63XXTZNWQ47GN...`).
+
+To generate the required six-digit code:
+* **Option A: Built-in CLI Tool (Fastest for Developers):**
+  Open your terminal and run:
+  ```bash
+  python -m backend.scripts.totp --operator admin@avinya-hms.com
+  # Or pass the secret string copied from the browser screen:
+  python -m backend.scripts.totp 45Y63XXTZNWQ47GN...
+  ```
+  *Output:*
+  ```text
+  Operator 'admin@avinya-hms.com' Authenticator Code: 384910 (valid for 25s)
+  ```
+* **Option B: Mobile Authenticator App:**
+  Open Google Authenticator, Microsoft Authenticator, 1Password, or Bitwarden on your phone. Select **Add Account ➔ Enter code manually**, paste the **Authenticator secret**, and save.
+
+Type the 6-digit code into the **Authenticator code** box and click **Continue securely**. The console authenticates your session and opens the full **Nexus Multi-Tenant Fleet Dashboard**.
 
 ### 7.2 Seeding Synthetic Clinical & Hospital Data:
 To populate your local tenant database with synthetic patients, doctors, wards, beds, and medication batches:
