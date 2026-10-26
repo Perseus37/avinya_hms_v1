@@ -418,8 +418,11 @@ def cancel_diagnostic_order(
     order = db.query(DiagnosticOrder).options(joinedload(DiagnosticOrder.tasks)).filter(DiagnosticOrder.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Diagnostic order not found.")
-    if order.status == OrderStatusEnum.COMPLETED:
-        raise HTTPException(status_code=400, detail="Cannot cancel an already completed diagnostic order.")
+    if order.status in [OrderStatusEnum.COMPLETED, OrderStatusEnum.CANCELLED]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel a diagnostic order in '{order.status.value}' state.",
+        )
 
     order.status = OrderStatusEnum.CANCELLED
     for task in order.tasks:

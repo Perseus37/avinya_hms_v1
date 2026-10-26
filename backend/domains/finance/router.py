@@ -54,6 +54,12 @@ def adjudicate_expense(
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found.")
     
+    if expense.status != ExpenseStatusEnum.PENDING_APPROVAL:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot adjudicate an expense in '{expense.status.value}' state. Only PENDING_APPROVAL expenses can be adjudicated.",
+        )
+    
     if payload.status == ExpenseStatusEnum.REJECTED and not payload.rejection_reason:
         raise HTTPException(status_code=400, detail="Rejection reason is mandatory.")
 

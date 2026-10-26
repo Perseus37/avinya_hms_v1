@@ -11,6 +11,7 @@ from backend.core.database import get_db
 from backend.core.dependencies import RequirePermission, validate_pagination
 from backend.core.date_ranges import resolve_record_date_window
 from backend.domains.billing.models import Invoice, InvoiceLineItem, InvoiceStatusEnum, PaymentMethodEnum, RefundVoucher
+from backend.domains.billing.rcm_services import recalculate_invoice_totals
 from backend.domains.encounters.models import EncounterStatusEnum, PatientEncounter
 from backend.domains.identity.models import User
 from backend.domains.pharmacy.models import (
@@ -692,12 +693,20 @@ def return_dispensed_medication(
             )
             if matching_line:
                 if matching_line.quantity <= ret.quantity_to_return:
-                    invoice.total_amount_paise = max(0, invoice.total_amount_paise - matching_line.total_price_paise)
+                    if matching_line in invoice.line_items:
+                        invoice.line_items.remove(matching_line)
                     db.delete(matching_line)
                 else:
                     matching_line.quantity -= ret.quantity_to_return
                     matching_line.total_price_paise = matching_line.quantity * matching_line.unit_price_paise
-                    invoice.total_amount_paise = max(0, invoice.total_amount_paise - credit_paise)
+                    if matching_line.gst_rate_percent and matching_line.gst_rate_percent > 0:
+                        matching_line.tax_amount_paise = round(
+                            (matching_line.total_price_paise * matching_line.gst_rate_percent) / 100
+                        )
+                db.flush()
+                recalculate_invoice_totals(invoice)
+                if invoice.discount_amount_paise and invoice.discount_amount_paise > invoice.total_amount_paise:
+                    invoice.discount_amount_paise = invoice.total_amount_paise
 
         log = PharmacyReturnLog(
             prescription_id=rx.id,

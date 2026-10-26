@@ -156,6 +156,15 @@ def auto_bill_ipd_bed_stay(db: Session, admission: InpatientAdmission, discharge
         total_paise = billable_days * historical_rate
 
         desc = f"IPD BED CHARGE: Bed {bed.bed_number} ({bed.bed_type.value})"
+        existing = db.execute(
+            select(InvoiceLineItem).where(
+                InvoiceLineItem.invoice_id == invoice.id,
+                InvoiceLineItem.description == desc,
+            )
+        ).scalars().first()
+        if existing:
+            continue
+
         line_item = InvoiceLineItem(
             invoice_id=invoice.id,
             service_id=None,
@@ -240,6 +249,8 @@ def auto_bill_diagnostic_order(db: Session, order: DiagnosticOrder, ordered_serv
 
 def reverse_cancelled_diagnostic_order_billing(db: Session, order: DiagnosticOrder) -> None:
     """Removes auto-billed diagnostic line items from a DRAFT invoice when the diagnostic order is cancelled."""
+    from backend.domains.billing.rcm_services import recalculate_invoice_totals
+
     prefix = f"DIAGNOSTICS [Order #{order.id}]:"
     draft_invoices = list(
         db.execute(
@@ -262,10 +273,13 @@ def reverse_cancelled_diagnostic_order_billing(db: Session, order: DiagnosticOrd
             .all()
         )
         for item in items:
-            inv.total_amount_paise = max(0, inv.total_amount_paise - item.total_price_paise)
-            if inv.discount_amount_paise > inv.total_amount_paise:
-                inv.discount_amount_paise = inv.total_amount_paise
+            if item in inv.line_items:
+                inv.line_items.remove(item)
             db.delete(item)
+        db.flush()
+        recalculate_invoice_totals(inv)
+        if inv.discount_amount_paise > inv.total_amount_paise:
+            inv.discount_amount_paise = inv.total_amount_paise
 
 def auto_bill_completed_surgery(db: Session, surgery: SurgicalSchedule) -> None:
     """

@@ -257,6 +257,12 @@ def update_surgery_status(
     if not surgery:
         raise HTTPException(status_code=404, detail="Surgical schedule not found.")
 
+    if surgery.status in [SurgeryStatusEnum.COMPLETED, SurgeryStatusEnum.CANCELLED]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot transition surgery from terminal state '{surgery.status.value}'.",
+        )
+
     chk = surgery.safety_checklist
     now_utc = datetime.now(timezone.utc)
 

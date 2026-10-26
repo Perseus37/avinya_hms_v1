@@ -453,6 +453,23 @@ def reverse_payment(
     if not receipt:
         raise HTTPException(status_code=404, detail="Payment receipt not found on this invoice.")
 
+    if receipt.payment_method == PaymentMethodEnum.INSURANCE:
+        raise HTTPException(
+            status_code=400,
+            detail="Insurance settlement receipts cannot be reversed directly; dispute or reverse via Insurance Claims workflow.",
+        )
+
+    if receipt.payment_method == PaymentMethodEnum.ADVANCE_ADJUSTMENT and receipt.transaction_reference:
+        dep = db.execute(
+            select(PatientDeposit)
+            .where(PatientDeposit.deposit_number == receipt.transaction_reference)
+            .with_for_update()
+        ).scalar_one_or_none()
+        if dep:
+            dep.remaining_balance_paise += receipt.amount_paid_paise
+            if dep.status == DepositStatusEnum.EXHAUSTED:
+                dep.status = DepositStatusEnum.ACTIVE
+
     invoice.amount_paid_paise = max(0, invoice.amount_paid_paise - receipt.amount_paid_paise)
     if invoice.amount_paid_paise == 0:
         invoice.status = InvoiceStatusEnum.UNPAID
