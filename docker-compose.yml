@@ -24,7 +24,10 @@ services:
       start_period: 10s
 
   db-init:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
     image: avinya-hms-api:latest
     restart: "no"
     env_file: .env
@@ -62,7 +65,7 @@ services:
     volumes:
       - hms_clamav_db:/var/lib/clamav
     healthcheck:
-      test: ["CMD-SHELL", "clamdscan --ping=1 --wait=10 >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "clamdscan --ping 1 >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 15s
       retries: 5

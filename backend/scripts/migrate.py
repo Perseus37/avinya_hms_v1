@@ -28,24 +28,28 @@ from backend.control_plane.models import (
 )
 from backend.core.database import Base, ControlSessionLocal, ensure_postgres_db_exists
 from backend.core.seed import ensure_permissions_exist
+import backend.domains.abdm.models  # noqa: F401
+import backend.domains.billing.models  # noqa: F401
+import backend.domains.bloodbank.models  # noqa: F401
+import backend.domains.clinical.models  # noqa: F401
 import backend.domains.diagnostics.models  # noqa: F401
 import backend.domains.encounters.models  # noqa: F401
 import backend.domains.facility.models  # noqa: F401
-import backend.domains.identity.models  # noqa: F401
-import backend.domains.patients.models  # noqa: F401
-import backend.domains.billing.models  # noqa: F401
-import backend.domains.pharmacy.models  # noqa: F401
-import backend.domains.insurance.models  # noqa: F401
-import backend.domains.clinical.models  # noqa: F401
-import backend.domains.surgery.models  # noqa: F401
-import backend.domains.bloodbank.models  # noqa: F401
-import backend.domains.reports.models  # noqa: F401
-import backend.domains.policies.models  # noqa: F401
-import backend.domains.finance.models  # noqa: F401
-import backend.domains.integrations.models  # noqa: F401
 import backend.domains.federation.models  # noqa: F401
+import backend.domains.finance.models  # noqa: F401
+import backend.domains.identity.models  # noqa: F401
+import backend.domains.insurance.models  # noqa: F401
+import backend.domains.integrations.models  # noqa: F401
+import backend.domains.patients.models  # noqa: F401
+import backend.domains.pharmacy.models  # noqa: F401
+import backend.domains.policies.models  # noqa: F401
+import backend.domains.privacy.models  # noqa: F401
 import backend.domains.procurement.models  # noqa: F401
-import backend.domains.identity.models #noqa: F401
+import backend.domains.quality.models  # noqa: F401
+import backend.domains.reports.models  # noqa: F401
+import backend.domains.service_ops.models  # noqa: F401
+import backend.domains.surgery.models  # noqa: F401
+import backend.domains.workforce.models  # noqa: F401
 
 
 def _development_schema_autocreate_enabled() -> bool:
