@@ -99,6 +99,7 @@ class Invoice(AuditMixin, Base):
     cgst_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sgst_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     igst_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_interstate: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_tax_exempt: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     hsn_sac_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text)

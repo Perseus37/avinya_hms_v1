@@ -157,6 +157,7 @@ class BCMAVerificationRequest(BaseModel):
     scanned_patient_barcode: str
     scanned_medication_barcode: str
     dose_given: Optional[str] = None
+    route: Optional[str] = None
     scheduled_time: Optional[datetime] = None
     override_warning: bool = False
     override_reason: Optional[str] = None
@@ -168,6 +169,7 @@ class BCMAVerificationResponse(BaseModel):
     patient_matched: bool
     medication_matched: bool
     dose_matched: bool
+    route_matched: bool = True
     time_status: str  # ON_TIME, EARLY, LATE, PRN
     messages: List[str]
     emar_log_id: Optional[int] = None

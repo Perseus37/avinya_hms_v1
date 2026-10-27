@@ -32,11 +32,117 @@ from backend.domains.pharmacy.models import (
 logger = logging.getLogger("avinya.pharmacy.services")
 
 
+# -----------------------------------------------------------------------------
+# BCMA Dose and Route Tokens & Vocabularies
+# -----------------------------------------------------------------------------
+
+VALID_DOSE_UNITS = {
+    "mg", "mcg", "ug", "g", "gram", "grams", "kg",
+    "ml", "l", "liter", "liters", "litre", "litres",
+    "iu", "unit", "units",
+    "meq", "mmol",
+    "tablet", "tablets", "tab", "tabs",
+    "capsule", "capsules", "cap", "caps",
+    "drop", "drops", "gtt",
+    "puff", "puffs",
+    "patch", "patches",
+    "ampoule", "ampoules", "amp",
+    "vial", "vials",
+    "suppository", "suppositories",
+    "spray", "sprays",
+    "mg/ml", "mcg/ml", "iu/ml", "%",
+}
+
+MASS_VOLUME_DOSE_UNITS = {
+    "mg", "mcg", "ug", "g", "gram", "grams", "kg",
+    "ml", "l", "liter", "liters", "litre", "litres",
+    "iu", "unit", "units",
+    "meq", "mmol",
+    "mg/ml", "mcg/ml", "iu/ml", "%",
+}
+
+NON_DOSE_WORDS = {
+    "day", "days", "d", "daily", "times", "time", "hr", "hrs", "hour", "hours",
+    "week", "weeks", "wk", "wks", "month", "months", "mo", "min", "minute", "minutes",
+    "dose", "doses", "od", "bd", "bid", "tid", "qid", "prn", "stat", "sos", "x", "every",
+}
+
+ROUTE_ALIASES = {
+    "oral": "ORAL",
+    "po": "ORAL",
+    "by mouth": "ORAL",
+    "mouth": "ORAL",
+    "per os": "ORAL",
+    "tablet": "ORAL",
+    "capsule": "ORAL",
+    "syrup": "ORAL",
+    "iv": "IV",
+    "intravenous": "IV",
+    "iv push": "IV",
+    "iv piggyback": "IV",
+    "iv infusion": "IV",
+    "im": "IM",
+    "intramuscular": "IM",
+    "sc": "SC",
+    "sq": "SC",
+    "subcut": "SC",
+    "subcutaneous": "SC",
+    "topical": "TOPICAL",
+    "transdermal": "TOPICAL",
+    "inhalation": "INHALATION",
+    "inhaled": "INHALATION",
+    "nebulized": "INHALATION",
+    "nebulizer": "INHALATION",
+    "rectal": "RECTAL",
+    "pr": "RECTAL",
+    "suppository": "RECTAL",
+    "sublingual": "SUBLINGUAL",
+    "sl": "SUBLINGUAL",
+    "ophthalmic": "OPHTHALMIC",
+    "eye": "OPHTHALMIC",
+    "otic": "OTIC",
+    "ear": "OTIC",
+    "nasal": "NASAL",
+}
+
+UNIT_NORMALIZATION = {
+    "kg": (1000000.0, "mg"),
+    "g": (1000.0, "mg"),
+    "gram": (1000.0, "mg"),
+    "grams": (1000.0, "mg"),
+    "mg": (1.0, "mg"),
+    "mcg": (0.001, "mg"),
+    "ug": (0.001, "mg"),
+    "l": (1000.0, "ml"),
+    "liter": (1000.0, "ml"),
+    "liters": (1000.0, "ml"),
+    "litre": (1000.0, "ml"),
+    "litres": (1000.0, "ml"),
+    "ml": (1.0, "ml"),
+    "tab": (1.0, "tablet"),
+    "tabs": (1.0, "tablet"),
+    "tablet": (1.0, "tablet"),
+    "tablets": (1.0, "tablet"),
+    "cap": (1.0, "capsule"),
+    "caps": (1.0, "capsule"),
+    "capsule": (1.0, "capsule"),
+    "capsules": (1.0, "capsule"),
+    "amp": (1.0, "ampoule"),
+    "ampoule": (1.0, "ampoule"),
+    "ampoules": (1.0, "ampoule"),
+    "vial": (1.0, "vial"),
+    "vials": (1.0, "vial"),
+    "iu": (1.0, "iu"),
+    "unit": (1.0, "iu"),
+    "units": (1.0, "iu"),
+}
+
+
 def _extract_dose_tokens(text: Optional[str]) -> List[Tuple[float, str]]:
     """
     Extracts structured (quantity, unit) pairs from dosage text.
     Handles '125 mg', '250mg IV push', '1 tablet twice daily', '50mcg/ml', '0.5 ml', '25mg'.
-    Units are normalized to lowercase and singularized ('tablets' -> 'tablet').
+    Filters out duration/frequency tokens ('5 days', '3 times').
     """
     if not text:
         return []
@@ -45,37 +151,75 @@ def _extract_dose_tokens(text: Optional[str]) -> List[Tuple[float, str]]:
     for num_str, unit in matches:
         try:
             val = float(num_str)
-            clean_unit = unit.lower().rstrip("s") if unit else ""
+            raw_unit = unit.lower().strip() if unit else ""
+            clean_unit = raw_unit.rstrip("s") if len(raw_unit) > 2 and raw_unit.endswith("s") else raw_unit
+            if clean_unit in NON_DOSE_WORDS:
+                continue
             tokens.append((val, clean_unit))
         except ValueError:
             pass
     return tokens
 
 
+def _extract_route(text: Optional[str]) -> Optional[str]:
+    """Extracts standardized administration route from text (e.g. 'IV', 'ORAL', 'IM', 'SC')."""
+    if not text:
+        return None
+    lower = text.lower()
+    for phrase in ["by mouth", "iv push", "iv piggyback", "iv infusion", "per os"]:
+        if phrase in lower:
+            return ROUTE_ALIASES[phrase]
+    words = re.findall(r"\b[a-zA-Z]+\b", lower)
+    for w in words:
+        if w in ROUTE_ALIASES:
+            return ROUTE_ALIASES[w]
+    return None
+
+
 def _is_dose_match(given_text: str, target_text: Optional[str]) -> bool:
     """
     Compares administered dose against target instruction or drug strength.
-    Uses numeric quantity and unit comparison to prevent false substring positives
-    (e.g., '25 mg' matching inside '125 mg' or '50mg' matching inside '250mg').
+    Uses numeric quantity and unit normalization to prevent false substring positives,
+    rejects blank doses, and prevents bare integers without units from matching measured doses.
     """
-    if not target_text:
+    if not given_text or not str(given_text).strip():
         return False
+    if not target_text or not str(target_text).strip():
+        return False
+
     given_tokens = _extract_dose_tokens(given_text)
     target_tokens = _extract_dose_tokens(target_text)
 
     if given_tokens and target_tokens:
         for g_val, g_unit in given_tokens:
             for t_val, t_unit in target_tokens:
-                if g_val == t_val:
-                    if not g_unit or not t_unit or g_unit == t_unit:
+                # If one has a unit and the other does not, they cannot match (bare number cannot match measured dose)
+                if bool(g_unit) != bool(t_unit):
+                    continue
+
+                if not g_unit and not t_unit:
+                    if abs(g_val - t_val) < 1e-6:
+                        return True
+                    continue
+
+                # Both have units: normalize
+                g_factor, g_norm_unit = UNIT_NORMALIZATION.get(g_unit, (1.0, g_unit))
+                t_factor, t_norm_unit = UNIT_NORMALIZATION.get(t_unit, (1.0, t_unit))
+
+                if g_norm_unit == t_norm_unit:
+                    if abs((g_val * g_factor) - (t_val * t_factor)) < 1e-6:
                         return True
         return False
 
     norm_given = re.sub(r"\s+", "", str(given_text)).strip().lower()
     norm_target = re.sub(r"\s+", "", str(target_text)).strip().lower()
-    if norm_given == norm_target:
+    if norm_given and norm_given == norm_target:
         return True
-    pattern = r"\b" + re.escape(str(given_text).strip().lower()) + r"\b"
+
+    clean_given = str(given_text).strip().lower()
+    if not clean_given:
+        return False
+    pattern = r"\b" + re.escape(clean_given) + r"\b"
     return bool(re.search(pattern, str(target_text).lower()))
 
 
@@ -86,6 +230,7 @@ def evaluate_bcma_five_rights(
     scanned_patient_barcode: str,
     scanned_medication_barcode: str,
     dose_given: Optional[str] = None,
+    route: Optional[str] = None,
     scheduled_time: Optional[datetime] = None,
 ) -> dict:
     """
@@ -172,16 +317,48 @@ def evaluate_bcma_five_rights(
     prescribed_dose = rx_item.dosage_instruction
     actual_dose = dose_given or prescribed_dose
     dose_matched = True
-    if dose_given:
-        matched_prescription = _is_dose_match(dose_given, prescribed_dose)
-        matched_strength = _is_dose_match(dose_given, med.strength)
-        if not matched_prescription and not matched_strength:
+    if dose_given is not None:
+        if not dose_given.strip():
             dose_matched = False
+            messages.append("RIGHT DOSE VIOLATION: Administered dose cannot be blank.")
+        else:
+            prescribed_tokens = _extract_dose_tokens(prescribed_dose)
+            has_explicit_mass_volume = any(u in MASS_VOLUME_DOSE_UNITS for _, u in prescribed_tokens)
+
+            matched_prescription = _is_dose_match(dose_given, prescribed_dose)
+            if has_explicit_mass_volume:
+                if not matched_prescription:
+                    dose_matched = False
+                    messages.append(
+                        f"RIGHT DOSE VIOLATION: Administered dose '{dose_given}' does not match prescribed instruction '{prescribed_dose}'."
+                    )
+            else:
+                matched_strength = _is_dose_match(dose_given, med.strength)
+                if not matched_prescription and not matched_strength:
+                    dose_matched = False
+                    messages.append(
+                        f"RIGHT DOSE VIOLATION: Administered dose '{dose_given}' does not match prescribed instruction '{prescribed_dose}' or drug strength '{med.strength}'."
+                    )
+
+    # 4. Right Route (Order route validation)
+    prescribed_route = _extract_route(prescribed_dose)
+    if not prescribed_route and med.form:
+        if med.form.upper() in {"INJECTION", "INFUSION"}:
+            prescribed_route = "IV"
+        elif med.form.upper() in {"TABLET", "CAPSULE", "SYRUP"}:
+            prescribed_route = "ORAL"
+
+    administered_route = _extract_route(route) or _extract_route(dose_given)
+
+    route_matched = True
+    if prescribed_route and administered_route:
+        if prescribed_route != administered_route:
+            route_matched = False
             messages.append(
-                f"RIGHT DOSE VIOLATION: Administered dose '{dose_given}' does not match prescribed instruction '{prescribed_dose}' or drug strength '{med.strength}'."
+                f"RIGHT ROUTE VIOLATION: Administered route '{administered_route}' does not match prescribed route '{prescribed_route}'."
             )
 
-    # 4. Right Time (+/- 60 minutes)
+    # 5. Right Time (+/- 60 minutes)
     time_status = "ON_TIME"
     if scheduled_time:
         if scheduled_time.tzinfo is None:
@@ -203,7 +380,7 @@ def evaluate_bcma_five_rights(
     else:
         time_status = "PRN"
 
-    is_blocked = not patient_matched or not medication_matched or not dose_matched
+    is_blocked = not patient_matched or not medication_matched or not dose_matched or not route_matched
     is_warning = time_status in ("EARLY", "LATE")
 
     return {
@@ -214,6 +391,7 @@ def evaluate_bcma_five_rights(
         "patient_matched": patient_matched,
         "medication_matched": medication_matched,
         "dose_matched": dose_matched,
+        "route_matched": route_matched,
         "time_status": time_status,
         "is_blocked": is_blocked,
         "is_warning": is_warning,
@@ -230,13 +408,14 @@ def execute_bcma_administration(
     scanned_patient_barcode: str,
     scanned_medication_barcode: str,
     dose_given: Optional[str] = None,
+    route: Optional[str] = None,
     scheduled_time: Optional[datetime] = None,
     override_warning: bool = False,
     override_reason: Optional[str] = None,
 ) -> dict:
     """
     Executes full BCMA validation and atomically creates eMAR and BCMA audit log records.
-    Hard-stops on Patient or Medication mismatch. Enforces documentation for Time Window overrides.
+    Hard-stops on Patient, Medication, Dose, or Route mismatch. Enforces documentation for Time Window overrides.
     """
     eval_result = evaluate_bcma_five_rights(
         session=session,
@@ -245,6 +424,7 @@ def execute_bcma_administration(
         scanned_patient_barcode=scanned_patient_barcode,
         scanned_medication_barcode=scanned_medication_barcode,
         dose_given=dose_given,
+        route=route,
         scheduled_time=scheduled_time,
     )
 
@@ -252,7 +432,7 @@ def execute_bcma_administration(
     med = eval_result["medication"]
     patient = eval_result["patient"]
 
-    # 1. Critical Hard-Stops (Patient or Drug Mismatch)
+    # 1. Critical Hard-Stops (Patient, Drug, Dose, or Route Mismatch)
     if eval_result["is_blocked"]:
         audit = BCMAScanAuditLog(
             encounter_id=encounter_id,
@@ -263,6 +443,7 @@ def execute_bcma_administration(
             patient_matched=eval_result["patient_matched"],
             medication_matched=eval_result["medication_matched"],
             dose_matched=eval_result["dose_matched"],
+            route_matched=eval_result["route_matched"],
             time_status=eval_result["time_status"],
             verification_status="BLOCKED_MISMATCH",
             override_reason=override_reason,
@@ -289,6 +470,7 @@ def execute_bcma_administration(
                 patient_matched=eval_result["patient_matched"],
                 medication_matched=eval_result["medication_matched"],
                 dose_matched=eval_result["dose_matched"],
+                route_matched=eval_result["route_matched"],
                 time_status=eval_result["time_status"],
                 verification_status="WARNING",
                 override_reason=None,
@@ -348,6 +530,7 @@ def execute_bcma_administration(
         patient_matched=True,
         medication_matched=True,
         dose_matched=True,
+        route_matched=True,
         time_status=eval_result["time_status"],
         verification_status=verification_status,
         override_reason=override_reason,
@@ -369,6 +552,7 @@ def execute_bcma_administration(
         "patient_matched": True,
         "medication_matched": True,
         "dose_matched": True,
+        "route_matched": True,
         "time_status": eval_result["time_status"],
         "messages": eval_result["messages"] or ["All 5 Rights successfully verified at bedside."],
         "emar_log_id": emar_log.id,

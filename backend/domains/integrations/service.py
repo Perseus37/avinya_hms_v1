@@ -173,11 +173,16 @@ def process_hl7_oru_r01_in_session(
         patient_tasks = db.execute(active_tasks_stmt).scalars().all()
         tasks_by_id = {t.id: t for t in patient_tasks}
 
-        # N-41: Filter service code lookup strictly to unverified/uncancelled pending tasks (FIFO order)
-        tasks_by_service_code: Dict[str, List[DiagnosticTask]] = {}
+        # N-41: Filter service code lookup strictly to unresulted pending tasks (FIFO order)
+        # Prevents repeat tests from binding to older tasks that already have results entered
+        unresulted_tasks_by_service_code: Dict[str, List[DiagnosticTask]] = {}
         for t in patient_tasks:
-            if t.service and t.service.code and t.status not in {TaskStatusEnum.VERIFIED, TaskStatusEnum.CANCELLED}:
-                tasks_by_service_code.setdefault(t.service.code.upper(), []).append(t)
+            if (
+                t.service
+                and t.service.code
+                and t.status in {TaskStatusEnum.PENDING, TaskStatusEnum.SAMPLE_COLLECTED, TaskStatusEnum.IN_PROGRESS}
+            ):
+                unresulted_tasks_by_service_code.setdefault(t.service.code.upper(), []).append(t)
 
         # Check for equipment test mappings if equipment_id provided
         mapping_dict = {}
@@ -212,11 +217,14 @@ def process_hl7_oru_r01_in_session(
                     if obr_code in mapping_dict:
                         srv_id = mapping_dict[obr_code]
                         for t in patient_tasks:
-                            if t.service_id == srv_id and t.status not in {TaskStatusEnum.VERIFIED, TaskStatusEnum.CANCELLED}:
+                            if t.service_id == srv_id and t.status in {TaskStatusEnum.PENDING, TaskStatusEnum.SAMPLE_COLLECTED, TaskStatusEnum.IN_PROGRESS}:
                                 obr_task = t
                                 break
-                    elif obr_code in tasks_by_service_code and tasks_by_service_code[obr_code]:
-                        obr_task = tasks_by_service_code[obr_code][0]
+                    elif obr_code in unresulted_tasks_by_service_code:
+                        candidates = unresulted_tasks_by_service_code[obr_code]
+                        if len(candidates) > 1:
+                            return msg_control_id, False, f"Ambiguous repeat test: multiple pending tasks exist for service '{obr_code}' without order control number (OBR-2/OBR-3 required)", []
+                        obr_task = candidates[0]
 
             for obx in obx_list:
                 if len(obx) <= 5:
@@ -228,7 +236,7 @@ def process_hl7_oru_r01_in_session(
                 units = obx[6] if len(obx) > 6 else ""
                 ref_range = obx[7] if len(obx) > 7 else ""
                 abnormal_flag = obx[8].strip().upper() if len(obx) > 8 and obx[8] else ""
-                obs_status = obx[11] if len(obx) > 11 else "F"
+                obs_status = obx[11].strip().upper() if len(obx) > 11 and obx[11] else "F"
 
                 parts = obs_ident.split("^")
                 test_code = parts[0].strip()
@@ -244,11 +252,14 @@ def process_hl7_oru_r01_in_session(
                 elif test_code.upper() in mapping_dict:
                     srv_id = mapping_dict[test_code.upper()]
                     for t in patient_tasks:
-                        if t.service_id == srv_id and t.status not in {TaskStatusEnum.VERIFIED, TaskStatusEnum.CANCELLED}:
+                        if t.service_id == srv_id and t.status in {TaskStatusEnum.PENDING, TaskStatusEnum.SAMPLE_COLLECTED, TaskStatusEnum.IN_PROGRESS}:
                             matched_task = t
                             break
-                elif test_code.upper() in tasks_by_service_code and tasks_by_service_code[test_code.upper()]:
-                    matched_task = tasks_by_service_code[test_code.upper()][0]
+                elif test_code.upper() in unresulted_tasks_by_service_code:
+                    candidates = unresulted_tasks_by_service_code[test_code.upper()]
+                    if len(candidates) > 1:
+                        return msg_control_id, False, f"Ambiguous repeat test: multiple pending tasks exist for service '{test_code}' without order control number (OBR-2/OBR-3 required)", []
+                    matched_task = candidates[0]
 
                 if matched_task:
                     obs_dict = {
@@ -291,6 +302,8 @@ def process_hl7_oru_r01_in_session(
             # Format result value
             prior_result = task.result_value
             is_amended = any(itm.get("status") in {"C", "A", "CORRECTED", "AMENDED"} for itm in obs_items)
+            is_unobtainable = any(itm.get("status") in {"X", "CANNOT_OBTAIN", "REJECTED"} for itm in obs_items)
+            is_preliminary = any(itm.get("status") in {"P", "PRELIMINARY"} for itm in obs_items)
 
             if len(obs_items) == 1:
                 single_val = obs_items[0]["value"]
@@ -337,7 +350,14 @@ def process_hl7_oru_r01_in_session(
                 except Exception:
                     logger.debug("LIS delta check evaluation skipped or failed for task %s", task.id)
 
-            task.status = TaskStatusEnum.RESULT_ENTERED
+            if is_unobtainable:
+                task.status = TaskStatusEnum.SAMPLE_REJECTED
+                task.result_notes = f"{task.result_notes or ''} [UNOBTAINABLE: Result could not be obtained by analyzer (OBX-11=X)]".strip()
+            elif is_preliminary:
+                task.status = TaskStatusEnum.IN_PROGRESS
+                task.result_notes = f"{task.result_notes or ''} [PRELIMINARY: Result is preliminary and pending laboratory verification (OBX-11=P)]".strip()
+            else:
+                task.status = TaskStatusEnum.RESULT_ENTERED
 
             # Update parent order status
             order_tasks = task.order.tasks
@@ -345,6 +365,8 @@ def process_hl7_oru_r01_in_session(
                 task.order.status = OrderStatusEnum.COMPLETED
             elif any(t.status in [TaskStatusEnum.RESULT_ENTERED, TaskStatusEnum.VERIFIED] for t in order_tasks):
                 task.order.status = OrderStatusEnum.PARTIAL
+            elif any(t.status == TaskStatusEnum.IN_PROGRESS for t in order_tasks):
+                task.order.status = OrderStatusEnum.IN_PROGRESS
 
             updated_results.append({
                 "task_id": task.id,

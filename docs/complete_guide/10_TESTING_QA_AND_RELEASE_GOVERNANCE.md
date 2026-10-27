@@ -1,5 +1,5 @@
 # Chapter 10: Testing, Quality Assurance & Release Governance
-## The 443-Test Verification Harness, Security Gates & CI/CD Release Protocols
+## The 451-Test Verification Harness, Security Gates & CI/CD Release Protocols
 
 ---
 
@@ -16,7 +16,7 @@ Avinya HMS enforces an automated, multi-layered testing pyramid:
 ```mermaid
 flowchart TD
     subgraph GATES["Automated Quality & Release Gates"]
-        PYTEST["1. 443 Pytest Integration Suites (100% Passing)"]
+        PYTEST["1. 451 Pytest Integration Suites (100% Passing)"]
         DIFF["2. Schema Parity Diff Detector (0 Schema Drift)"]
         BANDIT["3. Bandit Security Linter (0 High / 0 Medium Issues)"]
         AUDIT["4. Strict pip-audit (0 Known CVEs)"]
@@ -34,9 +34,9 @@ flowchart TD
 
 ---
 
-## 2. Complete Inventory of the 63 Test Suites
+## 2. Complete Inventory of the 64 Test Suites
 
-The test suite contains **443 passing tests, 2 skipped across 63 test modules** in `tests/`:
+The test suite contains **451 passing tests, 2 skipped across 64 test modules** in `tests/`:
 
 | Test Suite File | Domain & Responsibility Verified |
 | :--- | :--- |
@@ -94,6 +94,7 @@ The test suite contains **443 passing tests, 2 skipped across 63 test modules** 
 | `tests/test_51_abdm_and_nhcx_gateways.py` | ABDM M1 (ABHA), M2 (Consent), M3 (FHIR Bundles), and NHCX claims exchange gateway. |
 | `tests/test_52_hl7_mllp_analyzer_interface.py` | Native HL7 v2 MLLP unsolicited ORU^R01 parser, equipment test mappings, and panic alerts. |
 | `tests/test_53_nabh_quality_indicators.py` | NABH 5th Ed / JCI 7th Ed quality indicators (CAUTI, CLABSI, VAP, SSI, Falls) and CAPA register. |
+| `tests/test_53_audit_round_16_remediations.py` | Audit Round 16 remediations: retention clock discharge join, bed billing transfer deduplication, persistent interstate GST, NEWS2 parameter completeness, BCMA tokenized dosage & route verification, HL7 OBX preliminary/cancelled filtering & repeat task matching. |
 | `tests/test_backup_service.py` | Off-host backup archive creation and SHA-256 integrity sidecar validation. |
 | `tests/test_envelope.py` | Column-level AES-256-GCM envelope encryption and key rotation. |
 | `tests/test_postgres17_integration.py` | Live PostgreSQL 17 multi-tenant migration parity and restore validation (CI opt-in). |

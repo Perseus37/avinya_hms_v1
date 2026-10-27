@@ -299,6 +299,8 @@ async def request_correlation_middleware(request: Request, call_next):
             route = request.scope.get("route")
             if route and hasattr(route, "path"):
                 norm_path = str(route.path)
+            elif response.status_code == 404:
+                norm_path = "UNKNOWN"
             else:
                 norm_path = normalize_metric_path(request.url.path)
             HTTP_REQUESTS_TOTAL.labels(
