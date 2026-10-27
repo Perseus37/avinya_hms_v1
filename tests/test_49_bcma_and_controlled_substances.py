@@ -104,6 +104,7 @@ def test_bcma_five_rights_successful_bedside_administration(client, superuser_he
         "scanned_patient_barcode": patient["mrn"],
         "scanned_medication_barcode": "BARCODE-AMOX-12345",
         "dose_given": "500mg",
+        "route": "ORAL",
         "scheduled_time": now_iso,
         "override_warning": False,
     }
@@ -145,6 +146,7 @@ def test_bcma_patient_wristband_mismatch_triggers_critical_hard_stop(client, sup
         "scanned_patient_barcode": patient_b["mrn"],
         "scanned_medication_barcode": med["code"],
         "dose_given": "500mg",
+        "route": "ORAL",
         "override_warning": False,
     }
 
@@ -175,6 +177,7 @@ def test_bcma_wrong_medication_scan_triggers_critical_hard_stop(client, superuse
         "scanned_patient_barcode": patient["mrn"],
         "scanned_medication_barcode": "MED_SOME_OTHER_DRUG",
         "dose_given": "400mg",
+        "route": "ORAL",
         "override_warning": False,
     }
 
@@ -208,6 +211,8 @@ def test_bcma_timing_window_early_late_warning_and_clinical_override(client, sup
         "prescription_item_id": rx_item_id,
         "scanned_patient_barcode": patient["mrn"],
         "scanned_medication_barcode": med["code"],
+        "dose_given": "500mg",
+        "route": "ORAL",
         "scheduled_time": future_sched,
         "override_warning": False,
     }
@@ -460,6 +465,7 @@ def test_bcma_safety_controls_dose_mismatch_generic_rejection_and_duplicates(cli
             "scanned_patient_barcode": patient["mrn"],
             "scanned_medication_barcode": "ampicillin",  # raw generic name
             "dose_given": "250mg",
+            "route": "IV",
         },
     )
     assert res_generic.status_code == 409
@@ -475,6 +481,7 @@ def test_bcma_safety_controls_dose_mismatch_generic_rejection_and_duplicates(cli
             "scanned_patient_barcode": patient["mrn"],
             "scanned_medication_barcode": "BARCODE-AMPI-555",
             "dose_given": "1000mg",
+            "route": "IV",
         },
     )
     assert res_dose.status_code == 409
@@ -490,6 +497,7 @@ def test_bcma_safety_controls_dose_mismatch_generic_rejection_and_duplicates(cli
             "scanned_patient_barcode": patient["mrn"],
             "scanned_medication_barcode": "BARCODE-AMPI-555",
             "dose_given": "25mg",
+            "route": "IV",
         },
     )
     assert res_sub_dose.status_code == 409
@@ -505,6 +513,7 @@ def test_bcma_safety_controls_dose_mismatch_generic_rejection_and_duplicates(cli
             "scanned_patient_barcode": patient["mrn"],
             "scanned_medication_barcode": "BARCODE-AMPI-555",
             "dose_given": "250mg",
+            "route": "IV",
         },
     )
     assert res_ok.status_code in (200, 201), res_ok.text
@@ -519,6 +528,7 @@ def test_bcma_safety_controls_dose_mismatch_generic_rejection_and_duplicates(cli
             "scanned_patient_barcode": patient["mrn"],
             "scanned_medication_barcode": "BARCODE-AMPI-555",
             "dose_given": "250mg",
+            "route": "IV",
         },
     )
     assert res_dup.status_code == 409

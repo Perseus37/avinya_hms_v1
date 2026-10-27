@@ -542,7 +542,7 @@ def calculate_news2_score(
     spo2_percent: Optional[int] = None,
     bp_systolic: Optional[int] = None,
     pulse_bpm: Optional[int] = None,
-    consciousness: Optional[str] = "ALERT",
+    consciousness: Optional[str] = None,
     temperature_f: Optional[float] = None,
     on_supplemental_oxygen: bool = False,
     spo2_scale: int = 1,
@@ -685,15 +685,16 @@ def calculate_news2_score(
             any_parameter_is_3 = True
 
     # 6. Consciousness (ACVPU Scale: Alert, Confusion, Voice, Pain, Unresponsive)
-    c_str = (consciousness or "ALERT").strip().upper()
-    if c_str in {"ALERT", "A"}:
-        pts = 0
-    else:
-        pts = 3
-    sub_scores["consciousness"] = pts
-    total_score += pts
-    if pts == 3:
-        any_parameter_is_3 = True
+    if consciousness is not None and str(consciousness).strip():
+        c_str = str(consciousness).strip().upper()
+        if c_str in {"ALERT", "A"}:
+            pts = 0
+        else:
+            pts = 3
+        sub_scores["consciousness"] = pts
+        total_score += pts
+        if pts == 3:
+            any_parameter_is_3 = True
 
     # 7. Temperature (°F / °C normalized)
     if temperature_f is not None:
@@ -739,8 +740,9 @@ def calculate_news2_score(
         qsofa += 1
     if respiratory_rate is not None and respiratory_rate >= 22:
         qsofa += 1
-    if c_str not in {"ALERT", "A"}:
-        qsofa += 1
+    if consciousness is not None and str(consciousness).strip():
+        if str(consciousness).strip().upper() not in {"ALERT", "A"}:
+            qsofa += 1
 
     return {
         "news2_score": total_score,

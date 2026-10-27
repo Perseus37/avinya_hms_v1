@@ -305,7 +305,11 @@ def process_hl7_oru_r01_in_session(
             is_unobtainable = any(itm.get("status") in {"X", "CANNOT_OBTAIN", "REJECTED"} for itm in obs_items)
             is_preliminary = any(itm.get("status") in {"P", "PRELIMINARY"} for itm in obs_items)
 
-            if len(obs_items) == 1:
+            if is_unobtainable:
+                task.result_value = None
+                task.status = TaskStatusEnum.CANCELLED
+                task.result_notes = f"{task.result_notes or ''} [UNOBTAINABLE: Specimen could not be analyzed (OBX-11=X)]".strip()
+            elif len(obs_items) == 1:
                 single_val = obs_items[0]["value"]
                 task.result_value = single_val
                 if obs_items[0]["units"]:
@@ -327,12 +331,12 @@ def process_hl7_oru_r01_in_session(
                 task.result_notes = json.dumps(obs_items)
 
             # N-42: If amended or replacing an existing result, append structured history
-            if (is_amended or prior_result) and prior_result and prior_result != task.result_value:
+            if not is_unobtainable and (is_amended or prior_result) and prior_result and prior_result != task.result_value:
                 amendment_log = f"[AMENDED {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')} - Prior Result: '{prior_result}']"
                 task.result_notes = f"{task.result_notes or ''} {amendment_log}".strip()
 
-            # Evaluate LIS Delta Check if numeric
-            if primary_numeric_str:
+            # Evaluate LIS Delta Check if numeric (skip on unobtainable)
+            if not is_unobtainable and primary_numeric_str:
                 try:
                     delta_eval = evaluate_lab_delta_check(
                         session=db,
@@ -351,8 +355,7 @@ def process_hl7_oru_r01_in_session(
                     logger.debug("LIS delta check evaluation skipped or failed for task %s", task.id)
 
             if is_unobtainable:
-                task.status = TaskStatusEnum.SAMPLE_REJECTED
-                task.result_notes = f"{task.result_notes or ''} [UNOBTAINABLE: Result could not be obtained by analyzer (OBX-11=X)]".strip()
+                pass  # already handled above
             elif is_preliminary:
                 task.status = TaskStatusEnum.IN_PROGRESS
                 task.result_notes = f"{task.result_notes or ''} [PRELIMINARY: Result is preliminary and pending laboratory verification (OBX-11=P)]".strip()
@@ -361,12 +364,12 @@ def process_hl7_oru_r01_in_session(
 
             # Update parent order status
             order_tasks = task.order.tasks
-            if all(t.status == TaskStatusEnum.VERIFIED for t in order_tasks):
+            if all(t.status in [TaskStatusEnum.VERIFIED, TaskStatusEnum.CANCELLED] for t in order_tasks):
                 task.order.status = OrderStatusEnum.COMPLETED
             elif any(t.status in [TaskStatusEnum.RESULT_ENTERED, TaskStatusEnum.VERIFIED] for t in order_tasks):
                 task.order.status = OrderStatusEnum.PARTIAL
             elif any(t.status == TaskStatusEnum.IN_PROGRESS for t in order_tasks):
-                task.order.status = OrderStatusEnum.IN_PROGRESS
+                task.order.status = OrderStatusEnum.ACTIVE
 
             updated_results.append({
                 "task_id": task.id,

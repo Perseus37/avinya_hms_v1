@@ -271,29 +271,33 @@ def evaluate_bcma_five_rights(
     messages: list[str] = []
 
     # 1. Right Patient Validation
-    # Accepted scanned patient barcodes: Patient MRN, ID string, ENC-{id}, PAT:{patient_id}:{encounter_id}
+    # Reject bare patient database ID (e.g., "1") to require machine-readable wristband MRN
     clean_pat_scan = scanned_patient_barcode.strip()
     valid_patient_identifiers = {
-        str(patient.id),
         patient.mrn,
         f"ENC-{encounter.id}",
         f"PAT:{patient.id}:{encounter.id}",
         f"PAT:{patient.mrn}",
     }
-    patient_matched = (
-        clean_pat_scan in valid_patient_identifiers
-        or (patient.mrn and clean_pat_scan.lower() == patient.mrn.lower())
-    )
-    if not patient_matched:
+    if clean_pat_scan.isdigit() and clean_pat_scan not in valid_patient_identifiers:
+        patient_matched = False
         messages.append(
-            f"RIGHT PATIENT VIOLATION: Scanned barcode '{scanned_patient_barcode}' does not match patient MRN {patient.mrn}."
+            f"RIGHT PATIENT VIOLATION: Scanned barcode '{scanned_patient_barcode}' is a bare database ID. Machine-readable wristband MRN barcode is required."
         )
+    else:
+        patient_matched = (
+            clean_pat_scan in valid_patient_identifiers
+            or (patient.mrn and clean_pat_scan.lower() == patient.mrn.lower())
+        )
+        if not patient_matched:
+            messages.append(
+                f"RIGHT PATIENT VIOLATION: Scanned barcode '{scanned_patient_barcode}' does not match patient MRN {patient.mrn}."
+            )
 
-    # 2. Right Medication Validation (N-43: reject raw generic name, require NDC, barcode, code, or med:<id>)
+    # 2. Right Medication Validation (N-43 / N-62: reject raw brand name and generic name, require NDC, barcode, code, or med:<id>)
     clean_med_scan = scanned_medication_barcode.strip().lower()
     valid_drug_identifiers = {
         med.code.strip().lower(),
-        med.brand_name.strip().lower(),
         f"med:{med.id}",
         f"med:{med.code.strip().lower()}",
     }
@@ -309,53 +313,68 @@ def evaluate_bcma_five_rights(
             medication_matched = True
 
     if not medication_matched:
-        messages.append(
-            f"RIGHT DRUG VIOLATION: Scanned drug barcode '{scanned_medication_barcode}' does not match prescribed medication '{med.brand_name}' ({med.code})."
-        )
+        if med.brand_name and clean_med_scan == med.brand_name.strip().lower():
+            messages.append(
+                f"RIGHT DRUG VIOLATION: Scanned value '{scanned_medication_barcode}' is a medication brand name. Machine-readable barcode or drug code is required."
+            )
+        else:
+            messages.append(
+                f"RIGHT DRUG VIOLATION: Scanned drug barcode '{scanned_medication_barcode}' does not match prescribed medication '{med.brand_name}' ({med.code})."
+            )
 
-    # 3. Right Dose (N-43: parse and validate dose against prescribed instructions or medication strength)
+    # 3. Right Dose (N-43 / N-62: parse and validate dose; dose is mandatory for administration)
     prescribed_dose = rx_item.dosage_instruction
     actual_dose = dose_given or prescribed_dose
     dose_matched = True
-    if dose_given is not None:
-        if not dose_given.strip():
-            dose_matched = False
-            messages.append("RIGHT DOSE VIOLATION: Administered dose cannot be blank.")
+    if dose_given is None or not str(dose_given).strip():
+        dose_matched = False
+        messages.append("RIGHT DOSE VIOLATION: Administered dose is mandatory and cannot be omitted or blank.")
+    else:
+        prescribed_tokens = _extract_dose_tokens(prescribed_dose)
+        has_explicit_mass_volume = any(u in MASS_VOLUME_DOSE_UNITS for _, u in prescribed_tokens)
+
+        matched_prescription = _is_dose_match(dose_given, prescribed_dose)
+        if has_explicit_mass_volume:
+            if not matched_prescription:
+                dose_matched = False
+                messages.append(
+                    f"RIGHT DOSE VIOLATION: Administered dose '{dose_given}' does not match prescribed instruction '{prescribed_dose}'."
+                )
         else:
-            prescribed_tokens = _extract_dose_tokens(prescribed_dose)
-            has_explicit_mass_volume = any(u in MASS_VOLUME_DOSE_UNITS for _, u in prescribed_tokens)
+            matched_strength = _is_dose_match(dose_given, med.strength)
+            if not matched_prescription and not matched_strength:
+                dose_matched = False
+                messages.append(
+                    f"RIGHT DOSE VIOLATION: Administered dose '{dose_given}' does not match prescribed instruction '{prescribed_dose}' or drug strength '{med.strength}'."
+                )
 
-            matched_prescription = _is_dose_match(dose_given, prescribed_dose)
-            if has_explicit_mass_volume:
-                if not matched_prescription:
-                    dose_matched = False
-                    messages.append(
-                        f"RIGHT DOSE VIOLATION: Administered dose '{dose_given}' does not match prescribed instruction '{prescribed_dose}'."
-                    )
-            else:
-                matched_strength = _is_dose_match(dose_given, med.strength)
-                if not matched_prescription and not matched_strength:
-                    dose_matched = False
-                    messages.append(
-                        f"RIGHT DOSE VIOLATION: Administered dose '{dose_given}' does not match prescribed instruction '{prescribed_dose}' or drug strength '{med.strength}'."
-                    )
-
-    # 4. Right Route (Order route validation)
+    # 4. Right Route (N-62 / N-65: Route is mandatory and validated against prescription / form)
     prescribed_route = _extract_route(prescribed_dose)
-    if not prescribed_route and med.form:
-        if med.form.upper() in {"INJECTION", "INFUSION"}:
-            prescribed_route = "IV"
-        elif med.form.upper() in {"TABLET", "CAPSULE", "SYRUP"}:
+    is_injectable = bool(med.form and med.form.upper() in {"INJECTION", "INFUSION", "INJ"})
+    is_oral = bool(med.form and med.form.upper() in {"TABLET", "CAPSULE", "SYRUP", "TAB", "CAP"})
+
+    if not prescribed_route:
+        if is_oral:
             prescribed_route = "ORAL"
 
     administered_route = _extract_route(route) or _extract_route(dose_given)
 
     route_matched = True
-    if prescribed_route and administered_route:
+    if administered_route is None:
+        route_matched = False
+        messages.append("RIGHT ROUTE VIOLATION: Administered route is mandatory and cannot be omitted.")
+    elif prescribed_route:
         if prescribed_route != administered_route:
             route_matched = False
             messages.append(
                 f"RIGHT ROUTE VIOLATION: Administered route '{administered_route}' does not match prescribed route '{prescribed_route}'."
+            )
+    elif is_injectable:
+        # N-65: Injectable formulations without explicit route in order can accept any valid parenteral route (IV, IM, SC)
+        if administered_route not in {"IV", "IM", "SC", "INTRATHECAL"}:
+            route_matched = False
+            messages.append(
+                f"RIGHT ROUTE VIOLATION: Injectable formulation requires parenteral route (IV/IM/SC), got '{administered_route}'."
             )
 
     # 5. Right Time (+/- 60 minutes)
@@ -564,6 +583,68 @@ def execute_bcma_administration(
 # Controlled Substances (Narcotics) Vault Operations
 # =============================================================================
 
+def _verify_witness_credentials(
+    session: Session,
+    primary_user: User,
+    witness_user_id: int,
+    witness_password: str,
+) -> bool:
+    """Verifies independent secondary healthcare witness credentials with rate limiting."""
+    if witness_user_id == primary_user.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Self-witnessing is strictly prohibited under narcotics safety regulations. Witness must be an independent licensed user.",
+        )
+
+    witness_user = session.get(User, witness_user_id)
+    if not witness_user or witness_user.status != UserStatusEnum.ACTIVE:
+        raise HTTPException(status_code=404, detail="Active witness user account not found.")
+
+    if not witness_password:
+        raise HTTPException(status_code=400, detail="Witness password verification required.")
+
+    from backend.core.database import get_redis
+    try:
+        redis_cli = get_redis()
+    except Exception:
+        redis_cli = None
+    fail_key = f"rl:narcotics_witness_fail:{witness_user.id}"
+    if redis_cli:
+        try:
+            failed_cnt = redis_cli.get(fail_key)
+            if failed_cnt and int(failed_cnt) >= 5:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Too many failed witness password attempts. Account locked temporarily.",
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    if not pwd_context.verify(witness_password, witness_user.hashed_password):
+        if redis_cli:
+            try:
+                p = redis_cli.pipeline()
+                p.incr(fail_key)
+                p.expire(fail_key, 300)
+                p.execute()
+            except Exception:
+                pass
+        raise HTTPException(
+            status_code=401,
+            detail="Witness credential verification failed: Invalid witness password.",
+        )
+
+    if redis_cli:
+        try:
+            redis_cli.delete(fail_key)
+        except Exception:
+            pass
+
+    return True
+
+
 def process_controlled_substance_movement(
     session: Session,
     vault_id: int,
@@ -601,6 +682,9 @@ def process_controlled_substance_movement(
         bal_after = bal_before + quantity_units
         if tamper_seal_number:
             vault.tamper_seal_number = tamper_seal_number
+        if witness_user_id:
+            _verify_witness_credentials(session, primary_user, witness_user_id, witness_password)
+            witness_verified = True
 
     # 2. Dispense from Vault to Ward/Bedside
     elif movement_type == "DISPENSE":
@@ -608,6 +692,12 @@ def process_controlled_substance_movement(
             raise HTTPException(
                 status_code=400,
                 detail=f"Insufficient narcotic vault balance. Requested: {quantity_units}, Available: {bal_before}.",
+            )
+        # N-44: Validate destination / clinical link
+        if not encounter_id and not prescription_item_id and not (notes and notes.strip()):
+            raise HTTPException(
+                status_code=400,
+                detail="Dispense destination required: encounter_id, prescription_item_id, or destination notes must be provided.",
             )
         # N-44: Validate encounter and prescription item existence when provided
         if encounter_id is not None:
@@ -618,6 +708,9 @@ def process_controlled_substance_movement(
             rx_i = session.get(PrescriptionItem, prescription_item_id)
             if not rx_i:
                 raise HTTPException(status_code=404, detail=f"Prescription item {prescription_item_id} not found.")
+        if witness_user_id:
+            _verify_witness_credentials(session, primary_user, witness_user_id, witness_password)
+            witness_verified = True
         bal_after = bal_before - quantity_units
 
     # 3. Dual-Witness Wastage / Destruction
@@ -628,64 +721,13 @@ def process_controlled_substance_movement(
                 detail=f"Cannot waste more units than available in vault perpetual balance ({bal_before}).",
             )
 
-        # Enforce independent witness
+        # Enforce independent witness with verified credentials
         if not witness_user_id:
             raise HTTPException(
                 status_code=400,
                 detail="Dual-witness protocol mandatory: A secondary licensed healthcare witness ID is required.",
             )
-        if witness_user_id == primary_user.id:
-            raise HTTPException(
-                status_code=400,
-                detail="Self-witnessing is strictly prohibited under narcotics safety regulations. Witness must be an independent licensed user.",
-            )
-
-        witness_user = session.get(User, witness_user_id)
-        if not witness_user or witness_user.status != UserStatusEnum.ACTIVE:
-            raise HTTPException(status_code=404, detail="Active witness user account not found.")
-
-        # Verify witness credentials with rate-limiting (N-44)
-        if not witness_password:
-            raise HTTPException(status_code=400, detail="Witness password verification required.")
-
-        from backend.core.database import get_redis
-        try:
-            redis_cli = get_redis()
-        except Exception:
-            redis_cli = None
-        fail_key = f"rl:narcotics_witness_fail:{witness_user.id}"
-        if redis_cli:
-            try:
-                failed_cnt = redis_cli.get(fail_key)
-                if failed_cnt and int(failed_cnt) >= 5:
-                    raise HTTPException(
-                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                        detail="Too many failed witness password attempts. Account locked temporarily.",
-                    )
-            except HTTPException:
-                raise
-            except Exception:
-                pass
-
-        if not pwd_context.verify(witness_password, witness_user.hashed_password):
-            if redis_cli:
-                try:
-                    p = redis_cli.pipeline()
-                    p.incr(fail_key)
-                    p.expire(fail_key, 300)
-                    p.execute()
-                except Exception:
-                    pass
-            raise HTTPException(
-                status_code=401,
-                detail="Witness credential verification failed: Invalid witness password.",
-            )
-
-        if redis_cli:
-            try:
-                redis_cli.delete(fail_key)
-            except Exception:
-                pass
+        _verify_witness_credentials(session, primary_user, witness_user_id, witness_password)
 
         if not wastage_reason or len(wastage_reason.strip()) < 5:
             raise HTTPException(
@@ -698,6 +740,17 @@ def process_controlled_substance_movement(
 
     # 4. Return unused units back to vault
     elif movement_type == "RETURN_TO_VAULT":
+        if encounter_id is not None:
+            enc = session.get(PatientEncounter, encounter_id)
+            if not enc:
+                raise HTTPException(status_code=404, detail=f"Encounter {encounter_id} not found.")
+        if prescription_item_id is not None:
+            rx_i = session.get(PrescriptionItem, prescription_item_id)
+            if not rx_i:
+                raise HTTPException(status_code=404, detail=f"Prescription item {prescription_item_id} not found.")
+        if witness_user_id:
+            _verify_witness_credentials(session, primary_user, witness_user_id, witness_password)
+            witness_verified = True
         bal_after = bal_before + quantity_units
 
     else:

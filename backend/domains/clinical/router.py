@@ -883,7 +883,7 @@ class NEWS2EvaluationRequest(BaseModel):
     spo2_percent: Optional[int] = None
     bp_systolic: Optional[int] = None
     pulse_bpm: Optional[int] = None
-    consciousness: Optional[str] = "ALERT"
+    consciousness: Optional[str] = None
     temperature_f: Optional[float] = None
     on_supplemental_oxygen: bool = False
     spo2_scale: int = 1

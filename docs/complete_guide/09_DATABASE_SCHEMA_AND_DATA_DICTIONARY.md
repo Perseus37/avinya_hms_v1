@@ -148,28 +148,51 @@ Stores calculated physiological deterioration metrics (NEWS2).
 ### 2.4 Bedside Safety & Controlled Substances
 
 #### Table: `bcma_scan_audit_logs`
-Forensic bedside scan validation audit trail.
+Forensic bedside scan validation audit trail (BCMA 5-rights enforcement).
 - `id` (INTEGER, PK, Autoincrement)
-- `prescription_item_id` (INTEGER, FK ➔ `prescription_items.id`, NOT NULL)
-- `scanned_patient_mrn` (VARCHAR(50), NOT NULL): Barcode read from wristband.
-- `scanned_medication_code` (VARCHAR(50), NOT NULL): Barcode read from drug vial.
-- `is_verified` (BOOLEAN, NOT NULL): True if 5-rights passed; False if mismatch.
-- `route_matched` (BOOLEAN, DEFAULT TRUE, NOT NULL): Clinical verification that administered route aligns with prescription.
-- `failure_reason` (VARCHAR(255), NULLABLE): Exact clinical failure cause if rejected.
-- `nurse_user_id` (INTEGER, FK ➔ `users.id`, NOT NULL)
+- `encounter_id` (INTEGER, FK ➔ `patient_encounters.id`, NOT NULL, Index)
+- `prescription_item_id` (INTEGER, FK ➔ `prescription_items.id`, NOT NULL, Index)
+- `administered_by_id` (INTEGER, FK ➔ `users.id`, NOT NULL)
+- `scanned_patient_barcode` (VARCHAR(100), NOT NULL): Barcode read from wristband (rejects bare numeric patient IDs).
+- `scanned_medication_barcode` (VARCHAR(100), NOT NULL): Barcode read from drug packaging (rejects typed brand names).
+- `patient_matched` (BOOLEAN, NOT NULL): Wristband MRN match verification.
+- `medication_matched` (BOOLEAN, NOT NULL): Medication NDC/barcode match.
+- `dose_matched` (BOOLEAN, DEFAULT TRUE, NOT NULL): Normalized dose match verification.
+- `route_matched` (BOOLEAN, DEFAULT TRUE, NOT NULL): Clinical route alignment verification.
+- `time_status` (VARCHAR(30), DEFAULT 'ON_TIME', NOT NULL): `ON_TIME`, `EARLY`, `LATE`, `PRN`.
+- `verification_status` (VARCHAR(50), NOT NULL): `VERIFIED`, `WARNING_OVERRIDDEN`, `BLOCKED_MISMATCH`.
+- `override_reason` (VARCHAR(500), NULLABLE): Clinical explanation for warnings.
+- `emar_log_id` (INTEGER, FK ➔ `medication_administration_logs.id`, NULLABLE)
 - `scanned_at` (TIMESTAMPTZ, NOT NULL)
 
-#### Table: `controlled_substance_movement_logs`
-Schedule H, H1 & X double-locked perpetual narcotics vault.
+#### Table: `controlled_substance_vaults`
+Perpetual double-locked narcotics safe registers.
 - `id` (INTEGER, PK, Autoincrement)
-- `medication_id` (INTEGER, FK ➔ `medication_master.id`, NOT NULL)
-- `batch_id` (INTEGER, FK ➔ `inventory_batches.id`, NOT NULL)
-- `movement_type` (ENUM, NOT NULL): `VAULT_RECEIPT`, `BEDSIDE_ADMINISTRATION`, `WASTAGE_DISPOSAL`.
-- `quantity_administered` (FLOAT, NOT NULL)
-- `quantity_wasted` (FLOAT, DEFAULT 0.0, NOT NULL): Residual discarded volume.
-- `primary_nurse_user_id` (INTEGER, FK ➔ `users.id`, NOT NULL): Administering clinician.
-- `witness_nurse_user_id` (INTEGER, FK ➔ `users.id`, NOT NULL): Mandatory second licensed witness.
-- `witness_authenticated_at` (TIMESTAMPTZ, NOT NULL): Digital co-signature timestamp.
+- `medication_id` (INTEGER, FK ➔ `medication_master.id`, UNIQUE, NOT NULL)
+- `vault_location` (VARCHAR(100), NOT NULL): E.g., `MAIN_NARCOTICS_SAFE`, `ICU_SAFE_01`.
+- `current_balance_units` (INTEGER, CHECK >= 0, NOT NULL): Real-time perpetual safe inventory balance.
+- `unit_of_measure` (VARCHAR(30), NOT NULL): E.g., `AMPOULE`, `VIAL`, `TABLET`.
+- `tamper_seal_number` (VARCHAR(50), NULLABLE): Physical security seal identifier.
+- `is_locked` (BOOLEAN, DEFAULT TRUE, NOT NULL)
+
+#### Table: `controlled_substance_movement_logs`
+Auditable perpetual movement log for narcotics receipts, dispenses, returns, and dual-witness wastage.
+- `id` (INTEGER, PK, Autoincrement)
+- `vault_id` (INTEGER, FK ➔ `controlled_substance_vaults.id`, NOT NULL, Index)
+- `movement_type` (VARCHAR(30), NOT NULL): `RECEIPT`, `DISPENSE`, `RETURN_TO_VAULT`, `WASTAGE_DESTROYED`.
+- `quantity_units` (INTEGER, CHECK > 0, NOT NULL)
+- `balance_before` (INTEGER, NOT NULL)
+- `balance_after` (INTEGER, CHECK >= 0, NOT NULL)
+- `encounter_id` (INTEGER, FK ➔ `patient_encounters.id`, NULLABLE)
+- `prescription_item_id` (INTEGER, FK ➔ `prescription_items.id`, NULLABLE)
+- `primary_user_id` (INTEGER, FK ➔ `users.id`, NOT NULL): Primary licensed nurse / pharmacist.
+- `witness_user_id` (INTEGER, FK ➔ `users.id`, NULLABLE): Mandatory independent second witness for wastage.
+- `witness_verified` (BOOLEAN, DEFAULT FALSE, NOT NULL): True when witness credentials successfully authenticated.
+- `wastage_reason` (VARCHAR(255), NULLABLE): Clinical disposal justification.
+- `disposal_method` (VARCHAR(100), NULLABLE): Safe destruction method.
+- `batch_number` (VARCHAR(50), NULLABLE)
+- `notes` (VARCHAR(500), NULLABLE)
+- `created_at` (TIMESTAMPTZ, NOT NULL, Index)
 
 ---
 

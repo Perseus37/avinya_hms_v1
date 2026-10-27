@@ -34,6 +34,7 @@ from backend.domains.pharmacy.schemas import (
     ControlledSubstanceDispenseRequest,
     ControlledSubstanceMovementResponse,
     ControlledSubstanceReceiptRequest,
+    ControlledSubstanceReturnRequest,
     ControlledSubstanceVaultCreate,
     ControlledSubstanceVaultResponse,
     ControlledSubstanceWastageRequest,
@@ -842,6 +843,8 @@ def receive_controlled_substance_into_vault(
         movement_type="RECEIPT",
         quantity_units=payload.quantity_units,
         primary_user=current_user,
+        witness_user_id=payload.witness_user_id,
+        witness_password=payload.witness_password,
         batch_number=payload.batch_number,
         tamper_seal_number=payload.tamper_seal_number,
         notes=payload.notes,
@@ -862,6 +865,31 @@ def dispense_controlled_substance_from_vault(
         movement_type="DISPENSE",
         quantity_units=payload.quantity_units,
         primary_user=current_user,
+        witness_user_id=payload.witness_user_id,
+        witness_password=payload.witness_password,
+        encounter_id=payload.encounter_id,
+        prescription_item_id=payload.prescription_item_id,
+        batch_number=payload.batch_number,
+        notes=payload.notes,
+    )
+
+
+@router.post("/controlled-substances/return", response_model=ControlledSubstanceMovementResponse, status_code=status.HTTP_201_CREATED)
+def return_controlled_substance_to_vault(
+    payload: ControlledSubstanceReturnRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RequirePermission("pharmacy:write", "nursing:write")),
+):
+    """Returns unused controlled narcotics back to the perpetual safe."""
+    from backend.domains.pharmacy.services import process_controlled_substance_movement
+    return process_controlled_substance_movement(
+        session=db,
+        vault_id=payload.vault_id,
+        movement_type="RETURN_TO_VAULT",
+        quantity_units=payload.quantity_units,
+        primary_user=current_user,
+        witness_user_id=payload.witness_user_id,
+        witness_password=payload.witness_password,
         encounter_id=payload.encounter_id,
         prescription_item_id=payload.prescription_item_id,
         batch_number=payload.batch_number,

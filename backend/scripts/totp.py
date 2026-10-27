@@ -11,6 +11,7 @@ if str(_REPO_DIR) not in sys.path:
     sys.path.insert(0, str(_REPO_DIR))
 
 from sqlalchemy import select
+from backend.core.config import settings
 from backend.core.database import ControlSessionLocal
 from backend.control_plane.models import ControlPlaneOperator
 from backend.security.envelope import decrypt_tenant_secret
@@ -42,6 +43,14 @@ def get_code_for_operator(email: str) -> tuple[str, int]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # N-63: Prohibit TOTP utility execution in production environments
+    if settings.is_production() or settings.ENVIRONMENT.lower() == "production":
+        print(
+            "Security Guard: totp.py is a developer/testing utility and is strictly disabled in production environments.",
+            file=sys.stderr,
+        )
+        return 1
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "secret",

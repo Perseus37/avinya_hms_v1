@@ -205,6 +205,8 @@ class ControlledSubstanceReceiptRequest(BaseModel):
     quantity_units: int = Field(gt=0)
     batch_number: str
     tamper_seal_number: Optional[str] = None
+    witness_user_id: Optional[int] = None
+    witness_password: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -213,6 +215,19 @@ class ControlledSubstanceDispenseRequest(BaseModel):
     quantity_units: int = Field(gt=0)
     encounter_id: Optional[int] = None
     prescription_item_id: Optional[int] = None
+    witness_user_id: Optional[int] = None
+    witness_password: Optional[str] = None
+    batch_number: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ControlledSubstanceReturnRequest(BaseModel):
+    vault_id: int
+    quantity_units: int = Field(gt=0)
+    encounter_id: Optional[int] = None
+    prescription_item_id: Optional[int] = None
+    witness_user_id: Optional[int] = None
+    witness_password: Optional[str] = None
     batch_number: Optional[str] = None
     notes: Optional[str] = None
 

@@ -68,6 +68,13 @@ def main(argv: list[str] | None = None) -> int:
     ) or "Administrator"
 
     if args.password is not None:
+        from backend.core.config import settings
+
+        if settings.is_production() or settings.ENVIRONMENT.lower() == "production":
+            parser.error(
+                "Security Guard: Supplying raw passwords via the --password command-line argument is strictly prohibited in production. "
+                "Omit --password to provide the credential securely via interactive masked getpass prompt."
+            )
         password = args.password
         try:
             _validate_password(password)

@@ -1,5 +1,5 @@
 # Chapter 10: Testing, Quality Assurance & Release Governance
-## The 451-Test Verification Harness, Security Gates & CI/CD Release Protocols
+## The 459-Test Verification Harness, Security Gates & CI/CD Release Protocols
 
 ---
 
@@ -16,7 +16,7 @@ Avinya HMS enforces an automated, multi-layered testing pyramid:
 ```mermaid
 flowchart TD
     subgraph GATES["Automated Quality & Release Gates"]
-        PYTEST["1. 451 Pytest Integration Suites (100% Passing)"]
+        PYTEST["1. 459 Pytest Integration Suites (100% Passing)"]
         DIFF["2. Schema Parity Diff Detector (0 Schema Drift)"]
         BANDIT["3. Bandit Security Linter (0 High / 0 Medium Issues)"]
         AUDIT["4. Strict pip-audit (0 Known CVEs)"]
@@ -34,9 +34,9 @@ flowchart TD
 
 ---
 
-## 2. Complete Inventory of the 64 Test Suites
+## 2. Complete Inventory of the 65 Test Suites
 
-The test suite contains **451 passing tests, 2 skipped across 64 test modules** in `tests/`:
+The test suite contains **459 passing tests, 2 skipped across 65 test modules** in `tests/`:
 
 | Test Suite File | Domain & Responsibility Verified |
 | :--- | :--- |
@@ -95,6 +95,7 @@ The test suite contains **451 passing tests, 2 skipped across 64 test modules** 
 | `tests/test_52_hl7_mllp_analyzer_interface.py` | Native HL7 v2 MLLP unsolicited ORU^R01 parser, equipment test mappings, and panic alerts. |
 | `tests/test_53_nabh_quality_indicators.py` | NABH 5th Ed / JCI 7th Ed quality indicators (CAUTI, CLABSI, VAP, SSI, Falls) and CAPA register. |
 | `tests/test_53_audit_round_16_remediations.py` | Audit Round 16 remediations: retention clock discharge join, bed billing transfer deduplication, persistent interstate GST, NEWS2 parameter completeness, BCMA tokenized dosage & route verification, HL7 OBX preliminary/cancelled filtering & repeat task matching. |
+| `tests/test_54_audit_round_17_remediations.py` | Audit Round 17 remediations: HL7 preliminary & unobtainable statuses, BCMA bare ID rejection & typed brand name rejection & parenteral route verification, CLI production guards, NEWS2 missing consciousness parameter completeness, and controlled substances dual-witness lifecycle. |
 | `tests/test_backup_service.py` | Off-host backup archive creation and SHA-256 integrity sidecar validation. |
 | `tests/test_envelope.py` | Column-level AES-256-GCM envelope encryption and key rotation. |
 | `tests/test_postgres17_integration.py` | Live PostgreSQL 17 multi-tenant migration parity and restore validation (CI opt-in). |
@@ -109,8 +110,8 @@ Run the complete regression suite in the local environment:
 ```bash
 python -m pytest tests/
 ```
-- **Execution Time:** ~2-5 minutes for all 445 tests.
-- **Expected Result:** `443 passed, 2 skipped (100% pass rate)`. (The 2 skipped tests are physical PostgreSQL 17 container tests that execute in dedicated CI environments).
+- **Execution Time:** ~2-5 minutes for all 461 tests.
+- **Expected Result:** `459 passed, 2 skipped (100% pass rate)`. (The 2 skipped tests are physical PostgreSQL 17 container tests that execute in dedicated CI environments).
 
 ### 3.2 Running Specific Domain Test Suites
 ```bash
@@ -151,7 +152,7 @@ The repository strictly enforces a two-tier branching lifecycle:
 
 Every pull request must pass four automated GitHub Actions release gates before it can be merged into production `main`:
 1. **Gate 1: Onboarding UI Build:** Builds the React 18 / Vite 8 console with zero warnings, verifying bundle size remains under 500 kB.
-2. **Gate 2: Python Backend Tests:** Executes all 443 pytest test cases against Python 3.11 with 100% passing results.
+2. **Gate 2: Python Backend Tests:** Executes all 459 pytest test cases against Python 3.11 with 100% passing results.
 3. **Gate 3: PostgreSQL 17 Migrations & Schema Parity:** Spins up a live PostgreSQL 17 container, executes `alembic upgrade head`, and asserts zero schema drift against `Base.metadata`.
 4. **Gate 4: Security & Vulnerability Audits:** Executes Bandit security scanning and `pip-audit`, asserting 0 High/Medium vulnerabilities and 0 known CVEs.
 

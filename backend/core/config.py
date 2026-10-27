@@ -177,6 +177,9 @@ class Settings(BaseSettings):
     STRIPE_SECRET_KEY: Optional[str] = None
     STRIPE_WEBHOOK_SECRET: Optional[str] = None
 
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT.strip().lower() in {"production", "prod"}
+
     @property
     def DATABASE_URL(self) -> str:
         """Dynamically constructs the URL from POSTGRES_* variables so 'db' and 'api' never mismatch."""
