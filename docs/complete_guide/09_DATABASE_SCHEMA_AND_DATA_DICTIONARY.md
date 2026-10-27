@@ -154,6 +154,7 @@ Forensic bedside scan validation audit trail.
 - `scanned_patient_mrn` (VARCHAR(50), NOT NULL): Barcode read from wristband.
 - `scanned_medication_code` (VARCHAR(50), NOT NULL): Barcode read from drug vial.
 - `is_verified` (BOOLEAN, NOT NULL): True if 5-rights passed; False if mismatch.
+- `route_matched` (BOOLEAN, DEFAULT TRUE, NOT NULL): Clinical verification that administered route aligns with prescription.
 - `failure_reason` (VARCHAR(255), NULLABLE): Exact clinical failure cause if rejected.
 - `nurse_user_id` (INTEGER, FK ➔ `users.id`, NOT NULL)
 - `scanned_at` (TIMESTAMPTZ, NOT NULL)
@@ -196,6 +197,21 @@ Audit trail of raw HL7 v2 messages received on MLLP port 2575.
 ---
 
 ### 2.6 Revenue Cycle Management & Billing
+
+#### Table: `invoices`
+Consolidated patient financial billing statement and tax ledger.
+- `id` (INTEGER, PK, Autoincrement)
+- `invoice_number` (VARCHAR(50), UNIQUE, NOT NULL, Index): Tracking token (`INV-YYYYMM-XXXX`).
+- `patient_id` (INTEGER, FK ➔ `patients.id`, NOT NULL, Index)
+- `encounter_id` (INTEGER, FK ➔ `patient_encounters.id`, NULLABLE, Index)
+- `total_amount` (NUMERIC(12, 2), NOT NULL): Pre-tax gross subtotal.
+- `tax_amount` (NUMERIC(12, 2), DEFAULT 0.0, NOT NULL): Aggregate GST.
+- `discount_amount` (NUMERIC(12, 2), DEFAULT 0.0, NOT NULL)
+- `final_amount` (NUMERIC(12, 2), NOT NULL): Net payable balance.
+- `paid_amount` (NUMERIC(12, 2), DEFAULT 0.0, NOT NULL)
+- `status` (ENUM `InvoiceStatusEnum`, NOT NULL): `DRAFT`, `FINALIZED`, `PAID`, `CANCELLED`.
+- `is_interstate` (BOOLEAN, DEFAULT FALSE, NOT NULL): Flag designating IGST vs dual CGST+SGST statutory tax determination.
+- `created_at`, `updated_at` (TIMESTAMPTZ, NOT NULL)
 
 #### Table: `charge_capture_events`
 Idempotent operational charge ledger.
@@ -248,4 +264,4 @@ When cloning a production database into an isolated test sandbox, the **Sandbox 
 
 ---
 
-*Proceed to [Chapter 10: Testing, Quality Assurance & Release Governance](10_TESTING_QA_AND_RELEASE_GOVERNANCE.md) to inspect the 421-test verification harness.*
+*Proceed to [Chapter 10: Testing, Quality Assurance & Release Governance](10_TESTING_QA_AND_RELEASE_GOVERNANCE.md) to inspect the 451-test verification harness.*

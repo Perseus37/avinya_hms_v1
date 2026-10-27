@@ -231,6 +231,7 @@ class BCMAScanAuditLog(AuditMixin, Base):
     patient_matched: Mapped[bool] = mapped_column(Boolean, nullable=False)
     medication_matched: Mapped[bool] = mapped_column(Boolean, nullable=False)
     dose_matched: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    route_matched: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     time_status: Mapped[str] = mapped_column(String(30), default="ON_TIME", nullable=False)  # ON_TIME, EARLY, LATE, PRN
     verification_status: Mapped[str] = mapped_column(String(50), nullable=False)  # VERIFIED, WARNING_OVERRIDDEN, BLOCKED_MISMATCH
     override_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)

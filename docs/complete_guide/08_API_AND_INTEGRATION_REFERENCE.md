@@ -189,4 +189,36 @@ For hospital SOC (Security Operations Center) teams ingesting audit logs:
 
 ---
 
+## 7. Bedside Clinical Safety & Deterioration Protocols
+
+### 7.1 BCMA 5-Rights Bedside Administration
+- **Endpoint:** `POST /v1/api/pharmacy/bcma/verify`
+- **Verification Matrix:**
+  - **Right Patient:** Matches scanned wristband MRN against active encounter patient.
+  - **Right Drug:** Matches scanned medication vial barcode against prescribed item master.
+  - **Right Dose:** Strict tokenized numeric and normalized unit comparison (`mg`, `mcg`, `ml`, `l`, `iu`, `g`), preventing bare number matches against durations or strength strings.
+  - **Right Route:** Validates administration route (`ORAL`, `IV`, `IM`, `SC`, `TOPICAL`) against prescription specifications.
+  - **Right Time:** Checks administration window against scheduled administration frequency.
+- **Audit Response:**
+  ```json
+  {
+    "is_verified": true,
+    "route_matched": true,
+    "failure_reason": null,
+    "prescription_item_id": 104,
+    "scanned_patient_mrn": "MRN-202610-00412",
+    "scanned_medication_code": "MED-CIPRO-500",
+    "scanned_at": "2026-10-27T04:20:00Z"
+  }
+  ```
+
+### 7.2 NEWS2 Physiological Deterioration Scoring & Completeness
+- **Endpoint:** `POST /v1/api/clinical/news2`
+- **Clinical Safety Rules:**
+  - Aggregates score (0-20) across 7 vital parameters (Respiration Rate, SpO2, Supplemental O2, Systolic BP, Heart Rate, Consciousness Level, Temperature).
+  - Categorizes risk tier: `LOW` (0-4), `MEDIUM` (5-6 or 3 in single parameter), `HIGH` (7+).
+  - Enforces mandatory completeness checks: returns `is_complete_set: bool` and `missing_parameters: list[str]`. If vital parameters are omitted, low aggregate scores trigger `INCOMPLETE_DATA` warning recommendations rather than false routine reassurances.
+
+---
+
 *Proceed to [Chapter 9: Database Schema & Data Dictionary](09_DATABASE_SCHEMA_AND_DATA_DICTIONARY.md) to inspect the 70+ relational tables and constraint architectures.*

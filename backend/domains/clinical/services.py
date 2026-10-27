@@ -581,6 +581,18 @@ def calculate_news2_score(
     sub_scores = {}
     any_parameter_is_3 = False
 
+    # Core parameters completeness evaluation
+    core_parameters = {
+        "respiratory_rate": respiratory_rate,
+        "spo2_percent": spo2_percent,
+        "bp_systolic": bp_systolic,
+        "pulse_bpm": pulse_bpm,
+        "consciousness": consciousness,
+        "temperature": temperature_f,
+    }
+    missing_parameters = [param for param, val in core_parameters.items() if val is None]
+    is_complete_set = len(missing_parameters) == 0
+
     # 1. Respiration Rate (breaths/min)
     if respiratory_rate is not None:
         if respiratory_rate <= 8:
@@ -712,7 +724,13 @@ def calculate_news2_score(
         rrt_alert = True
     else:
         risk_level = "LOW"
-        recommendation = "ROUTINE: Continue standard ward vital sign monitoring every 4 to 12 hours as clinically appropriate."
+        if not is_complete_set:
+            recommendation = (
+                f"INCOMPLETE_DATA: Mandatory parameters missing ({', '.join(missing_parameters)}). "
+                f"Obtain complete vital set before concluding low risk; routine monitoring only if verified."
+            )
+        else:
+            recommendation = "ROUTINE: Continue standard ward vital sign monitoring every 4 to 12 hours as clinically appropriate."
         rrt_alert = False
 
     # qSOFA score (quick Sepsis-related Organ Failure Assessment): SBP <= 100 (+1), RR >= 22 (+1), GCS < 15 / Altered mentation (+1)
@@ -729,6 +747,8 @@ def calculate_news2_score(
         "risk_level": risk_level,
         "qsofa_score": qsofa,
         "is_rrt_alert_triggered": rrt_alert,
+        "is_complete_set": is_complete_set,
+        "missing_parameters": missing_parameters,
         "sub_scores": sub_scores,
         "clinical_recommendation": recommendation,
     }

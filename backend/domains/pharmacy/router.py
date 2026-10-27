@@ -775,6 +775,7 @@ def bcma_verify_and_administer(
         scanned_patient_barcode=payload.scanned_patient_barcode,
         scanned_medication_barcode=payload.scanned_medication_barcode,
         dose_given=payload.dose_given,
+        route=payload.route,
         scheduled_time=payload.scheduled_time,
         override_warning=payload.override_warning,
         override_reason=payload.override_reason,

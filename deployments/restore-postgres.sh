@@ -72,7 +72,7 @@ fi
 "${compose[@]}" exec -T db sh -ec 'PGPASSWORD="$POSTGRES_PASSWORD" createdb -h 127.0.0.1 -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -O "$POSTGRES_USER" "$1"' sh "$target_db"
 echo "Restoring into isolated database: $target_db"
 if ! gpg --batch --quiet --pinentry-mode loopback --decrypt --passphrase-file "$GPG_PASSPHRASE_FILE" "$backup_file" \
-  | "${compose[@]}" exec -T db pg_restore --exit-on-error --no-owner --no-acl --dbname "$target_db"; then
+  | "${compose[@]}" exec -T db sh -ec 'PGPASSWORD="$POSTGRES_PASSWORD" pg_restore -h 127.0.0.1 -p "$POSTGRES_PORT" -U "$POSTGRES_USER" --exit-on-error --no-owner --no-acl --dbname "$1"' sh "$target_db"; then
   echo "Restore failed; the isolated target was retained for diagnosis. Do not route tenants to it." >&2
   exit 1
 fi

@@ -47,9 +47,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--role",
-        default="superadmin",
+        default="viewer",
         choices=["superadmin", "ops", "support", "billing", "viewer"],
-        help="Operator RBAC role (default: superadmin)",
+        help="Operator RBAC role (default: viewer)",
     )
     args = parser.parse_args(argv)
     raw_email = args.email.strip().lower()

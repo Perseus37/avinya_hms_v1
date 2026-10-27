@@ -10,6 +10,7 @@ from backend.domains.billing.models import DepositStatusEnum, InvoiceStatusEnum,
 class InvoiceCreate(BaseModel):
     patient_id: int
     encounter_id: Optional[int] = None
+    is_interstate: bool = False
     notes: Optional[str] = None
 
 class InvoiceLineItemCreate(BaseModel):
@@ -59,6 +60,7 @@ class InvoiceResponse(BaseModel):
     cgst_amount_paise: int = 0
     sgst_amount_paise: int = 0
     igst_amount_paise: int = 0
+    is_interstate: bool = False
     is_tax_exempt: bool = True
     hsn_sac_code: Optional[str] = None
     discount_amount_paise: int = 0

@@ -155,7 +155,7 @@ def auto_bill_ipd_bed_stay(db: Session, admission: InpatientAdmission, discharge
             
         total_paise = billable_days * historical_rate
 
-        desc = f"IPD BED CHARGE: Bed {bed.bed_number} ({bed.bed_type.value})"
+        desc = f"IPD BED CHARGE: Bed {bed.bed_number} ({bed.bed_type.value}) [Transfer #{log.id}]"
         existing = db.execute(
             select(InvoiceLineItem).where(
                 InvoiceLineItem.invoice_id == invoice.id,

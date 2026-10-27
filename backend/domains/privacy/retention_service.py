@@ -133,7 +133,7 @@ def execute_retention_category(
     # Category Handler: Patients (Patient Record Retention / Anonymization)
     elif canon_category == "patients":
         # N-07: Respect all 8 clock_start parameters
-        from backend.domains.encounters.models import PatientEncounter
+        from backend.domains.encounters.models import InpatientAdmission, PatientEncounter
         from backend.domains.billing.models import Invoice
 
         if clock_start in ("creation", "created_at"):
@@ -144,8 +144,16 @@ def execute_retention_category(
             recent_enc_patients = select(PatientEncounter.patient_id).where(PatientEncounter.created_at >= cutoff)
             clock_filter = Patient.id.not_in(recent_enc_patients)
         elif clock_start == "discharge":
-            recent_disch_patients = select(PatientEncounter.patient_id).where(
-                func.coalesce(PatientEncounter.ended_at, PatientEncounter.created_at) >= cutoff
+            recent_disch_patients = (
+                select(PatientEncounter.patient_id)
+                .outerjoin(InpatientAdmission, InpatientAdmission.encounter_id == PatientEncounter.id)
+                .where(
+                    func.coalesce(
+                        InpatientAdmission.discharge_time,
+                        PatientEncounter.end_time,
+                        PatientEncounter.created_at,
+                    ) >= cutoff
+                )
             )
             clock_filter = Patient.id.not_in(recent_disch_patients)
         elif clock_start == "invoice":

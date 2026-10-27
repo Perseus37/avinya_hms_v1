@@ -62,6 +62,7 @@ def create_invoice(
         patient_id=payload.patient_id,
         encounter_id=payload.encounter_id,
         status=InvoiceStatusEnum.DRAFT,
+        is_interstate=payload.is_interstate,
         total_amount_paise=0,
         amount_paid_paise=0,
         notes=payload.notes,

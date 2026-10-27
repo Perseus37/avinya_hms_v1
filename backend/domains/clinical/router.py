@@ -1168,6 +1168,8 @@ def evaluate_encounter_news2(
         "risk_level": news_result["risk_level"],
         "qsofa_score": news_result["qsofa_score"],
         "is_rrt_alert_triggered": news_result["is_rrt_alert_triggered"],
+        "is_complete_set": news_result["is_complete_set"],
+        "missing_parameters": news_result["missing_parameters"],
         "sub_scores": news_result["sub_scores"],
         "clinical_recommendation": news_result["clinical_recommendation"],
     }
