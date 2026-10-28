@@ -31,14 +31,15 @@ function TargetSchemaNode({ id, data }) {
   const hasFallback = !!data.fallback;
   return (
     <div className={`px-4 py-2 shadow-sm rounded-lg border-2 bg-white flex flex-col min-w-[220px] ${hasFallback ? 'border-emerald-500' : 'border-slate-300'}`}>
-      <Handle type="target" position={Position.Left} className="w-3 h-3 bg-cyan-500" />
+      <Handle type="target" position={Position.Left} id="left" className="w-3 h-3 bg-cyan-500" />
+      <Handle type="target" position={Position.Top} id="top" className="w-3 h-3 bg-cyan-500" />
       <div className="flex justify-between items-center gap-3">
-        <div className="font-bold text-xs text-slate-700">
+        <div className="font-bold text-xs text-slate-700 truncate max-w-[160px]" title={data.label}>
           {data.label}{data.required ? <span className="ml-1 text-rose-600">*</span> : null}
         </div>
         <button
           onClick={() => data.onEditFallback(id)}
-          className={`p-1.5 rounded transition-colors ${hasFallback ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+          className={`p-1.5 rounded transition-colors shrink-0 ${hasFallback ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
           title="Fallback value"
         >
           <Settings size={14} />
@@ -91,6 +92,28 @@ const ETL_NODE_GAP = 80;
 const ETL_LANE_Y = 120;
 const TARGET_START_X = 1010;
 
+const getTargetPosition = (idx, total, mode = "horizontal", startX = TARGET_START_X) => {
+  if (mode === "horizontal") {
+    return { x: startX + idx * 250, y: 120 };
+  }
+  if (mode === "grid-3") {
+    const cols = 3;
+    return {
+      x: startX + (idx % cols) * 250,
+      y: 90 + Math.floor(idx / cols) * 80,
+    };
+  }
+  if (mode === "grid-2") {
+    const cols = 2;
+    return {
+      x: startX + (idx % cols) * 250,
+      y: 90 + Math.floor(idx / cols) * 80,
+    };
+  }
+  // vertical
+  return { x: startX, y: 90 + idx * 85 };
+};
+
 export default function MigrationStudio({ tenants, request, catalogs, notify }) {
   // Extract dynamic schemas passed from the Control Plane API
   const { migrationSchemas = {} } = catalogs || {};
@@ -100,6 +123,7 @@ export default function MigrationStudio({ tenants, request, catalogs, notify }) 
   const [entityType, setEntityType] = useState("");
   const [duplicatePolicy, setDuplicatePolicy] = useState("skip");
   const [duplicateField, setDuplicateField] = useState("");
+  const [layoutMode, setLayoutMode] = useState("horizontal");
 
   const [nodes, setNodes] = useState([]);
   const nodesRef = useRef(nodes);
@@ -138,10 +162,21 @@ export default function MigrationStudio({ tenants, request, catalogs, notify }) 
     nodesRef.current = nodes;
   }, [nodes]);
 
+  // Auto-select first tenant if none selected
+  useEffect(() => {
+    if (tenants && tenants.length > 0) {
+      if (!selectedTenantSlug || !tenants.some((t) => t.subdomain_slug === selectedTenantSlug)) {
+        setSelectedTenantSlug(tenants[0].subdomain_slug);
+      }
+    }
+  }, [tenants, selectedTenantSlug]);
+
   // Sync default entity type once catalogs load from backend
   useEffect(() => {
-    if (availableEntities.length > 0 && !entityType) {
-      setEntityType(availableEntities[0]);
+    if (availableEntities.length > 0) {
+      if (!entityType || !availableEntities.includes(entityType)) {
+        setEntityType(availableEntities[0]);
+      }
     }
   }, [availableEntities, entityType]);
 
@@ -168,7 +203,12 @@ export default function MigrationStudio({ tenants, request, catalogs, notify }) 
       style: { stroke: '#06b6d4', strokeWidth: 3 },
       markerEnd: { type: MarkerType.ArrowClosed, color: '#06b6d4' },
     };
-    setEdges((eds) => addEdge(styledConnection, eds));
+    setEdges((eds) => {
+      const filtered = targetNode.type === "targetNode"
+        ? eds.filter((edge) => edge.target !== connection.target)
+        : eds;
+      return addEdge(styledConnection, filtered);
+    });
   }, []);
 
   const handleOpenTransformModal = useCallback((nodeId) => {
@@ -219,9 +259,13 @@ export default function MigrationStudio({ tenants, request, catalogs, notify }) 
       );
       const x = lastTransformX + ETL_STEP_X;
       const targetX = Math.max(TARGET_START_X, x + ETL_NODE_WIDTH + ETL_NODE_GAP);
+      const currentMinTargetX = current
+        .filter((n) => n.type === "targetNode" || n.id.startsWith("target-"))
+        .reduce((min, n) => Math.min(min, n.position.x), TARGET_START_X);
+      const shiftX = Math.max(0, targetX - currentMinTargetX);
       return [
-        ...current.map((node) => node.type === "targetNode"
-          ? { ...node, position: { ...node.position, x: Math.max(node.position.x, targetX) } }
+        ...current.map((node) => (node.type === "targetNode" || node.id.startsWith("target-"))
+          ? { ...node, position: { ...node.position, x: node.position.x + shiftX } }
           : node),
         {
           id,
@@ -291,6 +335,23 @@ export default function MigrationStudio({ tenants, request, catalogs, notify }) 
     }
   };
 
+  const changeLayout = useCallback((newMode) => {
+    setLayoutMode(newMode);
+    setNodes((currentNodes) => {
+      const targetNodes = currentNodes.filter((n) => n.type === "targetNode" || n.id.startsWith("target-"));
+      const minTargetX = targetNodes.reduce((min, n) => Math.min(min, n.position.x), TARGET_START_X);
+      const startX = Math.max(TARGET_START_X, minTargetX);
+      let targetIdx = 0;
+      return currentNodes.map((node) => {
+        if (node.type === "targetNode" || node.id.startsWith("target-")) {
+          const pos = getTargetPosition(targetIdx++, targetNodes.length, newMode, startX);
+          return { ...node, position: pos };
+        }
+        return node;
+      });
+    });
+  }, []);
+
   const initTargetNodes = useCallback((selectedEntity) => {
     if (!selectedEntity || !migrationSchemas[selectedEntity]) return;
 
@@ -301,7 +362,7 @@ export default function MigrationStudio({ tenants, request, catalogs, notify }) 
     const newTargetNodes = schemaFields.map((field, idx) => ({
       id: `target-${field.id}`,
       type: 'targetNode',
-      position: { x: TARGET_START_X, y: 90 + (idx * 90) },
+      position: getTargetPosition(idx, schemaFields.length, layoutMode, TARGET_START_X),
       data: {
         label: field.label || field.id,
         required: field.required,
@@ -311,11 +372,11 @@ export default function MigrationStudio({ tenants, request, catalogs, notify }) 
     }));
 
     setNodes((nds) => {
-      const sourceNodes = nds.filter(n => n.id.startsWith("source-"));
-      return [...newTargetNodes, ...sourceNodes];
+      const nonTargets = nds.filter((n) => !n.id.startsWith("target-") && n.type !== "targetNode");
+      return [...nonTargets, ...newTargetNodes];
     });
-    setEdges([]);
-  }, [migrationSchemas, handleOpenTransformModal]);
+    setEdges((eds) => eds.filter((e) => !e.target.startsWith("target-")));
+  }, [migrationSchemas, handleOpenTransformModal, layoutMode]);
 
   useEffect(() => {
     initTargetNodes(entityType);
@@ -334,6 +395,7 @@ export default function MigrationStudio({ tenants, request, catalogs, notify }) 
 
     const formData = new FormData();
     formData.append("file", selectedFile);
+    formData.append("master_setup_key", "");
 
     try {
       const data = await request(`/api/migration/${selectedTenantSlug}/analyze-csv`, {
@@ -351,11 +413,11 @@ export default function MigrationStudio({ tenants, request, catalogs, notify }) 
         className: 'border-2 border-slate-300 bg-white shadow-sm rounded-lg p-3 font-mono text-xs font-bold text-slate-800'
       }));
 
-      setNodes(nds => {
-        const targets = nds.filter(n => n.id.startsWith("target-"));
-        return [...targets, ...sourceNodes];
+      setNodes((nds) => {
+        const nonSources = nds.filter((n) => !n.id.startsWith("source-"));
+        return [...nonSources, ...sourceNodes];
       });
-      setEdges([]);
+      setEdges((eds) => eds.filter((e) => !e.source.startsWith("source-") && !e.target.startsWith("source-")));
     } catch (error) {
       setFile(null);
       notify(`CSV analysis failed: ${error.message}`, "err");
@@ -454,6 +516,7 @@ export default function MigrationStudio({ tenants, request, catalogs, notify }) 
     if (!validateRequiredMappings()) return;
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("master_setup_key", "");
     formData.append("entity_type", entityType);
     formData.append("duplicate_policy", duplicatePolicy);
     if (duplicatePolicy !== "allow" && duplicateField) formData.append("duplicate_field", duplicateField);
@@ -481,6 +544,7 @@ export default function MigrationStudio({ tenants, request, catalogs, notify }) 
     setIsExecuting(true);
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("master_setup_key", "");
     formData.append("entity_type", entityType);
     formData.append("duplicate_policy", duplicatePolicy);
     if (duplicatePolicy !== "allow" && duplicateField) formData.append("duplicate_field", duplicateField);
@@ -595,6 +659,43 @@ export default function MigrationStudio({ tenants, request, catalogs, notify }) 
                 <button type="button" onClick={() => addTransformNode("constant", "VALUE")} className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-[10px] font-bold text-slate-700 hover:bg-slate-200">
                   Constant
                 </button>
+
+                <div className="h-4 w-px bg-slate-200 mx-1 hidden sm:block" />
+                <span className="px-1 text-[9px] font-black uppercase tracking-wider text-slate-500">Table Fields</span>
+                <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-[10px] font-bold">
+                  <button
+                    type="button"
+                    onClick={() => changeLayout("horizontal")}
+                    className={`px-2 py-1 rounded-md transition-colors ${layoutMode === "horizontal" ? "bg-white text-cyan-700 shadow-sm font-black" : "text-slate-600 hover:text-slate-900"}`}
+                    title="All table fields aligned in a horizontal line"
+                  >
+                    Horizontal Row
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => changeLayout("grid-3")}
+                    className={`px-2 py-1 rounded-md transition-colors ${layoutMode === "grid-3" ? "bg-white text-cyan-700 shadow-sm font-black" : "text-slate-600 hover:text-slate-900"}`}
+                    title="Table fields in 3 horizontal columns"
+                  >
+                    3-Col Grid
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => changeLayout("grid-2")}
+                    className={`px-2 py-1 rounded-md transition-colors ${layoutMode === "grid-2" ? "bg-white text-cyan-700 shadow-sm font-black" : "text-slate-600 hover:text-slate-900"}`}
+                    title="Table fields in 2 horizontal columns"
+                  >
+                    2-Col Grid
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => changeLayout("vertical")}
+                    className={`px-2 py-1 rounded-md transition-colors ${layoutMode === "vertical" ? "bg-white text-cyan-700 shadow-sm font-black" : "text-slate-600 hover:text-slate-900"}`}
+                    title="Table fields in a single vertical column"
+                  >
+                    Vertical
+                  </button>
+                </div>
               </div>
               <ReactFlow
                 nodes={nodes}

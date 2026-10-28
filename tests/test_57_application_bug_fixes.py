@@ -200,3 +200,26 @@ def test_onboarding_ui_session_persistence_contract():
     fleet_hook = Path("onboarding-ui/src/hooks/useFleetData.js").read_text(encoding="utf-8")
     assert "const previousOperatorToken = useRef(false);" in fleet_hook
     assert "!lastSyncedAt && !syncing.current" in fleet_hook
+
+
+def test_migration_studio_horizontal_layout_and_router_contracts():
+    """
+    Verifies that:
+    1. MigrationStudio.jsx defaults layoutMode to 'horizontal' and provides horizontal layout options.
+    2. TargetSchemaNode has both top and left connection handles.
+    3. Tenants are automatically selected on mount.
+    4. Migration router endpoints default master_setup_key to Form("").
+    """
+    studio_jsx = Path("onboarding-ui/src/views/MigrationStudio.jsx").read_text(encoding="utf-8")
+    assert 'const [layoutMode, setLayoutMode] = useState("horizontal");' in studio_jsx
+    assert 'Position.Top' in studio_jsx and 'id="top"' in studio_jsx
+    assert 'Position.Left' in studio_jsx and 'id="left"' in studio_jsx
+    assert 'Horizontal Row' in studio_jsx
+    assert '3-Col Grid' in studio_jsx
+    assert 'setSelectedTenantSlug(tenants[0].subdomain_slug);' in studio_jsx
+
+    router_py = Path("backend/control_plane/api/routers/migration.py").read_text(encoding="utf-8")
+    assert 'master_setup_key: str = Form("")' in router_py
+    assert 'master_setup_key: str = Form(...)' not in router_py
+
+

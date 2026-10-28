@@ -420,7 +420,7 @@ def _coerce_migration_value(value: Any, column_type: Any) -> Any:
 
 @router.post("/{slug}/analyze-csv")
 async def analyze_legacy_csv(
-    slug: str, master_setup_key: str = Form(...), file: UploadFile = File(...), control_db: Session = Depends(get_control_db),
+    slug: str, master_setup_key: str = Form(""), file: UploadFile = File(...), control_db: Session = Depends(get_control_db),
 ):
     _verify_vendor_key(master_setup_key)
     tenant = control_db.execute(select(TenantRegistry).where(TenantRegistry.subdomain_slug == slug)).scalar_one_or_none()
@@ -439,7 +439,7 @@ async def analyze_legacy_csv(
 @router.post("/{slug}/preview-mapping")
 async def preview_visual_node_mapping(
     slug: str,
-    master_setup_key: str = Form(...),
+    master_setup_key: str = Form(""),
     entity_type: str = Form(...),
     node_mapping_json: str = Form(...),
     duplicate_policy: str = Form("skip"),
@@ -646,7 +646,7 @@ def _execute_bulk_migration_background(
 async def execute_visual_node_migration(
     slug: str,
     background_tasks: BackgroundTasks,
-    master_setup_key: str = Form(...),
+    master_setup_key: str = Form(""),
     entity_type: str = Form(...),
     node_mapping_json: str = Form(...),
     duplicate_policy: str = Form("skip"),
