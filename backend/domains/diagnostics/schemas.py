@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, computed_field
 
 from backend.domains.diagnostics.models import OrderStatusEnum, ServiceTypeEnum, TaskStatusEnum
 
@@ -79,6 +79,11 @@ class DiagnosticTaskResponse(BaseModel):
     previous_result_value: Optional[str] = None
     delta_percentage: Optional[float] = None
     model_config = ConfigDict(from_attributes=True)
+
+    @computed_field
+    @property
+    def is_preliminary(self) -> bool:
+        return self.status == TaskStatusEnum.IN_PROGRESS and bool(self.result_value)
 
 
 class LabDeltaCheckConfigCreate(BaseModel):

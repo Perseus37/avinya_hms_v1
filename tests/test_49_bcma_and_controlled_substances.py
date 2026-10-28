@@ -290,7 +290,7 @@ def test_controlled_substance_vault_lifecycle_receipt_and_dispense(client, super
     )
     assert dup_res.status_code == 409
 
-    # 2. Receive stock replenishment (+15 units)
+    # 2. Receive stock replenishment (+15 units) with mandatory dual-witness
     rcv_res = client.post(
         "/v1/api/pharmacy/controlled-substances/receipt",
         headers=pharmacist_headers,
@@ -299,6 +299,8 @@ def test_controlled_substance_vault_lifecycle_receipt_and_dispense(client, super
             "quantity_units": 15,
             "tamper_seal_number": "SEAL-A102",
             "batch_number": "LOT-FENT-2026-X",
+            "witness_user_id": 2,
+            "witness_password": "StaffPass123!",
             "notes": "Direct supplier intake verified",
         },
     )
@@ -331,6 +333,7 @@ def test_controlled_substance_vault_lifecycle_receipt_and_dispense(client, super
         json={
             "vault_id": vault["id"],
             "quantity_units": 99,
+            "notes": "Dispensed to OT Room 3",
         },
     )
     assert over_res.status_code == 400

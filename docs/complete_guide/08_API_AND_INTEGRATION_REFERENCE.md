@@ -197,7 +197,7 @@ For hospital SOC (Security Operations Center) teams ingesting audit logs:
   - **Right Patient:** Matches scanned wristband MRN against active encounter patient. Rejects bare numeric database IDs (wristband machine barcode mandatory).
   - **Right Drug:** Matches scanned medication vial barcode against prescribed item master. Rejects typed brand names (machine barcode, NDC, or medication catalog code mandatory).
   - **Right Dose:** Mandatory `dose_given`. Strict tokenized numeric and normalized unit comparison (`mg`, `mcg`, `ml`, `l`, `iu`, `g`), preventing bare number matches against durations or strength strings.
-  - **Right Route:** Mandatory `route`. Validates administration route (`ORAL`, `IV`, `IM`, `SC`, `TOPICAL`) against prescription specifications. For injectable formulations (`INJECTION`, `INFUSION`) without specific prescription route, permits parenteral routes (`IV`, `IM`, `SC`).
+  - **Right Route:** Mandatory `route`. Validates administration route (`ORAL`, `IV`, `IM`, `SC`, `INTRATHECAL`, `TOPICAL`) against prescription specifications. For injectable formulations (`INJECTION`, `INFUSION`) without specific prescription route, permits parenteral routes (`IV`, `IM`, `SC`, `INTRATHECAL`).
   - **Right Time:** Checks administration window against scheduled administration frequency (+/- 60 minutes).
 - **Audit Response:**
   ```json
@@ -214,9 +214,9 @@ For hospital SOC (Security Operations Center) teams ingesting audit logs:
 
 ### 7.2 Controlled Substances (Narcotics) Perpetual Vault & Dual-Witness Register
 - **Vault Register:** `POST /v1/api/pharmacy/controlled-substances/vault` initializes a double-locked perpetual safe register with tamper seal tracking.
-- **Stock Replenishment:** `POST /v1/api/pharmacy/controlled-substances/receipt` with optional secondary witness authentication.
-- **Perpetual Safe Dispense:** `POST /v1/api/pharmacy/controlled-substances/dispense` enforces clinical destination validation (`encounter_id`, `prescription_item_id`, or `notes`).
-- **Unused Narcotic Return:** `POST /v1/api/pharmacy/controlled-substances/return` returns unused ampoules/tablets to the vault safe with secondary witness verification.
+- **Stock Replenishment:** `POST /v1/api/pharmacy/controlled-substances/receipt` mandates independent secondary witness authentication and procurement/PO intake reference (min 5 chars).
+- **Perpetual Safe Dispense:** `POST /v1/api/pharmacy/controlled-substances/dispense` enforces strict clinical destination validation (`encounter_id`, `prescription_item_id`, or ward destination notes >= 10 chars, rejecting trivial single-letter notes).
+- **Unused Narcotic Return:** `POST /v1/api/pharmacy/controlled-substances/return` mandates independent secondary witness verification and clinical justification / encounter linking (min 10 chars).
 - **Dual-Witness Wastage Destruction:** `POST /v1/api/pharmacy/controlled-substances/waste` enforces independent licensed healthcare witness password verification (self-witness strictly blocked), rate-limited witness authentication, and clinical destruction notes (min 5 chars).
 
 ### 7.3 NEWS2 Physiological Deterioration Scoring & Completeness
@@ -227,8 +227,8 @@ For hospital SOC (Security Operations Center) teams ingesting audit logs:
   - Enforces mandatory completeness checks: returns `is_complete_set: bool` and `missing_parameters: list[str]`. If vital parameters are omitted (including consciousness level), low aggregate scores trigger `INCOMPLETE_DATA` warning recommendations rather than false routine reassurances.
 
 ### 7.4 Native HL7 v2 Result Status Handling & LIS Safety
-- **Preliminary Results (`OBX-11 = P`):** Records preliminary values with `[PRELIMINARY: ...]` notice, setting diagnostic task status to `IN_PROGRESS` while keeping master order status `ACTIVE`.
-- **Unobtainable / Hemolyzed Specimens (`OBX-11 = X`):** Marks diagnostic task `CANCELLED`, clears `result_value = None`, appends specimen rejection note, and safely skips delta-check calculations.
+- **Preliminary Results (`OBX-11 = P`):** Records preliminary values with `[PRELIMINARY: ...]` notice, setting diagnostic task status to `IN_PROGRESS` and setting computed API response flag `is_preliminary: true` while keeping master order status `ACTIVE`.
+- **Unobtainable / Hemolyzed Specimens (`OBX-11 = X`):** Marks diagnostic task `SAMPLE_REJECTED`, populates rejection reason, clears `result_value = None`, appends specimen rejection and re-collection note, broadcasts `lab_specimen_alerts`, keeps parent order status `ACTIVE` (never closes single-test orders as `COMPLETED`), and safely skips delta-check calculations.
 
 ---
 

@@ -307,8 +307,28 @@ def process_hl7_oru_r01_in_session(
 
             if is_unobtainable:
                 task.result_value = None
-                task.status = TaskStatusEnum.CANCELLED
-                task.result_notes = f"{task.result_notes or ''} [UNOBTAINABLE: Specimen could not be analyzed (OBX-11=X)]".strip()
+                task.status = TaskStatusEnum.SAMPLE_REJECTED
+                task.rejection_reason = "Specimen unobtainable / rejected by analyzer (OBX-11=X)"
+                task.result_notes = f"{task.result_notes or ''} [UNOBTAINABLE: Specimen could not be analyzed (OBX-11=X). Re-collection required.]".strip()
+                from backend.core.database import get_redis
+                try:
+                    redis_cli = get_redis()
+                    if redis_cli:
+                        redis_cli.publish(
+                            "lab_specimen_alerts",
+                            json.dumps({
+                                "event": "LAB_SPECIMEN_UNOBTAINABLE",
+                                "order_id": task.order_id,
+                                "task_id": task.id,
+                                "patient_id": task.order.patient_id,
+                                "service_code": task.service.code if task.service else "UNKNOWN",
+                                "service_name": task.service.name if task.service else "Laboratory Test",
+                                "message": "Specimen unobtainable (OBX-11=X). Re-collection required.",
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            })
+                        )
+                except Exception:
+                    pass
             elif len(obs_items) == 1:
                 single_val = obs_items[0]["value"]
                 task.result_value = single_val
@@ -362,13 +382,15 @@ def process_hl7_oru_r01_in_session(
             else:
                 task.status = TaskStatusEnum.RESULT_ENTERED
 
-            # Update parent order status
+            # Update parent order status (N-66: An unobtainable result must NOT mark order COMPLETED)
             order_tasks = task.order.tasks
-            if all(t.status in [TaskStatusEnum.VERIFIED, TaskStatusEnum.CANCELLED] for t in order_tasks):
+            if all(t.status == TaskStatusEnum.VERIFIED for t in order_tasks):
                 task.order.status = OrderStatusEnum.COMPLETED
+            elif all(t.status in [TaskStatusEnum.CANCELLED, TaskStatusEnum.SAMPLE_REJECTED] for t in order_tasks):
+                task.order.status = OrderStatusEnum.ACTIVE  # Remains OPEN / ACTIVE for recollection
             elif any(t.status in [TaskStatusEnum.RESULT_ENTERED, TaskStatusEnum.VERIFIED] for t in order_tasks):
                 task.order.status = OrderStatusEnum.PARTIAL
-            elif any(t.status == TaskStatusEnum.IN_PROGRESS for t in order_tasks):
+            elif any(t.status in [TaskStatusEnum.IN_PROGRESS, TaskStatusEnum.PENDING, TaskStatusEnum.SAMPLE_COLLECTED, TaskStatusEnum.SAMPLE_REJECTED] for t in order_tasks):
                 task.order.status = OrderStatusEnum.ACTIVE
 
             updated_results.append({

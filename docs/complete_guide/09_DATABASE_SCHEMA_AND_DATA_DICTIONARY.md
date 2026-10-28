@@ -186,7 +186,7 @@ Auditable perpetual movement log for narcotics receipts, dispenses, returns, and
 - `encounter_id` (INTEGER, FK ➔ `patient_encounters.id`, NULLABLE)
 - `prescription_item_id` (INTEGER, FK ➔ `prescription_items.id`, NULLABLE)
 - `primary_user_id` (INTEGER, FK ➔ `users.id`, NOT NULL): Primary licensed nurse / pharmacist.
-- `witness_user_id` (INTEGER, FK ➔ `users.id`, NULLABLE): Mandatory independent second witness for wastage.
+- `witness_user_id` (INTEGER, FK ➔ `users.id`, NULLABLE): Mandatory independent second witness for safe receipt, return, and wastage.
 - `witness_verified` (BOOLEAN, DEFAULT FALSE, NOT NULL): True when witness credentials successfully authenticated.
 - `wastage_reason` (VARCHAR(255), NULLABLE): Clinical disposal justification.
 - `disposal_method` (VARCHAR(100), NULLABLE): Safe destruction method.

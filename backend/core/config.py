@@ -178,7 +178,7 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: Optional[str] = None
 
     def is_production(self) -> bool:
-        return self.ENVIRONMENT.strip().lower() in {"production", "prod"}
+        return self.ENVIRONMENT.strip().lower() in {"production", "prod", "staging"}
 
     @property
     def DATABASE_URL(self) -> str:

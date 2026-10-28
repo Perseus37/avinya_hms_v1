@@ -70,9 +70,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.password is not None:
         from backend.core.config import settings
 
-        if settings.is_production() or settings.ENVIRONMENT.lower() == "production":
+        if settings.is_production() or settings.ENVIRONMENT.lower() in {"production", "prod", "staging"}:
             parser.error(
-                "Security Guard: Supplying raw passwords via the --password command-line argument is strictly prohibited in production. "
+                "Security Guard: Supplying raw passwords via the --password command-line argument is strictly prohibited in production and staging environments. "
                 "Omit --password to provide the credential securely via interactive masked getpass prompt."
             )
         password = args.password

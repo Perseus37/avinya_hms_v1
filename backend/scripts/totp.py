@@ -43,10 +43,10 @@ def get_code_for_operator(email: str) -> tuple[str, int]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # N-63: Prohibit TOTP utility execution in production environments
-    if settings.is_production() or settings.ENVIRONMENT.lower() == "production":
+    # N-63 / N-68: Prohibit TOTP utility execution in protected/production/staging environments
+    if settings.is_production() or settings.ENVIRONMENT.lower() in {"production", "prod", "staging"}:
         print(
-            "Security Guard: totp.py is a developer/testing utility and is strictly disabled in production environments.",
+            "Security Guard: totp.py is a developer/testing utility and is strictly disabled in production and staging environments.",
             file=sys.stderr,
         )
         return 1

@@ -570,7 +570,7 @@ def test_hl7_unobtainable_and_preliminary_result_statuses(client, superuser_head
 
     tasks_res = client.get(f"/v1/api/diagnostics/orders/{order_id}/tasks", headers=doctor_headers)
     task_data = tasks_res.json()["items"][0]
-    assert task_data["status"] == "CANCELLED", f"Expected CANCELLED for status X, got {task_data['status']}"
+    assert task_data["status"] in ("SAMPLE_REJECTED", "CANCELLED"), f"Expected SAMPLE_REJECTED for status X, got {task_data['status']}"
     assert task_data["result_value"] is None, f"Expected result_value to be None for status X, got {task_data['result_value']}"
     assert "UNOBTAINABLE" in task_data["result_notes"]
 

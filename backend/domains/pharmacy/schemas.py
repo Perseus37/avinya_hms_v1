@@ -203,11 +203,11 @@ class ControlledSubstanceVaultResponse(BaseModel):
 class ControlledSubstanceReceiptRequest(BaseModel):
     vault_id: int
     quantity_units: int = Field(gt=0)
-    batch_number: str
+    batch_number: str = Field(min_length=3)
+    witness_user_id: int
+    witness_password: str
     tamper_seal_number: Optional[str] = None
-    witness_user_id: Optional[int] = None
-    witness_password: Optional[str] = None
-    notes: Optional[str] = None
+    notes: str = Field(min_length=5, description="Procurement or supply reference documentation")
 
 
 class ControlledSubstanceDispenseRequest(BaseModel):
@@ -224,12 +224,12 @@ class ControlledSubstanceDispenseRequest(BaseModel):
 class ControlledSubstanceReturnRequest(BaseModel):
     vault_id: int
     quantity_units: int = Field(gt=0)
+    witness_user_id: int
+    witness_password: str
     encounter_id: Optional[int] = None
     prescription_item_id: Optional[int] = None
-    witness_user_id: Optional[int] = None
-    witness_password: Optional[str] = None
     batch_number: Optional[str] = None
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(default=None, description="Detailed clinical return justification")
 
 
 class ControlledSubstanceWastageRequest(BaseModel):

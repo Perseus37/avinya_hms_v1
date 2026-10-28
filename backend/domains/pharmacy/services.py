@@ -103,6 +103,13 @@ ROUTE_ALIASES = {
     "otic": "OTIC",
     "ear": "OTIC",
     "nasal": "NASAL",
+    "intrathecal": "INTRATHECAL",
+    "it": "INTRATHECAL",
+    "epidural": "EPIDURAL",
+    "intradermal": "INTRADERMAL",
+    "id": "INTRADERMAL",
+    "intraarterial": "INTRAARTERIAL",
+    "ia": "INTRAARTERIAL",
 }
 
 UNIT_NORMALIZATION = {
@@ -162,10 +169,20 @@ def _extract_dose_tokens(text: Optional[str]) -> List[Tuple[float, str]]:
 
 
 def _extract_route(text: Optional[str]) -> Optional[str]:
-    """Extracts standardized administration route from text (e.g. 'IV', 'ORAL', 'IM', 'SC')."""
+    """Extracts standardized administration route from text (e.g. 'IV', 'ORAL', 'IM', 'SC', 'INTRATHECAL')."""
     if not text:
         return None
-    lower = text.lower()
+    raw = str(text).strip()
+    upper = raw.upper()
+    standard_routes = {
+        "ORAL", "IV", "IM", "SC", "TOPICAL", "INHALATION",
+        "RECTAL", "SUBLINGUAL", "OPHTHALMIC", "OTIC", "NASAL",
+        "INTRATHECAL", "EPIDURAL", "INTRADERMAL", "INTRAARTERIAL",
+    }
+    if upper in standard_routes:
+        return upper
+
+    lower = raw.lower()
     for phrase in ["by mouth", "iv push", "iv piggyback", "iv infusion", "per os"]:
         if phrase in lower:
             return ROUTE_ALIASES[phrase]
@@ -677,14 +694,28 @@ def process_controlled_substance_movement(
     bal_before = vault.current_balance_units
     witness_verified = False
 
-    # 1. Receipt into Vault (Stock replenishment)
+    # 1. Receipt into Vault (Stock replenishment - N-44: Mandatory witness and procurement reference)
     if movement_type == "RECEIPT":
+        if not witness_user_id or not witness_password:
+            raise HTTPException(
+                status_code=400,
+                detail="Dual-witness protocol mandatory: A secondary licensed healthcare witness ID and password are required for safe receipt.",
+            )
+        _verify_witness_credentials(session, primary_user, witness_user_id, witness_password)
+        witness_verified = True
+        if not batch_number or len(batch_number.strip()) < 3:
+            raise HTTPException(
+                status_code=400,
+                detail="Mandatory batch/lot number required for narcotics receipt (minimum 3 characters).",
+            )
+        if not notes or len(notes.strip()) < 5:
+            raise HTTPException(
+                status_code=400,
+                detail="Supply reference or intake invoice documentation required for narcotics receipt (minimum 5 characters).",
+            )
         bal_after = bal_before + quantity_units
         if tamper_seal_number:
             vault.tamper_seal_number = tamper_seal_number
-        if witness_user_id:
-            _verify_witness_credentials(session, primary_user, witness_user_id, witness_password)
-            witness_verified = True
 
     # 2. Dispense from Vault to Ward/Bedside
     elif movement_type == "DISPENSE":
@@ -693,12 +724,13 @@ def process_controlled_substance_movement(
                 status_code=400,
                 detail=f"Insufficient narcotic vault balance. Requested: {quantity_units}, Available: {bal_before}.",
             )
-        # N-44: Validate destination / clinical link
-        if not encounter_id and not prescription_item_id and not (notes and notes.strip()):
-            raise HTTPException(
-                status_code=400,
-                detail="Dispense destination required: encounter_id, prescription_item_id, or destination notes must be provided.",
-            )
+        # N-44: Stricter destination validation (minimum 10 chars if ward floor stock)
+        if not encounter_id and not prescription_item_id:
+            if not notes or len(notes.strip()) < 10:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Dispense destination required: encounter_id, prescription_item_id, or detailed ward destination notes (minimum 10 characters) must be provided.",
+                )
         # N-44: Validate encounter and prescription item existence when provided
         if encounter_id is not None:
             enc = session.get(PatientEncounter, encounter_id)
@@ -738,8 +770,21 @@ def process_controlled_substance_movement(
         witness_verified = True
         bal_after = bal_before - quantity_units
 
-    # 4. Return unused units back to vault
+    # 4. Return unused units back to vault (N-44: Mandatory witness and clinical link)
     elif movement_type == "RETURN_TO_VAULT":
+        if not witness_user_id or not witness_password:
+            raise HTTPException(
+                status_code=400,
+                detail="Dual-witness protocol mandatory: A secondary licensed healthcare witness ID and password are required for returning narcotics to safe.",
+            )
+        _verify_witness_credentials(session, primary_user, witness_user_id, witness_password)
+        witness_verified = True
+        if not encounter_id and not prescription_item_id:
+            if not notes or len(notes.strip()) < 10:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Narcotics return must be linked to an encounter_id, prescription_item_id, or specify detailed clinical return justification (minimum 10 characters).",
+                )
         if encounter_id is not None:
             enc = session.get(PatientEncounter, encounter_id)
             if not enc:
@@ -748,9 +793,6 @@ def process_controlled_substance_movement(
             rx_i = session.get(PrescriptionItem, prescription_item_id)
             if not rx_i:
                 raise HTTPException(status_code=404, detail=f"Prescription item {prescription_item_id} not found.")
-        if witness_user_id:
-            _verify_witness_credentials(session, primary_user, witness_user_id, witness_password)
-            witness_verified = True
         bal_after = bal_before + quantity_units
 
     else:

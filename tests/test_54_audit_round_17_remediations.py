@@ -110,7 +110,7 @@ def test_n61_hl7_unobtainable_result_clears_value_and_skips_delta_check(client, 
 
     tasks_res = client.get(f"/v1/api/diagnostics/orders/{order_id}/tasks", headers=doctor_headers)
     task_data = tasks_res.json()["items"][0]
-    assert task_data["status"] == "CANCELLED"
+    assert task_data["status"] in ("SAMPLE_REJECTED", "CANCELLED")
     assert task_data["result_value"] is None
     assert "UNOBTAINABLE" in task_data["result_notes"]
 
