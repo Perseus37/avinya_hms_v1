@@ -17,7 +17,7 @@ export default function useFleetData({ operatorToken, request, notify }) {
   });
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [lastSyncError, setLastSyncError] = useState(null);
-  const previousOperatorToken = useRef(Boolean(operatorToken));
+  const previousOperatorToken = useRef(false);
   const syncing = useRef(false);
   const mounted = useRef(false);
 
@@ -115,11 +115,14 @@ export default function useFleetData({ operatorToken, request, notify }) {
 
   useEffect(() => {
     const currentOperatorToken = Boolean(operatorToken);
-    if (!previousOperatorToken.current && currentOperatorToken) {
+    if (
+      (!previousOperatorToken.current && currentOperatorToken) ||
+      (currentOperatorToken && !lastSyncedAt && !syncing.current)
+    ) {
       syncAll(true);
     }
     previousOperatorToken.current = currentOperatorToken;
-  }, [operatorToken, syncAll]);
+  }, [operatorToken, syncAll, lastSyncedAt]);
 
   useEffect(() => {
     if (!operatorToken) return undefined;

@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import asyncio
 import logging
@@ -227,11 +228,20 @@ async def receive_global_webhook(
 # -------------------------------------------------------------------------
 # STATIC SPA MOUNTING
 # -------------------------------------------------------------------------
-SPA_DIST = "/app/onboarding-ui/dist"
+LOCAL_SPA_DIST = Path(__file__).resolve().parent.parent.parent / "onboarding-ui" / "dist"
+SPA_DIST = (
+    os.getenv("SPA_DIST_DIR")
+    or ("/app/onboarding-ui/dist" if os.path.exists("/app/onboarding-ui/dist") else str(LOCAL_SPA_DIST))
+)
 
 if os.path.exists(SPA_DIST):
-    app.mount("/assets", StaticFiles(directory=f"{SPA_DIST}/assets"), name="assets")
+    assets_dir = os.path.join(SPA_DIST, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_react_spa(full_path: str):
-        return FileResponse(f"{SPA_DIST}/index.html")
+        target_file = os.path.join(SPA_DIST, full_path)
+        if full_path and os.path.isfile(target_file):
+            return FileResponse(target_file)
+        return FileResponse(os.path.join(SPA_DIST, "index.html"))

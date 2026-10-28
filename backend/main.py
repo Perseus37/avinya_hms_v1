@@ -230,6 +230,7 @@ app = FastAPI(
     docs_url=None if is_prod_docs_disabled else "/docs",
     redoc_url=None if is_prod_docs_disabled else "/redoc",
     openapi_url=None if is_prod_docs_disabled else "/openapi.json",
+    swagger_ui_parameters={"persistAuthorization": True},
 )
 
 v1_app = FastAPI(
@@ -238,6 +239,7 @@ v1_app = FastAPI(
     docs_url=None if is_prod_docs_disabled else "/docs",
     redoc_url=None if is_prod_docs_disabled else "/redoc",
     openapi_url=None if is_prod_docs_disabled else "/openapi.json",
+    swagger_ui_parameters={"persistAuthorization": True},
 )
 
 register_exception_handlers(app)

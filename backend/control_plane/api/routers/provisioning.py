@@ -186,42 +186,43 @@ def provision_hospital(
 
     t_engine = create_engine(target_db_url)
     TSession = sessionmaker(bind=t_engine, autocommit=False, autoflush=False)
+    tenant_db = None
 
-    # FIX: Robust try/except/finally block for transaction safety and engine teardown
     try:
-        with TSession() as tenant_db:
-            seed_universal_hospital_data(
-                db=tenant_db,
-                hospital_name=req.hospital_name,
+        tenant_db = TSession()
+        seed_universal_hospital_data(
+            db=tenant_db,
+            hospital_name=req.hospital_name,
+            branch_code=branch_code,
+            admin_email=req.admin_email,
+            admin_password=admin_password,
+            seed_icd10=req.seed_icd10,
+            seed_allergies=req.seed_allergies,
+            seed_complaints=req.seed_complaints,
+        )
+        tenant_db.add(
+            FederatedClient(
                 branch_code=branch_code,
-                admin_email=req.admin_email,
-                admin_password=admin_password,
-                seed_icd10=req.seed_icd10,
-                seed_allergies=req.seed_allergies,
-                seed_complaints=req.seed_complaints,
+                name=req.hospital_name,
+                api_key_prefix=raw_fed_key[:14],
+                api_key_hash=fed_key_hash,
+                is_active=True,
             )
-            tenant_db.add(
-                FederatedClient(
-                    branch_code=branch_code,
-                    name=req.hospital_name,
-                    api_key_prefix=raw_fed_key[:14],
-                    api_key_hash=fed_key_hash,
-                    is_active=True,
-                )
-            )
-            policy = tenant_db.execute(select(HospitalPolicySetting)).scalars().first()
-            if not policy:
-                policy = HospitalPolicySetting(federation_sharing_mode=req.federation_sharing_mode)
-                tenant_db.add(policy)
-            else:
-                policy.federation_sharing_mode = req.federation_sharing_mode
-            admin_user = tenant_db.query(User).filter(User.email == req.admin_email).first()
-            admin_id = admin_user.id if admin_user else 1
+        )
+        policy = tenant_db.execute(select(HospitalPolicySetting)).scalars().first()
+        if not policy:
+            policy = HospitalPolicySetting(federation_sharing_mode=req.federation_sharing_mode)
+            tenant_db.add(policy)
+        else:
+            policy.federation_sharing_mode = req.federation_sharing_mode
+        admin_user = tenant_db.query(User).filter(User.email == req.admin_email).first()
+        admin_id = admin_user.id if admin_user else 1
 
-            blueprint_summary = apply_hospital_blueprint(tenant_db, req.blueprint_archetype, admin_id)
-            tenant_db.commit()
+        blueprint_summary = apply_hospital_blueprint(tenant_db, req.blueprint_archetype, admin_id)
+        tenant_db.commit()
     except Exception:
-        tenant_db.rollback()
+        if tenant_db:
+            tenant_db.rollback()
         logger.exception("Tenant initialization or blueprint setup failed for %s.", slug)
         control_db.add(
             ControlPlaneAuditLog(
@@ -233,7 +234,8 @@ def provision_hospital(
         control_db.commit()
         raise HTTPException(status_code=500, detail="Failed to initialize tenant schemas and blueprints.")
     finally:
-        tenant_db.close()
+        if tenant_db:
+            tenant_db.close()
         t_engine.dispose()
 
     subdomain_url = settings.tenant_url(slug)

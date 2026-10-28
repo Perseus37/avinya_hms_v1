@@ -1,3 +1,5 @@
+import re
+import jwt
 from collections import OrderedDict
 from dataclasses import dataclass
 import threading
@@ -117,7 +119,7 @@ redis_pool = redis.ConnectionPool.from_url(settings.REDIS_URL, decode_responses=
 
 
 def extract_subdomain_slug(request: Request) -> str:
-    """Extracts the tenant slug from X-Hospital-Subdomain header or Host subdomain."""
+    """Extracts the tenant slug from X-Hospital-Subdomain header, Bearer JWT, or Host subdomain."""
     # SEC-002: Restrict X-Hospital-Subdomain header extraction to internal networks
     # Prevents external attackers from spoofing tenant routing
     header_override = request.headers.get("X-Hospital-Subdomain")
@@ -125,6 +127,18 @@ def extract_subdomain_slug(request: Request) -> str:
     
     if header_override and (getattr(settings, "ALLOW_HEADER_TENANT_OVERRIDE", False) or is_test_env):
         return header_override.strip().lower()
+
+    # Extract tenant_slug hint from Authorization Bearer token (signature verified in get_current_user)
+    auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
+    if auth_header and auth_header.strip().lower().startswith("bearer "):
+        try:
+            raw_token = auth_header.strip().split(" ", 1)[1].strip()
+            unverified = jwt.decode(raw_token, options={"verify_signature": False})
+            token_slug = unverified.get("tenant_slug")
+            if token_slug and isinstance(token_slug, str) and re.match(r"^[a-z0-9_\-]+$", token_slug.strip().lower()):
+                return token_slug.strip().lower()
+        except Exception:
+            pass
 
     host = request.headers.get("host", "").split(":")[0].strip().lower()
     if host and host != settings.BASE_DOMAIN and host.endswith(f".{settings.BASE_DOMAIN}"):

@@ -22,7 +22,19 @@ from sqlalchemy.orm import Session
 
 from backend.core.config import settings
 from backend.core.database import get_db, get_redis, resolve_tenant_context
-from backend.core.dependencies import RateLimiter, RequirePermission, get_current_user, validate_pagination, enforce_tenant_resource_quota
+from fastapi.security import OAuth2PasswordRequestForm
+from backend.core import database
+from backend.core.database import TenantContext
+from backend.control_plane.models import TenantRegistry
+from backend.security.envelope import decrypt_tenant_secret
+from backend.core.dependencies import (
+    RateLimiter,
+    RequirePermission,
+    get_current_user,
+    tenant_header_scheme,
+    validate_pagination,
+    enforce_tenant_resource_quota,
+)
 from backend.core.mailer import enqueue_email, send_email as core_send_email
 
 # Send_email symbol kept at module level for monkeypatching compatibility in tests
@@ -316,14 +328,35 @@ class CustomPermissionCreate(BaseModel):
 def login(
     payload: UserLogin,
     request: Request,
+    _tenant_header: Optional[str] = Depends(tenant_header_scheme),
     db: Session = Depends(get_db),
     _: None = Depends(RateLimiter(scope="auth_login", max_requests=10, window_seconds=60)),
 ):
     """Authenticates a user against the active hospital database and signs a tenant-isolated JWT."""
     tenant = resolve_tenant_context(request)
+    if payload.hospital_slug and payload.hospital_slug.strip().lower() != tenant.subdomain_slug:
+        target_slug = payload.hospital_slug.strip().lower()
+        with database.ControlSessionLocal() as control_db:
+            target_reg = control_db.execute(
+                select(TenantRegistry).where(TenantRegistry.subdomain_slug == target_slug)
+            ).scalar_one_or_none()
+            if not target_reg:
+                raise HTTPException(status_code=404, detail=f"Hospital '{target_slug}' is not registered.")
+            if not target_reg.is_active:
+                raise HTTPException(status_code=403, detail=f"Hospital '{target_reg.hospital_name}' is currently suspended.")
+            tenant = TenantContext(
+                subdomain_slug=target_reg.subdomain_slug,
+                branch_code=target_reg.branch_code,
+                hospital_name=target_reg.hospital_name,
+                db_name=target_reg.db_name,
+                jwt_secret_key=decrypt_tenant_secret(target_reg.jwt_secret_key),
+                enabled_modules_json=getattr(target_reg, "enabled_modules_json", '{"all": true}'),
+                quota_limits_json=getattr(target_reg, "quota_limits_json", None),
+            )
+            request.state.tenant_context = tenant
+            db = Session(database.tenant_engine_pool.get_engine(tenant.db_name))
     
     # SEC-007: Implement pessimistic lock to prevent distributed brute-force lockout bypass
-    from sqlalchemy import select
     user = db.execute(
         select(User).where(User.email == payload.email).with_for_update()
     ).scalar_one_or_none()
@@ -396,6 +429,33 @@ def login(
             "mfa_token": _issue_mfa_token(user, tenant, "mfa_setup"),
         }
     return _complete_login(user, tenant, db)
+
+
+@router.post(
+    "/token",
+    summary="OAuth2 standard password token endpoint for Swagger UI & automated clients",
+)
+def oauth2_token(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    _tenant_header: Optional[str] = Depends(tenant_header_scheme),
+    db: Session = Depends(get_db),
+    _: None = Depends(RateLimiter(scope="auth_login", max_requests=10, window_seconds=60)),
+):
+    login_payload = UserLogin(
+        email=form_data.username,
+        password=form_data.password,
+        hospital_slug=form_data.client_id if form_data.client_id else None,
+    )
+    result = login(payload=login_payload, request=request, _tenant_header=_tenant_header, db=db)
+    if isinstance(result, dict) and "access_token" in result:
+        return result
+    if isinstance(result, dict) and result.get("mfa_required"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="MFA verification is required for this account. Complete MFA login via /api/auth/mfa/verify.",
+        )
+    return result
 
 
 @router.get("/me", response_model=UserMeResponse)

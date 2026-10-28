@@ -10,6 +10,10 @@ from backend.domains.identity.models import GenderEnum, UserStatusEnum
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
+    hospital_slug: Optional[str] = Field(
+        default=None,
+        description="Optional hospital subdomain slug for multi-tenant routing from API docs",
+    )
 
 class TokenResponse(BaseModel):
     access_token: str

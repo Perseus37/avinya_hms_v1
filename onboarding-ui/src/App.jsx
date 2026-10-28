@@ -25,15 +25,46 @@ function formatNotificationMessage(message) {
   }
 }
 
+const OPERATOR_SESSION_KEY = "avinya_cp_operator_session";
+
+function loadSavedOperatorSession() {
+  try {
+    const raw = sessionStorage.getItem(OPERATOR_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && typeof parsed.token === "string" && parsed.token.trim()) {
+      return parsed;
+    }
+  } catch {
+    // In case of corrupt session storage
+  }
+  return null;
+}
+
 export default function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem("avinya_cp_theme") || "obsidian-gold");
-  const [operatorSession, setOperatorSession] = useState(null);
+  const [operatorSession, setOperatorSessionState] = useState(loadSavedOperatorSession);
   const [activeView, setActiveView] = useState("command-center");
+
+  const setOperatorSession = useCallback((session) => {
+    setOperatorSessionState(session);
+    try {
+      if (session?.token) {
+        sessionStorage.setItem(OPERATOR_SESSION_KEY, JSON.stringify(session));
+      } else {
+        sessionStorage.removeItem(OPERATOR_SESSION_KEY);
+      }
+    } catch {
+      // Storage unavailable / blocked
+    }
+  }, []);
 
   // Global State
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
-  const clearOperatorSession = useCallback(() => setOperatorSession(null), []);
+  const clearOperatorSession = useCallback(() => {
+    setOperatorSession(null);
+  }, [setOperatorSession]);
   const { request, busyKey, apiLogs } = useControlPlaneApi(
     operatorSession?.token,
     clearOperatorSession,

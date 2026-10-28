@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Optional
 from fastapi import Depends, Header, HTTPException, Request, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, APIKeyHeader
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordBearer
 import jwt
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -16,9 +16,9 @@ from backend.domains.facility.models import Bed
 from backend.domains.identity.models import AuthSession, Permission, Role, User, UserStatusEnum
 
 http_bearer = HTTPBearer(
-    auto_error=True,
+    auto_error=False,
     scheme_name="HTTPBearer",
-    description="Paste your JWT Bearer token obtained from /v1/api/auth/login (without 'Bearer ' prefix)",
+    description="Paste your JWT Bearer token obtained from /api/auth/login or /api/auth/token (without 'Bearer ' prefix)",
 )
 tenant_header_scheme = APIKeyHeader(
     name="X-Hospital-Subdomain",
@@ -26,7 +26,12 @@ tenant_header_scheme = APIKeyHeader(
     scheme_name="TenantSubdomain",
     description="Tenant subdomain slug (e.g. 'default' or your newly created hospital slug)",
 )
-oauth2_scheme = http_bearer
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl="/api/auth/token",
+    auto_error=False,
+    scheme_name="OAuth2PasswordBearer",
+    description="OAuth2 password flow. Username = email, Password = password, Client ID = optional hospital slug.",
+)
 
 
 def validate_pagination(page: int = 1, page_size: int = 20) -> tuple[int, int]:
@@ -44,21 +49,32 @@ def validate_pagination(page: int = 1, page_size: int = 20) -> tuple[int, int]:
 def get_current_user(
     request: Request,
     token: Any = Depends(http_bearer),
+    oauth2_token: Optional[str] = Depends(oauth2_scheme),
     _tenant_header: Optional[str] = Depends(tenant_header_scheme),
     db: Session = Depends(get_db),
 ) -> User:
     """Verifies the JWT using the specific hospital tenant's cryptographic signing key."""
-    raw_token = (
-        token.credentials
-        if hasattr(token, "credentials")
-        else str(token)
-    )
-    tenant: TenantContext = resolve_tenant_context(request)
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials for this hospital instance.",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    raw_token = None
+    if token and hasattr(token, "credentials") and token.credentials:
+        raw_token = token.credentials
+    elif token and isinstance(token, str):
+        raw_token = token
+    elif oauth2_token:
+        raw_token = oauth2_token
+    else:
+        auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
+        if auth_header and auth_header.strip().lower().startswith("bearer "):
+            raw_token = auth_header.strip().split(" ", 1)[1].strip()
+
+    if not raw_token:
+        raise credentials_exception
+
+    tenant: TenantContext = resolve_tenant_context(request)
     try:
         payload = jwt.decode(raw_token, tenant.jwt_secret_key, algorithms=[settings.ALGORITHM])
         user_id: str = payload.get("sub")
