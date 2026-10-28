@@ -111,7 +111,7 @@ class Settings(BaseSettings):
     def resolve_postgres_host(cls, value: str) -> str:
         """Auto-resolves Docker container service names to 127.0.0.1 when running natively on the host in dev/test (N-50)."""
         if value.strip().lower() in {"db", "postgres"}:
-            if os.getenv("ENVIRONMENT", "development").strip().lower() not in {"production", "prod"}:
+            if os.getenv("ENVIRONMENT", "development").strip().lower() not in {"production", "prod", "staging"}:
                 import socket
                 try:
                     socket.gethostbyname(value)
@@ -124,7 +124,7 @@ class Settings(BaseSettings):
     def resolve_redis_host(cls, value: str) -> str:
         """Auto-resolves Docker container service names to 127.0.0.1 when running natively on the host in dev/test (N-50)."""
         if value.strip().lower() in {"redis", "redis-cache"}:
-            if os.getenv("ENVIRONMENT", "development").strip().lower() not in {"production", "prod"}:
+            if os.getenv("ENVIRONMENT", "development").strip().lower() not in {"production", "prod", "staging"}:
                 import socket
                 try:
                     socket.gethostbyname(value)
@@ -137,7 +137,7 @@ class Settings(BaseSettings):
     def resolve_clamd_host(cls, value: str) -> str:
         """Auto-resolves Docker container service names to 127.0.0.1 when running natively on the host in dev/test (N-50)."""
         if value.strip().lower() in {"clamav"}:
-            if os.getenv("ENVIRONMENT", "development").strip().lower() not in {"production", "prod"}:
+            if os.getenv("ENVIRONMENT", "development").strip().lower() not in {"production", "prod", "staging"}:
                 import socket
                 try:
                     socket.gethostbyname(value)
@@ -158,7 +158,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def block_privacy_audit_mode_in_production(self):
         if (
-            self.ENVIRONMENT.strip().lower() in {"production", "prod"}
+            self.is_production()
             and (
                 self.PRIVACY_ALLOW_AUDIT_ONLY
                 or self.PRIVACY_ALLOW_RETENTION_DRY_RUN
@@ -208,7 +208,7 @@ class Settings(BaseSettings):
                 "{BASE_DOMAIN}", self.BASE_DOMAIN
             )
 
-        if self.ENVIRONMENT.lower() in {"production", "prod"}:
+        if self.is_production():
             return f"https://{slug}.{self.BASE_DOMAIN}"
         return f"http://{slug}.{self.BASE_DOMAIN}:{self.API_PORT}"
 

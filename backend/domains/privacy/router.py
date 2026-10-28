@@ -290,7 +290,7 @@ def activate_privacy_policy_audit_only(
             status_code=409,
             detail="Audit-only mode is disabled by deployment configuration.",
         )
-    if settings.ENVIRONMENT.strip().lower() in {"prod", "production"}:
+    if settings.is_production():
         raise HTTPException(
             status_code=409,
             detail="Audit-only mode cannot be activated in production.",
@@ -628,7 +628,7 @@ def create_retention_dry_run(
 ):
     if (
         not settings.PRIVACY_ALLOW_RETENTION_DRY_RUN
-        or settings.ENVIRONMENT.strip().lower() in {"prod", "production"}
+        or settings.is_production()
     ):
         raise HTTPException(
             status_code=409,
@@ -698,7 +698,7 @@ def execute_retention_run(
                 status_code=409,
                 detail="Destructive retention execution is disabled by deployment configuration.",
             )
-        if settings.ENVIRONMENT.strip().lower() in ("production", "prod"):
+        if settings.is_production():
             raise HTTPException(
                 status_code=409,
                 detail="Destructive retention execution cannot run directly in production.",

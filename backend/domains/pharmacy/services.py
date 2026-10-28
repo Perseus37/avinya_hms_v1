@@ -12,8 +12,10 @@ import re
 from typing import List, Optional, Tuple
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+
+from backend.core.dependencies import user_has_permission
 
 from backend.domains.encounters.models import PatientEncounter
 from backend.domains.identity.models import User, UserStatusEnum
@@ -104,12 +106,9 @@ ROUTE_ALIASES = {
     "ear": "OTIC",
     "nasal": "NASAL",
     "intrathecal": "INTRATHECAL",
-    "it": "INTRATHECAL",
     "epidural": "EPIDURAL",
     "intradermal": "INTRADERMAL",
-    "id": "INTRADERMAL",
     "intraarterial": "INTRAARTERIAL",
-    "ia": "INTRAARTERIAL",
 }
 
 UNIT_NORMALIZATION = {
@@ -169,7 +168,12 @@ def _extract_dose_tokens(text: Optional[str]) -> List[Tuple[float, str]]:
 
 
 def _extract_route(text: Optional[str]) -> Optional[str]:
-    """Extracts standardized administration route from text (e.g. 'IV', 'ORAL', 'IM', 'SC', 'INTRATHECAL')."""
+    """
+    Extracts standardized administration route from text (e.g. 'IV', 'ORAL', 'IM', 'SC', 'INTRATHECAL').
+    N-70: Prevents English pronoun/noun collisions ('it' -> INTRATHECAL, 'id' -> INTRADERMAL).
+    Two-letter neuraxial/arterial abbreviations (IT, ID, IA) are only recognized if preceded
+    by numeric dose and unit (e.g. '15 mg IT') or in explicit route format ('route: IT').
+    """
     if not text:
         return None
     raw = str(text).strip()
@@ -183,13 +187,41 @@ def _extract_route(text: Optional[str]) -> Optional[str]:
         return upper
 
     lower = raw.lower()
-    for phrase in ["by mouth", "iv push", "iv piggyback", "iv infusion", "per os"]:
+    for phrase in ["by mouth", "iv push", "iv piggyback", "iv infusion", "per os", "eye drops", "ear drops", "nasal spray"]:
         if phrase in lower:
             return ROUTE_ALIASES[phrase]
+
+    # Special pattern for neuraxial / invasive abbreviations (IT, ID, IA):
+    # Only match if preceded by numeric dose and unit (e.g., "15 mg IT", "5 mcg ID", "10 ml IA") or "route: IT"
+    special_abbr_match = re.search(
+        r"(?:\b\d+(?:\.\d+)?\s*(?:mg|mcg|ug|ml|g|units?)\s+|route\s*:\s*)(IT|ID|IA)\b",
+        raw,
+        re.IGNORECASE,
+    )
+    if special_abbr_match:
+        abbr = special_abbr_match.group(1).upper()
+        if abbr == "IT":
+            return "INTRATHECAL"
+        elif abbr == "ID":
+            return "INTRADERMAL"
+        elif abbr == "IA":
+            return "INTRAARTERIAL"
+
+    # Multi-letter word tokens: match against ROUTE_ALIASES (which contains full words like intrathecal, epidural, etc.)
     words = re.findall(r"\b[a-zA-Z]+\b", lower)
     for w in words:
         if w in ROUTE_ALIASES:
             return ROUTE_ALIASES[w]
+
+    # Standard uppercase systemic route abbreviations (IV, IM, SC, PO, PR, SL, SQ)
+    for token in re.findall(r"\b[A-Z]{2}\b", raw):
+        if token in {"IV", "IM", "SC", "SQ", "SL", "PR", "PO"}:
+            if token in {"SC", "SQ"}:
+                return "SC"
+            elif token == "PO":
+                return "ORAL"
+            return token
+
     return None
 
 
@@ -387,11 +419,24 @@ def evaluate_bcma_five_rights(
                 f"RIGHT ROUTE VIOLATION: Administered route '{administered_route}' does not match prescribed route '{prescribed_route}'."
             )
     elif is_injectable:
-        # N-65: Injectable formulations without explicit route in order can accept any valid parenteral route (IV, IM, SC)
-        if administered_route not in {"IV", "IM", "SC", "INTRATHECAL"}:
+        # N-65 / N-70: Injectable formulations without explicit route in order can accept standard systemic parenteral routes ONLY (IV, IM, SC).
+        # Neuraxial routes (INTRATHECAL, EPIDURAL) or INTRAARTERIAL must NEVER be inferred or defaulted.
+        if administered_route in {"INTRATHECAL", "EPIDURAL", "INTRAARTERIAL", "INTRADERMAL"}:
+            route_matched = False
+            messages.append(
+                f"RIGHT ROUTE VIOLATION: High-risk route '{administered_route}' is strictly prohibited unless explicitly prescribed in order."
+            )
+        elif administered_route not in {"IV", "IM", "SC"}:
             route_matched = False
             messages.append(
                 f"RIGHT ROUTE VIOLATION: Injectable formulation requires parenteral route (IV/IM/SC), got '{administered_route}'."
+            )
+    else:
+        # N-70: High-risk neuraxial/arterial route protection for unclassified formulations
+        if administered_route in {"INTRATHECAL", "EPIDURAL", "INTRAARTERIAL", "INTRADERMAL"}:
+            route_matched = False
+            messages.append(
+                f"RIGHT ROUTE VIOLATION: High-risk route '{administered_route}' is strictly prohibited without explicit prescription order."
             )
 
     # 5. Right Time (+/- 60 minutes)
@@ -617,6 +662,24 @@ def _verify_witness_credentials(
     if not witness_user or witness_user.status != UserStatusEnum.ACTIVE:
         raise HTTPException(status_code=404, detail="Active witness user account not found.")
 
+    # N-44: Enforce licensed clinical / pharmacy qualification for narcotics witness
+    has_clinical_permission = (
+        witness_user.is_superuser
+        or user_has_permission(session, witness_user, "pharmacy:write")
+        or user_has_permission(session, witness_user, "pharmacy:read")
+        or user_has_permission(session, witness_user, "adt:write")
+        or user_has_permission(session, witness_user, "opd:write")
+        or any(
+            r.name.lower() in {"doctor", "nurse", "pharmacist", "admin", "lead_pharmacist", "pharmacy_technician"}
+            for r in getattr(witness_user, "roles", [])
+        )
+    )
+    if not has_clinical_permission:
+        raise HTTPException(
+            status_code=403,
+            detail="Witness must be a licensed healthcare professional (doctor, nurse, or pharmacist) with clinical or pharmacy authorization.",
+        )
+
     if not witness_password:
         raise HTTPException(status_code=400, detail="Witness password verification required.")
 
@@ -708,10 +771,22 @@ def process_controlled_substance_movement(
                 status_code=400,
                 detail="Mandatory batch/lot number required for narcotics receipt (minimum 3 characters).",
             )
+        clean_batch = batch_number.strip()
+        if len(set(clean_batch.lower())) <= 1 or not re.match(r"^[A-Za-z0-9\-_/]+$", clean_batch):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid batch/lot number format: Must be alphanumeric and cannot consist of repetitive single characters.",
+            )
         if not notes or len(notes.strip()) < 5:
             raise HTTPException(
                 status_code=400,
                 detail="Supply reference or intake invoice documentation required for narcotics receipt (minimum 5 characters).",
+            )
+        clean_notes = notes.strip()
+        if len(set(clean_notes.lower())) < 3:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid supply reference format: Documentation cannot consist of repetitive placeholder characters.",
             )
         bal_after = bal_before + quantity_units
         if tamper_seal_number:
@@ -724,12 +799,12 @@ def process_controlled_substance_movement(
                 status_code=400,
                 detail=f"Insufficient narcotic vault balance. Requested: {quantity_units}, Available: {bal_before}.",
             )
-        # N-44: Stricter destination validation (minimum 10 chars if ward floor stock)
+        # N-44: Stricter destination validation (minimum 10 non-repetitive chars if ward floor stock)
         if not encounter_id and not prescription_item_id:
-            if not notes or len(notes.strip()) < 10:
+            if not notes or len(notes.strip()) < 10 or len(set(notes.strip().lower())) < 4:
                 raise HTTPException(
                     status_code=400,
-                    detail="Dispense destination required: encounter_id, prescription_item_id, or detailed ward destination notes (minimum 10 characters) must be provided.",
+                    detail="Dispense destination required: encounter_id, prescription_item_id, or detailed ward destination notes (minimum 10 non-repetitive characters) must be provided.",
                 )
         # N-44: Validate encounter and prescription item existence when provided
         if encounter_id is not None:
@@ -770,7 +845,7 @@ def process_controlled_substance_movement(
         witness_verified = True
         bal_after = bal_before - quantity_units
 
-    # 4. Return unused units back to vault (N-44: Mandatory witness and clinical link)
+    # 4. Return unused units back to vault (N-44: Mandatory witness, clinical link, and capped return)
     elif movement_type == "RETURN_TO_VAULT":
         if not witness_user_id or not witness_password:
             raise HTTPException(
@@ -780,10 +855,10 @@ def process_controlled_substance_movement(
         _verify_witness_credentials(session, primary_user, witness_user_id, witness_password)
         witness_verified = True
         if not encounter_id and not prescription_item_id:
-            if not notes or len(notes.strip()) < 10:
+            if not notes or len(notes.strip()) < 10 or len(set(notes.strip().lower())) < 4:
                 raise HTTPException(
                     status_code=400,
-                    detail="Narcotics return must be linked to an encounter_id, prescription_item_id, or specify detailed clinical return justification (minimum 10 characters).",
+                    detail="Narcotics return must be linked to an encounter_id, prescription_item_id, or specify detailed clinical return justification (minimum 10 non-repetitive characters).",
                 )
         if encounter_id is not None:
             enc = session.get(PatientEncounter, encounter_id)
@@ -793,6 +868,57 @@ def process_controlled_substance_movement(
             rx_i = session.get(PrescriptionItem, prescription_item_id)
             if not rx_i:
                 raise HTTPException(status_code=404, detail=f"Prescription item {prescription_item_id} not found.")
+
+        # N-44: Return quantity MUST be capped by what was previously dispensed
+        if encounter_id is not None or prescription_item_id is not None:
+            disp_stmt = select(func.coalesce(func.sum(ControlledSubstanceMovementLog.quantity_units), 0)).where(
+                ControlledSubstanceMovementLog.vault_id == vault.id,
+                ControlledSubstanceMovementLog.movement_type == "DISPENSE",
+            )
+            ret_stmt = select(func.coalesce(func.sum(ControlledSubstanceMovementLog.quantity_units), 0)).where(
+                ControlledSubstanceMovementLog.vault_id == vault.id,
+                ControlledSubstanceMovementLog.movement_type == "RETURN_TO_VAULT",
+            )
+            if prescription_item_id is not None:
+                disp_stmt = disp_stmt.where(ControlledSubstanceMovementLog.prescription_item_id == prescription_item_id)
+                ret_stmt = ret_stmt.where(ControlledSubstanceMovementLog.prescription_item_id == prescription_item_id)
+            elif encounter_id is not None:
+                disp_stmt = disp_stmt.where(ControlledSubstanceMovementLog.encounter_id == encounter_id)
+                ret_stmt = ret_stmt.where(ControlledSubstanceMovementLog.encounter_id == encounter_id)
+
+            total_dispensed = session.execute(disp_stmt).scalar() or 0
+            prior_returned = session.execute(ret_stmt).scalar() or 0
+            max_returnable = total_dispensed - prior_returned
+            if total_dispensed == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot return narcotics: No prior dispense found for the specified clinical encounter/prescription.",
+                )
+            if quantity_units > max_returnable:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Return quantity ({quantity_units}) exceeds remaining returnable units ({max_returnable}) for this clinical order (Dispensed: {total_dispensed}, Already Returned: {prior_returned}).",
+                )
+        else:
+            # Ward floor return: Capped by cumulative net dispensed units across the vault
+            total_vault_dispensed = session.execute(
+                select(func.coalesce(func.sum(ControlledSubstanceMovementLog.quantity_units), 0)).where(
+                    ControlledSubstanceMovementLog.vault_id == vault.id,
+                    ControlledSubstanceMovementLog.movement_type == "DISPENSE",
+                )
+            ).scalar() or 0
+            total_vault_returned = session.execute(
+                select(func.coalesce(func.sum(ControlledSubstanceMovementLog.quantity_units), 0)).where(
+                    ControlledSubstanceMovementLog.vault_id == vault.id,
+                    ControlledSubstanceMovementLog.movement_type == "RETURN_TO_VAULT",
+                )
+            ).scalar() or 0
+            max_vault_returnable = total_vault_dispensed - total_vault_returned
+            if total_vault_dispensed == 0 or quantity_units > max_vault_returnable:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Return quantity ({quantity_units}) exceeds cumulative net dispensed units ({max_vault_returnable}) for this vault register.",
+                )
         bal_after = bal_before + quantity_units
 
     else:

@@ -153,7 +153,7 @@ The repository strictly enforces a two-tier branching lifecycle:
 
 Every pull request must pass four automated GitHub Actions release gates before it can be merged into production `main`:
 1. **Gate 1: Onboarding UI Build:** Builds the React 18 / Vite 8 console with zero warnings, verifying bundle size remains under 500 kB.
-2. **Gate 2: Python Backend Tests:** Executes all 464 pytest test cases against Python 3.11 with 100% passing results.
+2. **Gate 2: Python Backend Tests:** Executes all 469 pytest test cases across 67 test suites against Python 3.11 with 100% passing results.
 3. **Gate 3: PostgreSQL 17 Migrations & Schema Parity:** Spins up a live PostgreSQL 17 container, executes `alembic upgrade head`, and asserts zero schema drift against `Base.metadata`.
 4. **Gate 4: Security & Vulnerability Audits:** Executes Bandit security scanning and `pip-audit`, asserting 0 High/Medium vulnerabilities and 0 known CVEs.
 

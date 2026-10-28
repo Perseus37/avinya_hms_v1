@@ -218,7 +218,7 @@ async def lifespan(app: FastAPI):
 
 
 is_prod_docs_disabled = (
-    str(settings.ENVIRONMENT).lower() in {"production", "prod"}
+    settings.is_production()
     and not getattr(settings, "ENABLE_PRODUCTION_API_DOCS", False)
 )
 
@@ -291,7 +291,7 @@ async def request_correlation_middleware(request: Request, call_next):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
-        if getattr(settings, "ENVIRONMENT", "") in ("production", "prod"):
+        if settings.is_production():
             response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
         logger.info("Completed %s %s - Status: %s in %.2fms", request.method, request.url.path, response.status_code, process_time)
 
@@ -409,7 +409,7 @@ def prometheus_metrics(request: Request):
                 detail="Unauthorized: valid metrics scrape token required.",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-    elif str(settings.ENVIRONMENT).lower() in {"production", "prod"}:
+    elif settings.is_production():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Unauthorized: METRICS_SCRAPE_TOKEN must be configured in production environments.",

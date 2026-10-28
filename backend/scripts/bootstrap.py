@@ -32,7 +32,7 @@ logger = logging.getLogger("avinya.bootstrap")
 
 def reset_physical_databases():
     """Drops existing databases in development to allow a clean rebuild."""
-    if settings.ENVIRONMENT.lower() in {"production", "prod"}:
+    if settings.is_production():
         raise RuntimeError("Database reset (--reset) is strictly disallowed in production.")
     conn = psycopg2.connect(
         user=settings.POSTGRES_USER,

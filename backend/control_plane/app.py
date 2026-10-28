@@ -59,7 +59,7 @@ async def lifespan(_app: FastAPI):
 
 
 is_prod_docs_disabled = (
-    str(settings.ENVIRONMENT).lower() in {"production", "prod"}
+    settings.is_production()
     and not getattr(settings, "ENABLE_PRODUCTION_API_DOCS", False)
 )
 

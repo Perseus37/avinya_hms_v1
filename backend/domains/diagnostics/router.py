@@ -468,17 +468,63 @@ def list_order_tasks(
     openapi_extra={"x-privacy-data-use-point": "diagnostics.tasks.pending.read"},
 )
 def get_department_task_queue(
+    status: Optional[TaskStatusEnum] = None,
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
     actor: User = Depends(RequirePermission("diagnostics:read")),
 ):
     page, page_size = validate_pagination(page, page_size)
-    query = (
-        db.query(DiagnosticTask)
-        .filter(DiagnosticTask.status == TaskStatusEnum.PENDING)
-        .order_by(DiagnosticTask.id.asc())
+    query = db.query(DiagnosticTask)
+    if status is not None:
+        query = query.filter(DiagnosticTask.status == status)
+    else:
+        query = query.filter(DiagnosticTask.status == TaskStatusEnum.PENDING)
+    query = query.order_by(DiagnosticTask.id.asc())
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    patient_ids = [task.order.patient_id for task in items if task.order is not None]
+    decisions = evaluate_tenant_patient_data_uses(
+        db,
+        data_use_point="diagnostics.tasks.pending.read",
+        patient_ids=patient_ids,
+        actor_user_id=actor.id,
     )
+    if any(not decision.allowed for decision in decisions):
+        raise HTTPException(status_code=403, detail="Privacy policy does not permit one or more patient disclosures.")
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+@router.get(
+    "/tasks/worklist",
+    response_model=PaginatedResponse[DiagnosticTaskResponse],
+    openapi_extra={"x-privacy-data-use-point": "diagnostics.tasks.pending.read"},
+)
+def get_laboratory_worklist(
+    status_filter: Optional[TaskStatusEnum] = None,
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_db),
+    actor: User = Depends(RequirePermission("diagnostics:read")),
+):
+    """
+    N-69: Surfaces active laboratory worklist queue items including pending collections,
+    in-progress tests, and rejected specimens requiring re-collection.
+    """
+    page, page_size = validate_pagination(page, page_size)
+    query = db.query(DiagnosticTask)
+    if status_filter is not None:
+        query = query.filter(DiagnosticTask.status == status_filter)
+    else:
+        query = query.filter(
+            DiagnosticTask.status.in_([
+                TaskStatusEnum.PENDING,
+                TaskStatusEnum.SAMPLE_COLLECTED,
+                TaskStatusEnum.SAMPLE_REJECTED,
+                TaskStatusEnum.IN_PROGRESS,
+            ])
+        )
+    query = query.order_by(DiagnosticTask.id.asc())
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
     patient_ids = [task.order.patient_id for task in items if task.order is not None]

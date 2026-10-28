@@ -310,6 +310,16 @@ def process_hl7_oru_r01_in_session(
                 task.status = TaskStatusEnum.SAMPLE_REJECTED
                 task.rejection_reason = "Specimen unobtainable / rejected by analyzer (OBX-11=X)"
                 task.result_notes = f"{task.result_notes or ''} [UNOBTAINABLE: Specimen could not be analyzed (OBX-11=X). Re-collection required.]".strip()
+
+                # N-69: Create visible persistent re-collection task in database so phlebotomy & lab worklist sees it
+                recollection_task = DiagnosticTask(
+                    order_id=task.order_id,
+                    service_id=task.service_id,
+                    status=TaskStatusEnum.PENDING,
+                    result_notes=f"Re-collection required: analyzer rejected previous specimen (task #{task.id}) as unobtainable (OBX-11=X).",
+                )
+                db.add(recollection_task)
+
                 from backend.core.database import get_redis
                 try:
                     redis_cli = get_redis()
@@ -320,6 +330,7 @@ def process_hl7_oru_r01_in_session(
                                 "event": "LAB_SPECIMEN_UNOBTAINABLE",
                                 "order_id": task.order_id,
                                 "task_id": task.id,
+                                "recollection_task_id": None,
                                 "patient_id": task.order.patient_id,
                                 "service_code": task.service.code if task.service else "UNKNOWN",
                                 "service_name": task.service.name if task.service else "Laboratory Test",

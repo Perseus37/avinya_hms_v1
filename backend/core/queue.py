@@ -345,7 +345,7 @@ def handle_retention_execute(payload: dict[str, Any]) -> dict[str, Any]:
     if not dry_run:
         if not getattr(settings, "PRIVACY_ALLOW_RETENTION_EXECUTE", False):
             raise PermissionError("Destructive retention execution is disabled by deployment configuration (PRIVACY_ALLOW_RETENTION_EXECUTE=False).")
-        if settings.ENVIRONMENT.strip().lower() in ("production", "prod"):
+        if settings.is_production():
             raise PermissionError("Destructive retention execution cannot run directly in production.")
 
     # Resolve tenant DB from control plane
@@ -420,7 +420,7 @@ def handle_scheduled_retention_sweep(payload: dict[str, Any]) -> dict[str, Any]:
 
     is_destructive_allowed = (
         getattr(settings, "PRIVACY_ALLOW_RETENTION_EXECUTE", False)
-        and settings.ENVIRONMENT.strip().lower() not in ("production", "prod")
+        and not settings.is_production()
     )
     safe_dry_run = payload.get("dry_run", True) if is_destructive_allowed else True
 
