@@ -603,9 +603,9 @@ def submit_task_result(
     if payload.status == TaskStatusEnum.VERIFIED:
         if not user_has_permission(db, current_user, "diagnostics:verify"):
             raise HTTPException(status_code=403, detail="Access denied: 'diagnostics:verify' permission required to verify results.")
-        if task.performed_by_id is None:
+        if task.performed_by_id is None and not task.result_value:
             raise HTTPException(status_code=400, detail="Task must have entered results before verification.")
-        if task.performed_by_id == current_user.id and not current_user.is_superuser:
+        if task.performed_by_id is not None and task.performed_by_id == current_user.id and not current_user.is_superuser:
             raise HTTPException(
                 status_code=403,
                 detail="Separation of duties violation: The user who performed the test cannot verify it.",
@@ -656,10 +656,25 @@ def submit_task_result(
         task.status = payload.status
 
     all_tasks = task.order.tasks
-    if all(t.status == TaskStatusEnum.VERIFIED for t in all_tasks):
+    ordered_services = {t.service_id for t in all_tasks}
+    verified_services = {t.service_id for t in all_tasks if t.status == TaskStatusEnum.VERIFIED}
+    has_pending = any(
+        t.status in {TaskStatusEnum.PENDING, TaskStatusEnum.SAMPLE_COLLECTED, TaskStatusEnum.IN_PROGRESS}
+        for t in all_tasks
+    )
+    has_result_entered = any(t.status == TaskStatusEnum.RESULT_ENTERED for t in all_tasks)
+
+    if ordered_services and ordered_services == verified_services and not has_pending and not has_result_entered:
         task.order.status = OrderStatusEnum.COMPLETED
-    elif any(t.status in [TaskStatusEnum.RESULT_ENTERED, TaskStatusEnum.VERIFIED] for t in all_tasks):
-        task.order.status = OrderStatusEnum.PARTIAL
+    elif all(t.status in [TaskStatusEnum.CANCELLED, TaskStatusEnum.SAMPLE_REJECTED] for t in all_tasks):
+        task.order.status = OrderStatusEnum.ACTIVE
+    elif has_result_entered or verified_services:
+        if not has_pending and ordered_services == verified_services:
+            task.order.status = OrderStatusEnum.COMPLETED
+        else:
+            task.order.status = OrderStatusEnum.PARTIAL
+    elif has_pending or any(t.status == TaskStatusEnum.SAMPLE_REJECTED for t in all_tasks):
+        task.order.status = OrderStatusEnum.ACTIVE
 
     db.commit()
 

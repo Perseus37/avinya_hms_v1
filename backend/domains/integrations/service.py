@@ -306,40 +306,60 @@ def process_hl7_oru_r01_in_session(
             is_preliminary = any(itm.get("status") in {"P", "PRELIMINARY"} for itm in obs_items)
 
             if is_unobtainable:
-                task.result_value = None
-                task.status = TaskStatusEnum.SAMPLE_REJECTED
-                task.rejection_reason = "Specimen unobtainable / rejected by analyzer (OBX-11=X)"
-                task.result_notes = f"{task.result_notes or ''} [UNOBTAINABLE: Specimen could not be analyzed (OBX-11=X). Re-collection required.]".strip()
+                if task.status == TaskStatusEnum.SAMPLE_REJECTED:
+                    # N-73: Device retry / repeated X message for an already rejected task. Do not duplicate re-collection tasks.
+                    logger.info("Ignoring duplicate OBX-11=X for already rejected task %s", task.id)
+                else:
+                    task.result_value = None
+                    task.status = TaskStatusEnum.SAMPLE_REJECTED
+                    task.rejection_reason = "Specimen unobtainable / rejected by analyzer (OBX-11=X)"
+                    task.result_notes = f"{task.result_notes or ''} [UNOBTAINABLE: Specimen could not be analyzed (OBX-11=X). Re-collection required.]".strip()
 
-                # N-69: Create visible persistent re-collection task in database so phlebotomy & lab worklist sees it
-                recollection_task = DiagnosticTask(
-                    order_id=task.order_id,
-                    service_id=task.service_id,
-                    status=TaskStatusEnum.PENDING,
-                    result_notes=f"Re-collection required: analyzer rejected previous specimen (task #{task.id}) as unobtainable (OBX-11=X).",
-                )
-                db.add(recollection_task)
-
-                from backend.core.database import get_redis
-                try:
-                    redis_cli = get_redis()
-                    if redis_cli:
-                        redis_cli.publish(
-                            "lab_specimen_alerts",
-                            json.dumps({
-                                "event": "LAB_SPECIMEN_UNOBTAINABLE",
-                                "order_id": task.order_id,
-                                "task_id": task.id,
-                                "recollection_task_id": None,
-                                "patient_id": task.order.patient_id,
-                                "service_code": task.service.code if task.service else "UNKNOWN",
-                                "service_name": task.service.name if task.service else "Laboratory Test",
-                                "message": "Specimen unobtainable (OBX-11=X). Re-collection required.",
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
-                            })
+                    # N-73: Create a re-collection task only if none is already pending for this order and test
+                    existing_recollection = next(
+                        (
+                            t for t in task.order.tasks
+                            if t.id != task.id
+                            and t.service_id == task.service_id
+                            and t.status in {TaskStatusEnum.PENDING, TaskStatusEnum.SAMPLE_COLLECTED, TaskStatusEnum.IN_PROGRESS}
+                        ),
+                        None,
+                    )
+                    recollection_task_id = None
+                    if existing_recollection is None:
+                        recollection_task = DiagnosticTask(
+                            order_id=task.order_id,
+                            service_id=task.service_id,
+                            status=TaskStatusEnum.PENDING,
+                            result_notes=f"Re-collection required: analyzer rejected previous specimen (task #{task.id}) as unobtainable (OBX-11=X). [ORIGINAL_TASK:{task.id}]",
                         )
-                except Exception:
-                    pass
+                        db.add(recollection_task)
+                        db.flush()
+                        recollection_task_id = recollection_task.id
+                        task.result_notes = f"{task.result_notes or ''} [RECOLLECTION_TASK:{recollection_task.id}]".strip()
+                    else:
+                        recollection_task_id = existing_recollection.id
+
+                    from backend.core.database import get_redis
+                    try:
+                        redis_cli = get_redis()
+                        if redis_cli:
+                            redis_cli.publish(
+                                "lab_specimen_alerts",
+                                json.dumps({
+                                    "event": "LAB_SPECIMEN_UNOBTAINABLE",
+                                    "order_id": task.order_id,
+                                    "task_id": task.id,
+                                    "recollection_task_id": recollection_task_id,
+                                    "patient_id": task.order.patient_id,
+                                    "service_code": task.service.code if task.service else "UNKNOWN",
+                                    "service_name": task.service.name if task.service else "Laboratory Test",
+                                    "message": "Specimen unobtainable (OBX-11=X). Re-collection required.",
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                })
+                            )
+                    except Exception:
+                        pass
             elif len(obs_items) == 1:
                 single_val = obs_items[0]["value"]
                 task.result_value = single_val
@@ -387,21 +407,46 @@ def process_hl7_oru_r01_in_session(
 
             if is_unobtainable:
                 pass  # already handled above
-            elif is_preliminary:
-                task.status = TaskStatusEnum.IN_PROGRESS
-                task.result_notes = f"{task.result_notes or ''} [PRELIMINARY: Result is preliminary and pending laboratory verification (OBX-11=P)]".strip()
             else:
-                task.status = TaskStatusEnum.RESULT_ENTERED
+                if task.status == TaskStatusEnum.SAMPLE_REJECTED:
+                    task.rejection_reason = None
+                if is_preliminary:
+                    task.status = TaskStatusEnum.IN_PROGRESS
+                    task.result_notes = f"{task.result_notes or ''} [PRELIMINARY: Result is preliminary and pending laboratory verification (OBX-11=P)]".strip()
+                else:
+                    task.status = TaskStatusEnum.RESULT_ENTERED
 
-            # Update parent order status (N-66: An unobtainable result must NOT mark order COMPLETED)
+                # N-73: Automatically cancel any pending re-collection tasks for this order and service
+                for sibling in task.order.tasks:
+                    if (
+                        sibling.id != task.id
+                        and sibling.service_id == task.service_id
+                        and sibling.status in {TaskStatusEnum.PENDING, TaskStatusEnum.SAMPLE_COLLECTED, TaskStatusEnum.IN_PROGRESS}
+                    ):
+                        sibling.status = TaskStatusEnum.CANCELLED
+                        sibling.rejection_reason = f"Superseded by result on task #{task.id}"
+                        sibling.result_notes = f"{sibling.result_notes or ''} [AUTO-CANCELLED: Valid result arrived on task #{task.id}]".strip()
+
+            # N-73: Update parent order status based on verified services and remaining active tasks
             order_tasks = task.order.tasks
-            if all(t.status == TaskStatusEnum.VERIFIED for t in order_tasks):
+            ordered_services = {t.service_id for t in order_tasks}
+            verified_services = {t.service_id for t in order_tasks if t.status == TaskStatusEnum.VERIFIED}
+            has_pending = any(
+                t.status in {TaskStatusEnum.PENDING, TaskStatusEnum.SAMPLE_COLLECTED, TaskStatusEnum.IN_PROGRESS}
+                for t in order_tasks
+            )
+            has_result_entered = any(t.status == TaskStatusEnum.RESULT_ENTERED for t in order_tasks)
+
+            if ordered_services and ordered_services == verified_services and not has_pending and not has_result_entered:
                 task.order.status = OrderStatusEnum.COMPLETED
             elif all(t.status in [TaskStatusEnum.CANCELLED, TaskStatusEnum.SAMPLE_REJECTED] for t in order_tasks):
                 task.order.status = OrderStatusEnum.ACTIVE  # Remains OPEN / ACTIVE for recollection
-            elif any(t.status in [TaskStatusEnum.RESULT_ENTERED, TaskStatusEnum.VERIFIED] for t in order_tasks):
-                task.order.status = OrderStatusEnum.PARTIAL
-            elif any(t.status in [TaskStatusEnum.IN_PROGRESS, TaskStatusEnum.PENDING, TaskStatusEnum.SAMPLE_COLLECTED, TaskStatusEnum.SAMPLE_REJECTED] for t in order_tasks):
+            elif has_result_entered or verified_services:
+                if not has_pending and ordered_services == verified_services:
+                    task.order.status = OrderStatusEnum.COMPLETED
+                else:
+                    task.order.status = OrderStatusEnum.PARTIAL
+            elif has_pending or any(t.status == TaskStatusEnum.SAMPLE_REJECTED for t in order_tasks):
                 task.order.status = OrderStatusEnum.ACTIVE
 
             updated_results.append({

@@ -2,16 +2,30 @@ services:
   docker-proxy:
     image: tecnativa/docker-socket-proxy:0.3.0
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
     environment:
       - CONTAINERS=1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - internal-net
 
   reverse-proxy:
     image: traefik:v2.11
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
     command:
       - "--providers.docker=true"
       - "--providers.docker.endpoint=tcp://docker-proxy:2375"
@@ -32,6 +46,16 @@ services:
       - "${PUBLIC_HTTPS_PORT:?PUBLIC_HTTPS_PORT is required}:${TRAEFIK_HTTPS_PORT:?TRAEFIK_HTTPS_PORT is required}"
     volumes:
       - traefik_certificates:/letsencrypt
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
     networks:
       - public-net
       - internal-net
@@ -39,6 +63,8 @@ services:
   db:
     image: postgres:17-alpine
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
     env_file: .env.production
     environment:
       TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
@@ -57,12 +83,24 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2048M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
     networks:
       - internal-net
 
   db-init:
-    image: avinya-hms-api:latest
+    image: avinya-hms-api:${VERSION:-v4.5.0}
     restart: "no"
+    security_opt:
+      - "no-new-privileges:true"
     env_file: .env.production
     environment:
       TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
@@ -71,12 +109,19 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
     networks:
       - internal-net
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
       REDIS_PORT: ${REDIS_PORT:?REDIS_PORT is required}
@@ -92,12 +137,24 @@ services:
       interval: 3s
       timeout: 3s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1024M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
     networks:
       - internal-net
 
   clamav:
     image: clamav/clamav:1.4.6-debian13-slim@sha256:c7df83a4c9794aeb43b7cff296fc9f42a0f47cbf0e96704510e7e5b57b2f4913
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
     volumes:
       - hms_clamav_db:/var/lib/clamav
     healthcheck:
@@ -106,6 +163,16 @@ services:
       timeout: 15s
       retries: 5
       start_period: 90s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2048M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
     networks:
       - scanner-net
       - scanner-egress
@@ -115,8 +182,10 @@ services:
       context: .
       dockerfile: Dockerfile
       target: production-ai
-    image: avinya-hms-api:latest
+    image: avinya-hms-api:${VERSION:-v4.5.0}
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
     env_file: .env.production
     environment:
       TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
@@ -137,6 +206,16 @@ services:
     volumes:
       - hms_backups:/app/backups
       - ${ATTACHMENTS_HOST_PATH:?ATTACHMENTS_HOST_PATH is required}:/app/attachments
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 4096M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.hms-api.rule=Host(`${BASE_DOMAIN:?BASE_DOMAIN is required}`) || HostRegexp(`{subdomain:[a-z0-9-]+}.${BASE_DOMAIN:?BASE_DOMAIN is required}`)"
@@ -161,8 +240,10 @@ services:
       - scanner-net
 
   hl7-listener:
-    image: avinya-hms-api:latest
+    image: avinya-hms-api:${VERSION:-v4.5.0}
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
     env_file: .env.production
     environment:
       TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
@@ -174,6 +255,16 @@ services:
       - integrations
     healthcheck:
       disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
     depends_on:
       db:
         condition: service_healthy
@@ -183,8 +274,10 @@ services:
       - internal-net
 
   worker:
-    image: avinya-hms-api:latest
+    image: avinya-hms-api:${VERSION:-v4.5.0}
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
     env_file: .env.production
     environment:
       TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
@@ -195,6 +288,16 @@ services:
       - ${ATTACHMENTS_HOST_PATH:?ATTACHMENTS_HOST_PATH is required}:/app/attachments
     healthcheck:
       disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2048M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
     depends_on:
       db-init:
         condition: service_completed_successfully
@@ -206,8 +309,10 @@ services:
       - internal-net
 
   onboarding-portal:
-    image: avinya-hms-api:latest
+    image: avinya-hms-api:${VERSION:-v4.5.0}
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
     env_file: .env.production
     environment:
       TZ: "${APP_TIMEZONE:?APP_TIMEZONE is required}"
@@ -221,6 +326,16 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.onboard.rule=Host(`onboard.${BASE_DOMAIN:?BASE_DOMAIN is required}`)"

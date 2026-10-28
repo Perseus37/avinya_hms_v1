@@ -50,6 +50,13 @@ def generate_or_link_abha(
     Generates a 14-digit ABHA number and links an ABHA address to a patient record.
     If patient_id is not provided, registers a new patient with ABHA demographics.
     """
+    from backend.core.config import settings
+    if settings.is_production() and not getattr(settings, "ABDM_ALLOW_SIMULATED_GATEWAY", False):
+        raise HTTPException(
+            status_code=503,
+            detail="Simulated ABHA generation is disabled in production. Connect certified NHA gateway credentials.",
+        )
+
     patient: Optional[Patient] = None
     if payload.patient_id is not None:
         patient = session.get(Patient, payload.patient_id)

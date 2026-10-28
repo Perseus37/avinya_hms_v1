@@ -662,11 +662,10 @@ def _verify_witness_credentials(
     if not witness_user or witness_user.status != UserStatusEnum.ACTIVE:
         raise HTTPException(status_code=404, detail="Active witness user account not found.")
 
-    # N-44: Enforce licensed clinical / pharmacy qualification for narcotics witness
+    # N-44: Enforce licensed clinical / pharmacy qualification for narcotics witness (write/action authorization or clinical role required; read-only insufficient)
     has_clinical_permission = (
         witness_user.is_superuser
         or user_has_permission(session, witness_user, "pharmacy:write")
-        or user_has_permission(session, witness_user, "pharmacy:read")
         or user_has_permission(session, witness_user, "adt:write")
         or user_has_permission(session, witness_user, "opd:write")
         or any(
