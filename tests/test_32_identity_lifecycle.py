@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from backend.core.config import settings
-from backend.domains.identity.auth_router import _totp_code
+from backend.security.totp import totp_code as _totp_code
 from backend.domains.identity.models import AuthSession
 
 

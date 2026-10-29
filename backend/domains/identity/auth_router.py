@@ -68,7 +68,9 @@ from backend.schemas.common import PaginatedResponse
 from backend.domains.identity.schemas import DepartmentCreate, DepartmentResponse, DepartmentUpdate, PermissionResponse, RoleCreate, RoleResponse, RoleUpdate, UserCreate, UserLogin, UserMeResponse, UserUpdate
 
 from backend.domains.policies.router import get_or_create_policy
-from backend.security.totp import matching_totp_counter
+from backend.security.totp import matching_totp_counter, totp_code as _totp_code
+
+__all__ = ["router", "_totp_code"]
 
 router = APIRouter(prefix="/api/auth", tags=["IAM & Auth"])
 _mfa_failure_limiter = RateLimiter(
