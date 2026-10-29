@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Optional
 from fastapi import Depends, Header, HTTPException, Request, status
-from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordBearer
+from fastapi.security import APIKeyHeader, HTTPBearer, OAuth2PasswordBearer
 import jwt
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -212,6 +212,47 @@ def get_federated_node(
     return node
 
 
+def get_client_ip(request: Request) -> str:
+    """
+    Extracts the real client IP address, safely resolving through trusted reverse proxies
+    configured in settings.TRUSTED_PROXY_IPS. Prevents IP spoofing via forged headers (N-58).
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    if not getattr(settings, "TRUSTED_PROXY_IPS", "").strip():
+        return client_ip
+
+    try:
+        trusted_proxies = [
+            ipaddress.ip_network(cidr.strip(), strict=False)
+            for cidr in settings.TRUSTED_PROXY_IPS.split(",")
+            if cidr.strip()
+        ]
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Trusted proxy configuration is invalid.",
+        ) from exc
+
+    try:
+        peer_ip = ipaddress.ip_address(client_ip)
+    except ValueError:
+        peer_ip = None
+
+    if peer_ip and any(peer_ip in network for network in trusted_proxies):
+        forwarded_ips = []
+        for value in request.headers.get("X-Forwarded-For", "").split(","):
+            try:
+                forwarded_ips.append(ipaddress.ip_address(value.strip()))
+            except ValueError:
+                continue
+        for candidate in reversed([*forwarded_ips, peer_ip]):
+            if not any(candidate in network for network in trusted_proxies):
+                client_ip = str(candidate)
+                break
+
+    return client_ip
+
+
 class RateLimiter:
     """
     Fail-open Redis fixed-window rate limiter.
@@ -272,33 +313,7 @@ class RateLimiter:
                 )
             return
 
-        client_ip = request.client.host if request.client else "unknown"
-        try:
-            trusted_proxies = [
-                ipaddress.ip_network(cidr.strip(), strict=False)
-                for cidr in settings.TRUSTED_PROXY_IPS.split(",")
-                if cidr.strip()
-            ]
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Trusted proxy configuration is invalid.",
-            ) from exc
-        try:
-            peer_ip = ipaddress.ip_address(client_ip)
-        except ValueError:
-            peer_ip = None
-        if peer_ip and any(peer_ip in network for network in trusted_proxies):
-            forwarded_ips = []
-            for value in request.headers.get("X-Forwarded-For", "").split(","):
-                try:
-                    forwarded_ips.append(ipaddress.ip_address(value.strip()))
-                except ValueError:
-                    continue
-            for candidate in reversed([*forwarded_ips, peer_ip]):
-                if not any(candidate in network for network in trusted_proxies):
-                    client_ip = str(candidate)
-                    break
+        client_ip = get_client_ip(request)
         actor = actor or client_ip
         key = self.get_key(request, actor)
 

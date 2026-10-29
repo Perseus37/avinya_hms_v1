@@ -30,6 +30,7 @@ from backend.security.envelope import decrypt_tenant_secret, encrypt_tenant_secr
 from backend.core.dependencies import (
     RateLimiter,
     RequirePermission,
+    get_client_ip,
     get_current_user,
     tenant_header_scheme,
     validate_pagination,
@@ -408,8 +409,8 @@ def login(
                         minutes=settings.LOGIN_LOCKOUT_MINUTES
                     )
                     _revoke_user_sessions(db, user.id)
-                    # F-05: Alert on account lockout with source IP for threat response
-                    client_ip = request.client.host if request.client else "unknown"
+                    # F-05 / N-58: Alert on account lockout with resolved source IP for threat response
+                    client_ip = get_client_ip(request)
                     logger.warning(
                         "SECURITY_ALERT: User account %s (id=%d) locked out after %d failed login attempts from IP %s",
                         user.email,

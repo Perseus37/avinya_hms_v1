@@ -251,3 +251,45 @@ def test_n76_login_enumeration_defense_and_production_guard(client, monkeypatch)
     )
     assert res_prod_switch.status_code == 400
     assert "Hospital routing mismatch" in res_prod_switch.text
+
+
+def test_n58_get_client_ip_resolves_trusted_proxies(monkeypatch):
+    """
+    N-58: Verifies get_client_ip extracts real client IP through trusted reverse proxies
+    and ignores untrusted forwarded headers.
+    """
+    from backend.core.dependencies import get_client_ip
+    from starlette.requests import Request
+
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_IPS", "10.0.0.1,172.16.0.0/16")
+
+    # 1. Request directly from client (no proxy)
+    req1 = Request({
+        "type": "http",
+        "client": ("203.0.113.195", 54321),
+        "headers": [(b"host", b"hospital.example.com")],
+    })
+    assert get_client_ip(req1) == "203.0.113.195"
+
+    # 2. Request through trusted proxy with X-Forwarded-For
+    req2 = Request({
+        "type": "http",
+        "client": ("10.0.0.1", 443),
+        "headers": [
+            (b"host", b"hospital.example.com"),
+            (b"x-forwarded-for", b"198.51.100.42, 172.16.0.5"),
+        ],
+    })
+    assert get_client_ip(req2) == "198.51.100.42"
+
+    # 3. Untrusted client spoofing X-Forwarded-For is ignored
+    req3 = Request({
+        "type": "http",
+        "client": ("203.0.113.5", 54321),
+        "headers": [
+            (b"host", b"hospital.example.com"),
+            (b"x-forwarded-for", b"198.51.100.42"),
+        ],
+    })
+    assert get_client_ip(req3) == "203.0.113.5"
+
