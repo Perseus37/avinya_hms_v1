@@ -293,3 +293,38 @@ def test_n58_get_client_ip_resolves_trusted_proxies(monkeypatch):
     })
     assert get_client_ip(req3) == "203.0.113.5"
 
+
+def test_prometheus_alert_rules_and_config_syntax():
+    """
+    Verifies that deployments/prometheus-alerts.yml and deployments/prometheus.yml
+    exist, have valid YAML syntax, and contain expected alert rule thresholds and scrape jobs.
+    """
+    import yaml
+    from pathlib import Path
+
+    alerts_path = Path("deployments/prometheus-alerts.yml")
+    assert alerts_path.is_file()
+    alerts = yaml.safe_load(alerts_path.read_text(encoding="utf-8"))
+    assert "groups" in alerts
+    group_names = [g["name"] for g in alerts["groups"]]
+    assert "avinya_hms_service_alerts" in group_names
+    assert "avinya_hms_infrastructure_alerts" in group_names
+
+    rule_names = [r["alert"] for g in alerts["groups"] for r in g["rules"]]
+    assert "ApiServiceDown" in rule_names
+    assert "HighHttp5xxErrorRate" in rule_names
+    assert "HighRequestLatencyP95" in rule_names
+    assert "PostgresDown" in rule_names
+    assert "RedisDown" in rule_names
+    assert "BackupFreshnessWarning" in rule_names
+
+    prom_path = Path("deployments/prometheus.yml")
+    assert prom_path.is_file()
+    prom = yaml.safe_load(prom_path.read_text(encoding="utf-8"))
+    assert "scrape_configs" in prom
+    jobs = [job["job_name"] for job in prom["scrape_configs"]]
+    assert "avinya-api" in jobs
+    assert "postgres" in jobs
+    assert "redis" in jobs
+
+

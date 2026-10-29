@@ -1,0 +1,92 @@
+# =============================================================================
+# Avinya HMS Production Alerting Rules
+# =============================================================================
+groups:
+  - name: avinya_hms_service_alerts
+    rules:
+      - alert: ApiServiceDown
+        expr: up{job="avinya-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Avinya HMS API service is down"
+          description: "API instance {{ $labels.instance }} has been unreachable for more than 2 minutes."
+
+      - alert: HighHttp5xxErrorRate
+        expr: >-
+          (sum(rate(avinya_http_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(avinya_http_requests_total[5m]))) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High HTTP 5xx server error rate (> 5%)"
+          description: "Over 5% of requests to {{ $labels.endpoint }} are failing with 5xx status codes over the last 5 minutes."
+
+      - alert: HighRequestLatencyP95
+        expr: >-
+          histogram_quantile(0.95, sum(rate(avinya_http_request_duration_seconds_bucket[5m])) by (le, endpoint)) > 2.0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API request latency (P95 > 2.0s)"
+          description: "Endpoint {{ $labels.endpoint }} 95th percentile latency exceeds 2 seconds over the last 5 minutes."
+
+      - alert: HighQueueBacklog
+        expr: avinya_queue_pending_tasks > 250
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Background queue backlog elevated"
+          description: "Queue '{{ $labels.queue_name }}' has more than 250 pending jobs for over 10 minutes."
+
+      - alert: HighQueueJobFailureRate
+        expr: sum(rate(avinya_queue_jobs_total{status="failed"}[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Background worker job failure rate elevated"
+          description: "Worker jobs are failing at a rate exceeding 0.1 failures/sec over 5 minutes."
+
+  - name: avinya_hms_infrastructure_alerts
+    rules:
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL database is down"
+          description: "PostgreSQL primary service is unreachable. Multi-tenant clinical and administrative workflows are blocked."
+
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis cache & queue service is down"
+          description: "Redis instance is unreachable. Session caching, rate limiting, and async job queues are impaired."
+
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes / node_filesystem_size_bytes) < 0.15
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Host filesystem free disk space < 15%"
+          description: "Mountpoint {{ $labels.mountpoint }} has less than 15% disk space remaining. DB write halts risk imminent."
+
+      - alert: BackupFreshnessWarning
+        expr: (time() - backup_last_completion_timestamp_seconds) > 93600
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database backup overdue (> 26 hours)"
+          description: "No verified database backup has completed within the last 26 hours. Recovery Point Objective (RPO) is breached."

@@ -1,0 +1,53 @@
+# =============================================================================
+# Avinya HMS Prometheus Server Scrape & Rule Configuration
+# =============================================================================
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+rule_files:
+  - "prometheus-alerts.yml"
+
+scrape_configs:
+  - job_name: "avinya-api"
+    metrics_path: "/metrics"
+    scheme: "http"
+    authorization:
+      type: "Bearer"
+      credentials_file: "/etc/prometheus/metrics_scrape_token.txt"
+    static_configs:
+      - targets: ["api:8000"]
+        labels:
+          environment: "production"
+          service: "avinya-hms-api"
+
+  - job_name: "avinya-onboarding"
+    metrics_path: "/metrics"
+    scheme: "http"
+    static_configs:
+      - targets: ["onboarding-portal:8080"]
+        labels:
+          environment: "production"
+          service: "avinya-control-plane"
+
+  - job_name: "postgres"
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+        labels:
+          environment: "production"
+          service: "postgresql"
+
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+        labels:
+          environment: "production"
+          service: "redis"
+
+  - job_name: "node"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          environment: "production"
+          service: "host-node"
