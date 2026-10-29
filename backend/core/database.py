@@ -128,7 +128,15 @@ def extract_subdomain_slug(request: Request) -> str:
     if header_override and (getattr(settings, "ALLOW_HEADER_TENANT_OVERRIDE", False) or is_test_env):
         return header_override.strip().lower()
 
-    # Extract tenant_slug hint from Authorization Bearer token (N-76: Cryptographically verify signature before routing)
+    # Host subdomain routing (fastest path for production web traffic: e.g. <subdomain>.domain.com)
+    host = request.headers.get("host", "").split(":")[0].strip().lower()
+    if host and host != settings.BASE_DOMAIN and host.endswith(f".{settings.BASE_DOMAIN}"):
+        slug = host[: -(len(settings.BASE_DOMAIN) + 1)]
+        if slug and "." not in slug:
+            return slug
+
+    # Fallback: Extract tenant_slug hint from Authorization Bearer token (N-76: Cryptographically verify signature before routing)
+    # Used for localhost development, Swagger UI, and bare-domain automated clients
     auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
     if auth_header and auth_header.strip().lower().startswith("bearer "):
         try:
@@ -147,12 +155,6 @@ def extract_subdomain_slug(request: Request) -> str:
                         return target_slug
         except Exception:
             pass
-
-    host = request.headers.get("host", "").split(":")[0].strip().lower()
-    if host and host != settings.BASE_DOMAIN and host.endswith(f".{settings.BASE_DOMAIN}"):
-        slug = host[: -(len(settings.BASE_DOMAIN) + 1)]
-        if slug and "." not in slug:
-            return slug
 
     return settings.DEFAULT_TENANT_SLUG
 
