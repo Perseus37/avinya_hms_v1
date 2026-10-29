@@ -82,6 +82,48 @@ def validate_production_env(env_file: Path) -> list[str]:
         ):
             errors.append(f"{name} still contains a placeholder or example value.")
 
+    # Wider production configuration & safety validation
+    for name, value in values.items():
+        if value and isinstance(value, str):
+            if "REPLACE_" in value.upper():
+                msg = f"{name} still contains a placeholder or example value."
+                if msg not in errors:
+                    errors.append(msg)
+            elif (
+                name not in ("ENVIRONMENT", "APP_TIMEZONE", "POSTGRES_DB", "DEFAULT_TENANT_SLUG")
+                and PLACEHOLDER_VALUE.fullmatch(value.strip())
+            ):
+                msg = f"{name} still contains a placeholder or example value."
+                if msg not in errors:
+                    errors.append(msg)
+
+    env_mode = values.get("ENVIRONMENT")
+    if env_mode and env_mode.strip().lower() not in {"production", "staging"}:
+        errors.append(f"ENVIRONMENT must be 'production' or 'staging', got: '{env_mode}'.")
+
+    auto_schema = values.get("DEVELOPMENT_AUTO_CREATE_SCHEMA")
+    if auto_schema and auto_schema.strip().lower() == "true":
+        errors.append("DEVELOPMENT_AUTO_CREATE_SCHEMA must be false in production.")
+
+    retention_exec = values.get("PRIVACY_ALLOW_RETENTION_EXECUTE")
+    if retention_exec and retention_exec.strip().lower() == "true":
+        errors.append("PRIVACY_ALLOW_RETENTION_EXECUTE must be false during deployment.")
+
+    base_domain = values.get("BASE_DOMAIN")
+    if base_domain and (base_domain.strip().lower() == "localhost" or "." not in base_domain):
+        errors.append("BASE_DOMAIN must be a fully qualified domain name (FQDN), not localhost.")
+
+    cors_origins = values.get("CORS_ORIGINS")
+    if cors_origins:
+        if "*" in cors_origins:
+            errors.append("CORS_ORIGINS must not use wildcard '*' in production.")
+        elif any(origin.strip().startswith("http://") for origin in cors_origins.split(",") if "localhost" not in origin):
+            errors.append("CORS_ORIGINS must enforce HTTPS in production.")
+
+    admin_email = values.get("SEED_ADMIN_EMAIL")
+    if admin_email and "@" not in admin_email:
+        errors.append("SEED_ADMIN_EMAIL must be a valid email address.")
+
     populated_secrets = {}
     for name in REQUIRED_PRODUCTION_SECRETS + OPTIONAL_PRODUCTION_SECRETS:
         value = values.get(name)

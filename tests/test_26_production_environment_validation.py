@@ -90,3 +90,29 @@ def test_production_env_cli_fails_for_missing_file(tmp_path, capsys):
 
     assert exit_code == 1
     assert "does not exist" in capsys.readouterr().out
+
+
+def test_wider_production_configuration_validation(tmp_path):
+    """Verifies that validate_production_env validates safety flags, FQDNs, CORS, and leftover template placeholders."""
+    values = _valid_env_values()
+    values.update(
+        ENVIRONMENT="invalid_env",
+        DEVELOPMENT_AUTO_CREATE_SCHEMA="true",
+        PRIVACY_ALLOW_RETENTION_EXECUTE="true",
+        BASE_DOMAIN="localhost",
+        CORS_ORIGINS="*",
+        SEED_ADMIN_EMAIL="admin_without_at",
+        POSTGRES_USER="REPLACE_WITH_USER",
+    )
+    env_file = tmp_path / ".env.production"
+    _write_env_file(env_file, values)
+
+    errors = validate_production_env(env_file)
+    assert any("ENVIRONMENT" in error for error in errors)
+    assert any("DEVELOPMENT_AUTO_CREATE_SCHEMA" in error for error in errors)
+    assert any("PRIVACY_ALLOW_RETENTION_EXECUTE" in error for error in errors)
+    assert any("BASE_DOMAIN" in error for error in errors)
+    assert any("CORS_ORIGINS" in error for error in errors)
+    assert any("SEED_ADMIN_EMAIL" in error for error in errors)
+    assert any("POSTGRES_USER" in error for error in errors)
+
