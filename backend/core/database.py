@@ -128,7 +128,7 @@ def extract_subdomain_slug(request: Request) -> str:
     if header_override and (getattr(settings, "ALLOW_HEADER_TENANT_OVERRIDE", False) or is_test_env):
         return header_override.strip().lower()
 
-    # Extract tenant_slug hint from Authorization Bearer token (signature verified in get_current_user)
+    # Extract tenant_slug hint from Authorization Bearer token (N-76: Cryptographically verify signature before routing)
     auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
     if auth_header and auth_header.strip().lower().startswith("bearer "):
         try:
@@ -136,7 +136,15 @@ def extract_subdomain_slug(request: Request) -> str:
             unverified = jwt.decode(raw_token, options={"verify_signature": False})
             token_slug = unverified.get("tenant_slug")
             if token_slug and isinstance(token_slug, str) and re.match(r"^[a-z0-9_\-]+$", token_slug.strip().lower()):
-                return token_slug.strip().lower()
+                target_slug = token_slug.strip().lower()
+                with ControlSessionLocal() as control_db:
+                    reg = control_db.execute(
+                        select(TenantRegistry).where(TenantRegistry.subdomain_slug == target_slug)
+                    ).scalar_one_or_none()
+                    if reg and reg.is_active:
+                        secret_key = decrypt_tenant_secret(reg.jwt_secret_key)
+                        jwt.decode(raw_token, secret_key, algorithms=[getattr(settings, "ALGORITHM", "HS256")])
+                        return target_slug
         except Exception:
             pass
 

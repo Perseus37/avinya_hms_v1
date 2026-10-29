@@ -5,7 +5,6 @@ import logging
 import traceback
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, BackgroundTasks, status
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import event
 
@@ -23,8 +22,9 @@ from backend.control_plane.services.auth import (
     create_operator_auth_router,
 )
 
+import urllib.parse
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 # Database Imports
 from backend.core.config import settings
@@ -220,28 +220,76 @@ async def receive_global_webhook(
             status_code=status.HTTP_202_ACCEPTED,
             content={"message": "Webhook received and queued for processing."}
         )
-    except Exception as e:
+    except Exception:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={"message": "Invalid JSON payload."}
         )
 # -------------------------------------------------------------------------
-# STATIC SPA MOUNTING
+# STATIC SPA MOUNTING & CONFINED FILE RESOLUTION (N-75)
 # -------------------------------------------------------------------------
 LOCAL_SPA_DIST = Path(__file__).resolve().parent.parent.parent / "onboarding-ui" / "dist"
-SPA_DIST = (
-    os.getenv("SPA_DIST_DIR")
-    or ("/app/onboarding-ui/dist" if os.path.exists("/app/onboarding-ui/dist") else str(LOCAL_SPA_DIST))
-)
 
-if os.path.exists(SPA_DIST):
-    assets_dir = os.path.join(SPA_DIST, "assets")
-    if os.path.exists(assets_dir):
-        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+def get_spa_dist_path() -> Path:
+    env_dir = os.getenv("SPA_DIST_DIR")
+    if env_dir:
+        return Path(env_dir).resolve()
+    if os.path.exists("/app/onboarding-ui/dist"):
+        return Path("/app/onboarding-ui/dist").resolve()
+    return LOCAL_SPA_DIST.resolve()
 
-    @app.get("/{full_path:path}", include_in_schema=False)
-    async def serve_react_spa(full_path: str):
-        target_file = os.path.join(SPA_DIST, full_path)
-        if full_path and os.path.isfile(target_file):
-            return FileResponse(target_file)
-        return FileResponse(os.path.join(SPA_DIST, "index.html"))
+SPA_DIST = str(get_spa_dist_path())
+
+spa_path = get_spa_dist_path()
+assets_dir = spa_path / "assets"
+if assets_dir.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def serve_react_spa(full_path: str):
+    base_dir = get_spa_dist_path()
+    index_file = base_dir / "index.html"
+
+    # URL-decode and clean leading slashes/backslashes
+    unquoted = urllib.parse.unquote(full_path or "").strip()
+    clean_rel = unquoted.lstrip("/\\")
+
+    # Strict Path Traversal Defense (N-75):
+    # Reject empty path, parent traversal '..', Windows drive colons, null bytes, or absolute roots
+    if (
+        not clean_rel
+        or ".." in clean_rel
+        or "\0" in clean_rel
+        or ":" in clean_rel
+        or clean_rel.startswith(("/", "\\"))
+    ):
+        if index_file.is_file():
+            return FileResponse(index_file)
+        return HTMLResponse("<!doctype html><html><body><h1>Avinya Onboarding Portal</h1></body></html>", status_code=200)
+
+    try:
+        target = (base_dir / clean_rel).resolve()
+    except Exception:
+        if index_file.is_file():
+            return FileResponse(index_file)
+        return HTMLResponse("<!doctype html><html><body><h1>Avinya Onboarding Portal</h1></body></html>", status_code=200)
+
+    # Strictly enforce boundary confinement: target MUST be inside base_dir
+    try:
+        is_safe = target.is_relative_to(base_dir)
+    except AttributeError:
+        is_safe = str(target).startswith(str(base_dir))
+
+    if not is_safe:
+        # Path traversal attempt escaped base_dir! Return fallback index or 404
+        if index_file.is_file():
+            return FileResponse(index_file)
+        return HTMLResponse("<!doctype html><html><body><h1>Avinya Onboarding Portal</h1></body></html>", status_code=200)
+
+    if target.is_file():
+        return FileResponse(target)
+
+    # Client-side SPA route fallback
+    if index_file.is_file():
+        return FileResponse(index_file)
+    return HTMLResponse("<!doctype html><html><body><h1>Avinya Onboarding Portal</h1></body></html>", status_code=200)

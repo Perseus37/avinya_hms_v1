@@ -26,7 +26,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from backend.core import database
 from backend.core.database import TenantContext
 from backend.control_plane.models import TenantRegistry
-from backend.security.envelope import decrypt_tenant_secret
+from backend.security.envelope import decrypt_tenant_secret, encrypt_tenant_secret
 from backend.core.dependencies import (
     RateLimiter,
     RequirePermission,
@@ -67,9 +67,8 @@ from backend.domains.identity.passwords import pwd_context
 from backend.schemas.common import PaginatedResponse
 from backend.domains.identity.schemas import DepartmentCreate, DepartmentResponse, DepartmentUpdate, PermissionResponse, RoleCreate, RoleResponse, RoleUpdate, UserCreate, UserLogin, UserMeResponse, UserUpdate
 
-from backend.security.envelope import decrypt_tenant_secret, encrypt_tenant_secret
 from backend.domains.policies.router import get_or_create_policy
-from backend.security.totp import matching_totp_counter, totp_code as _totp_code  # noqa: F401
+from backend.security.totp import matching_totp_counter
 
 router = APIRouter(prefix="/api/auth", tags=["IAM & Auth"])
 _mfa_failure_limiter = RateLimiter(
@@ -334,16 +333,20 @@ def login(
 ):
     """Authenticates a user against the active hospital database and signs a tenant-isolated JWT."""
     tenant = resolve_tenant_context(request)
+    switched_db: Optional[Session] = None
     if payload.hospital_slug and payload.hospital_slug.strip().lower() != tenant.subdomain_slug:
         target_slug = payload.hospital_slug.strip().lower()
+        if settings.is_production():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Hospital routing mismatch: explicit hospital slug differs from host subdomain.",
+            )
         with database.ControlSessionLocal() as control_db:
             target_reg = control_db.execute(
                 select(TenantRegistry).where(TenantRegistry.subdomain_slug == target_slug)
             ).scalar_one_or_none()
-            if not target_reg:
-                raise HTTPException(status_code=404, detail=f"Hospital '{target_slug}' is not registered.")
-            if not target_reg.is_active:
-                raise HTTPException(status_code=403, detail=f"Hospital '{target_reg.hospital_name}' is currently suspended.")
+            if not target_reg or not target_reg.is_active:
+                raise HTTPException(status_code=400, detail="Invalid hospital subdomain specified.")
             tenant = TenantContext(
                 subdomain_slug=target_reg.subdomain_slug,
                 branch_code=target_reg.branch_code,
@@ -354,81 +357,86 @@ def login(
                 quota_limits_json=getattr(target_reg, "quota_limits_json", None),
             )
             request.state.tenant_context = tenant
-            db = Session(database.tenant_engine_pool.get_engine(tenant.db_name))
-    
-    # SEC-007: Implement pessimistic lock to prevent distributed brute-force lockout bypass
-    user = db.execute(
-        select(User).where(User.email == payload.email).with_for_update()
-    ).scalar_one_or_none()
+            switched_db = Session(database.tenant_engine_pool.get_engine(tenant.db_name))
+            db = switched_db
 
-    # SEC-003: Timing-Attack Mitigation. Run dummy verify if user is None.
-    # Mathematically valid bcrypt hash (matches "password" at cost 12)
-    dummy_hash = "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewKd.RvvJ8hYjT.W"
-    is_valid_pwd = False
-    
-    if user:
-        is_valid_pwd = pwd_context.verify(payload.password, user.hashed_password)
-    else:
-        pwd_context.verify(payload.password, dummy_hash)
+    try:
+        # SEC-007: Implement pessimistic lock to prevent distributed brute-force lockout bypass
+        user = db.execute(
+            select(User).where(User.email == payload.email).with_for_update()
+        ).scalar_one_or_none()
 
-    now = datetime.now(timezone.utc)
-    locked_until = user.locked_until if user else None
-    if locked_until and locked_until.tzinfo is None:
-        locked_until = locked_until.replace(tzinfo=timezone.utc)
-    if (
-        user
-        and user.status == UserStatusEnum.LOCKED
-        and locked_until is not None
-        and locked_until <= now
-    ):
-        user.status = UserStatusEnum.ACTIVE
-        user.failed_login_attempts = 0
-        user.locked_until = None
-
-    if user and user.status == UserStatusEnum.LOCKED:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid credentials",
-        )
-
-    if not user or not is_valid_pwd:
+        # SEC-003: Timing-Attack Mitigation. Run dummy verify if user is None.
+        # Mathematically valid bcrypt hash (matches "password" at cost 12)
+        dummy_hash = "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewKd.RvvJ8hYjT.W"
+        is_valid_pwd = False
+        
         if user:
-            user.failed_login_attempts += 1
-            policy = get_or_create_policy(db)
-            if user.failed_login_attempts >= policy.max_failed_login_attempts:
-                user.status = UserStatusEnum.LOCKED
-                user.locked_until = now + timedelta(
-                    minutes=settings.LOGIN_LOCKOUT_MINUTES
-                )
-                _revoke_user_sessions(db, user.id)
-                # F-05: Alert on account lockout with source IP for threat response
-                client_ip = request.client.host if request.client else "unknown"
-                logger.warning(
-                    "SECURITY_ALERT: User account %s (id=%d) locked out after %d failed login attempts from IP %s",
-                    user.email,
-                    user.id,
-                    user.failed_login_attempts,
-                    client_ip,
-                )
+            is_valid_pwd = pwd_context.verify(payload.password, user.hashed_password)
+        else:
+            pwd_context.verify(payload.password, dummy_hash)
+
+        now = datetime.now(timezone.utc)
+        locked_until = user.locked_until if user else None
+        if locked_until and locked_until.tzinfo is None:
+            locked_until = locked_until.replace(tzinfo=timezone.utc)
+        if (
+            user
+            and user.status == UserStatusEnum.LOCKED
+            and locked_until is not None
+            and locked_until <= now
+        ):
+            user.status = UserStatusEnum.ACTIVE
+            user.failed_login_attempts = 0
+            user.locked_until = None
+
+        if user and user.status == UserStatusEnum.LOCKED:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid credentials",
+            )
+
+        if not user or not is_valid_pwd:
+            if user:
+                user.failed_login_attempts += 1
+                policy = get_or_create_policy(db)
+                if user.failed_login_attempts >= policy.max_failed_login_attempts:
+                    user.status = UserStatusEnum.LOCKED
+                    user.locked_until = now + timedelta(
+                        minutes=settings.LOGIN_LOCKOUT_MINUTES
+                    )
+                    _revoke_user_sessions(db, user.id)
+                    # F-05: Alert on account lockout with source IP for threat response
+                    client_ip = request.client.host if request.client else "unknown"
+                    logger.warning(
+                        "SECURITY_ALERT: User account %s (id=%d) locked out after %d failed login attempts from IP %s",
+                        user.email,
+                        user.id,
+                        user.failed_login_attempts,
+                        client_ip,
+                    )
+                db.commit()
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        if user.status != UserStatusEnum.ACTIVE:
+            raise HTTPException(status_code=401, detail=f"Account is {user.status.value}.")
+
+        if user.mfa_enabled:
             db.commit()
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    if user.status != UserStatusEnum.ACTIVE:
-        raise HTTPException(status_code=401, detail=f"Account is {user.status.value}.")
-
-    if user.mfa_enabled:
-        db.commit()
-        return {
-            "mfa_required": True,
-            "mfa_token": _issue_mfa_token(user, tenant, "mfa_login"),
-        }
-    if settings.MFA_REQUIRED_FOR_PRIVILEGED and _requires_mfa(user):
-        db.commit()
-        return {
-            "mfa_setup_required": True,
-            "mfa_token": _issue_mfa_token(user, tenant, "mfa_setup"),
-        }
-    return _complete_login(user, tenant, db)
+            return {
+                "mfa_required": True,
+                "mfa_token": _issue_mfa_token(user, tenant, "mfa_login"),
+            }
+        if settings.MFA_REQUIRED_FOR_PRIVILEGED and _requires_mfa(user):
+            db.commit()
+            return {
+                "mfa_setup_required": True,
+                "mfa_token": _issue_mfa_token(user, tenant, "mfa_setup"),
+            }
+        return _complete_login(user, tenant, db)
+    finally:
+        if switched_db is not None:
+            switched_db.close()
 
 
 @router.post(

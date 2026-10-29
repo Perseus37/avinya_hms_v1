@@ -14,7 +14,7 @@ import logging
 import secrets
 from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -110,23 +110,64 @@ def process_abdm_scan_share(
 ) -> Dict[str, Any]:
     """
     ABDM Scan & Share at Hospital OPD Desk:
-    Parses digital token from patient app scan and creates/locates hospital MRN.
+    Parses verified digital token from certified patient ABHA app scan and creates/locates hospital MRN.
     """
+    from backend.core.config import settings
+    if settings.is_production() and not getattr(settings, "ABDM_ALLOW_SIMULATED_GATEWAY", False):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ABDM Scan & Share integration requires certified NHA gateway credentials in production.",
+        )
+
     try:
         data = json.loads(qr_payload)
+        if not isinstance(data, dict):
+            raise ValueError("Payload must be a JSON object")
     except Exception:
-        # Simple string payload fallback
-        data = {
-            "abhaAddress": qr_payload.strip(),
-            "name": "Scan-Share Patient",
-            "gender": "MALE",
-            "dob": "1992-05-14T00:00:00Z",
-        }
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid ABDM Scan & Share payload: must be valid JSON from a certified ABHA app.",
+        )
 
-    abha_addr = data.get("abhaAddress") or f"scan.{secrets.token_hex(3)}@abdm"
-    full_name = data.get("name") or "Scan-Share Patient"
-    gender_str = data.get("gender", "MALE").upper()
-    gender_val = GenderEnum.FEMALE if gender_str == "FEMALE" else GenderEnum.MALE
+    # N-74: Reject dummy/fallback demographics. Verified demographic fields are strictly mandatory.
+    abha_addr = data.get("abhaAddress") or data.get("abha_address")
+    full_name = data.get("name")
+    gender_str = data.get("gender")
+    dob_raw = data.get("dob")
+
+    if not abha_addr or not str(abha_addr).strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Scan & Share payload: missing mandatory ABHA address.",
+        )
+    if not full_name or str(full_name).strip() in ("", "Scan-Share Patient"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Scan & Share payload: missing or placeholder patient name.",
+        )
+    if not gender_str or str(gender_str).strip().upper() not in ("MALE", "FEMALE", "OTHER"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Scan & Share payload: missing or invalid patient gender.",
+        )
+    if not dob_raw:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Scan & Share payload: missing patient date of birth.",
+        )
+
+    try:
+        dob = datetime.fromisoformat(str(dob_raw).replace("Z", "+00:00"))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Scan & Share payload: invalid date of birth format.",
+        )
+
+    gender_norm = str(gender_str).strip().upper()
+    gender_val = GenderEnum.FEMALE if gender_norm == "FEMALE" else (GenderEnum.OTHER if gender_norm == "OTHER" else GenderEnum.MALE)
+    abha_addr = str(abha_addr).strip()
+    full_name = str(full_name).strip()
 
     # Check if patient already exists by ABHA address
     patient = session.execute(
@@ -136,7 +177,6 @@ def process_abdm_scan_share(
     if not patient:
         date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
         mrn = f"MRN-{date_str}-{secrets.token_hex(4).upper()}"
-        dob = datetime.fromisoformat(data.get("dob", "1992-05-14T00:00:00Z").replace("Z", "+00:00"))
 
         patient = Patient(
             mrn=mrn,

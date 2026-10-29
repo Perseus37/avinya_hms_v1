@@ -13,27 +13,26 @@ Tests for Application Bug Fixes & Enhancements:
 
 from pathlib import Path
 import jwt
-import pytest
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from backend.core.config import settings
-from backend.core.database import extract_subdomain_slug, tenant_engine_pool
+from backend.core.database import extract_subdomain_slug
 from backend.core.seed import GRANULAR_PERMISSIONS, ensure_permissions_exist
 from backend.domains.identity.models import Permission
 from backend.main import app, v1_app
 
 
-def test_subdomain_extraction_from_bearer_jwt():
+def test_subdomain_extraction_from_bearer_jwt(multi_tenant_env):
     """
     Verifies that when a client (e.g. Swagger UI or automated SDK) sends an
     Authorization: Bearer <token> header on localhost without an explicit
-    X-Hospital-Subdomain header, extract_subdomain_slug extracts tenant_slug
-    from the JWT claims.
+    X-Hospital-Subdomain header, extract_subdomain_slug verifies the token signature
+    against the claimed tenant's secret key and extracts tenant_slug (N-76).
     """
+    secret = multi_tenant_env["tenant_keys"]["apollo"]["jwt"]
     token = jwt.encode(
-        {"sub": "1", "tenant_slug": "city-general", "jti": "mock-jti"},
-        "test-secret-key-32-bytes-long-for-hmac",
+        {"sub": "1", "tenant_slug": "apollo", "jti": "mock-jti"},
+        secret,
         algorithm="HS256",
     )
     scope = {
@@ -47,7 +46,7 @@ def test_subdomain_extraction_from_bearer_jwt():
     }
     request = Request(scope)
     resolved_slug = extract_subdomain_slug(request)
-    assert resolved_slug == "city-general"
+    assert resolved_slug == "apollo"
 
 
 def test_subdomain_extraction_header_priority():
@@ -175,15 +174,23 @@ def test_login_with_explicit_hospital_slug(client, multi_tenant_env):
     assert data["token_type"].lower() == "bearer"
 
 
-def test_control_plane_spa_dist_resolution():
+def test_control_plane_spa_dist_resolution(monkeypatch, tmp_path):
     """
     Verifies that backend/control_plane/app.py resolves SPA_DIST dynamically
-    from repository root if /app/onboarding-ui/dist does not exist.
+    and functions reliably even in clean checkouts without a pre-built onboarding-ui/dist (N-77).
     """
-    from backend.control_plane.app import LOCAL_SPA_DIST, SPA_DIST
+    from backend.control_plane.app import LOCAL_SPA_DIST, get_spa_dist_path
     assert LOCAL_SPA_DIST.name == "dist"
     assert LOCAL_SPA_DIST.parent.name == "onboarding-ui"
-    assert Path(SPA_DIST).exists(), f"Resolved SPA_DIST '{SPA_DIST}' does not exist on disk"
+
+    # Test dynamic resolution with SPA_DIST_DIR environment variable
+    fake_dist = tmp_path / "mock_dist"
+    fake_dist.mkdir()
+    (fake_dist / "index.html").write_text("<!doctype html><html><body>Test SPA</body></html>", encoding="utf-8")
+    monkeypatch.setenv("SPA_DIST_DIR", str(fake_dist))
+    resolved = get_spa_dist_path()
+    assert resolved == fake_dist.resolve()
+    assert (resolved / "index.html").is_file()
 
 
 def test_onboarding_ui_session_persistence_contract():
