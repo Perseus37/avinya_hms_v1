@@ -312,19 +312,74 @@ def test_prometheus_alert_rules_and_config_syntax():
 
     rule_names = [r["alert"] for g in alerts["groups"] for r in g["rules"]]
     assert "ApiServiceDown" in rule_names
+    assert "ControlPlaneServiceDown" in rule_names
+    assert "AlertmanagerDown" in rule_names
     assert "HighHttp5xxErrorRate" in rule_names
     assert "HighRequestLatencyP95" in rule_names
     assert "PostgresDown" in rule_names
     assert "RedisDown" in rule_names
     assert "BackupFreshnessWarning" in rule_names
+    assert "BackupRunFailed" in rule_names
+
+    # N-79: Verify BackupFreshnessWarning triggers on missing metric
+    backup_rule = next(r for g in alerts["groups"] for r in g["rules"] if r["alert"] == "BackupFreshnessWarning")
+    assert "absent(backup_last_completion_timestamp_seconds)" in backup_rule["expr"]
 
     prom_path = Path("deployments/prometheus.yml")
     assert prom_path.is_file()
     prom = yaml.safe_load(prom_path.read_text(encoding="utf-8"))
+    assert "alerting" in prom
     assert "scrape_configs" in prom
-    jobs = [job["job_name"] for job in prom["scrape_configs"]]
+    jobs = {job["job_name"]: job for job in prom["scrape_configs"]}
     assert "avinya-api" in jobs
+    assert "avinya-onboarding" in jobs
+    assert "alertmanager" in jobs
     assert "postgres" in jobs
     assert "redis" in jobs
+    assert "node" in jobs
+    assert "authorization" in jobs["avinya-onboarding"]
+
+    # N-82: Verify Alertmanager configuration
+    am_path = Path("deployments/alertmanager.yml")
+    assert am_path.is_file()
+    am = yaml.safe_load(am_path.read_text(encoding="utf-8"))
+    assert "route" in am
+    assert "receivers" in am
+    receiver_names = [r["name"] for r in am["receivers"]]
+    assert "default-receiver" in receiver_names
+    assert "critical-receiver" in receiver_names
+
+
+def test_control_plane_metrics_and_health_endpoint(monkeypatch):
+    """
+    N-83: Verify Control Plane exposes /health and token-authenticated /metrics.
+    """
+    from starlette.testclient import TestClient
+    from backend.control_plane.app import app as cp_app
+
+    client = TestClient(cp_app)
+
+    # 1. Health liveness probe
+    health_res = client.get("/health")
+    assert health_res.status_code == 200
+    assert health_res.json()["status"] == "healthy"
+
+    # 2. Metrics endpoint requires token in production
+    test_token = "metrics-secret-token-32-chars-long!"
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "METRICS_SCRAPE_TOKEN", test_token)
+
+    # Unauthenticated / wrong token returns 401
+    unauth_res = client.get("/metrics")
+    assert unauth_res.status_code == 401
+    assert "valid metrics scrape token required" in unauth_res.text
+
+    wrong_res = client.get("/metrics", headers={"Authorization": "Bearer wrong-token"})
+    assert wrong_res.status_code == 401
+
+    # Valid Bearer token returns 200 with Prometheus text format
+    valid_res = client.get("/metrics", headers={"Authorization": f"Bearer {test_token}"})
+    assert valid_res.status_code == 200
+    assert "process_cpu_seconds_total" in valid_res.text or "python_info" in valid_res.text or len(valid_res.text) > 0
 
 

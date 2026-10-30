@@ -17,6 +17,7 @@ REQUIRED_PRODUCTION_SECRETS = (
     "SEED_ADMIN_PASSWORD",
     "ENVELOPE_ENCRYPTION_SALT",
     "BACKUP_ENCRYPTION_SALT",
+    "METRICS_SCRAPE_TOKEN",
 )
 OPTIONAL_PRODUCTION_SECRETS = (
     "CONTROL_PLANE_MASTER_KEY",
@@ -123,6 +124,45 @@ def validate_production_env(env_file: Path) -> list[str]:
     admin_email = values.get("SEED_ADMIN_EMAIL")
     if admin_email and "@" not in admin_email:
         errors.append("SEED_ADMIN_EMAIL must be a valid email address.")
+
+    # Encryption salt hardening: reject known default salt and weak salts
+    known_default_salts = {"avinya_secure_salt_2026", "avinya_backup_salt_2026"}
+    for salt_name in ("ENVELOPE_ENCRYPTION_SALT", "BACKUP_ENCRYPTION_SALT"):
+        salt_val = values.get(salt_name, "")
+        if salt_val and salt_val.strip() in known_default_salts:
+            errors.append(f"{salt_name} must not use known default salt '{salt_val.strip()}'.")
+        elif salt_val and len(salt_val.strip()) < 16:
+            errors.append(f"{salt_name} must contain at least 16 characters.")
+
+    # Token lifetime limits: enforce session safety ceilings in production
+    access_token_expire = values.get("ACCESS_TOKEN_EXPIRE_MINUTES")
+    if access_token_expire:
+        try:
+            exp_mins = int(access_token_expire.strip())
+            if exp_mins <= 0 or exp_mins > 60:
+                errors.append("ACCESS_TOKEN_EXPIRE_MINUTES must be between 1 and 60 minutes in production.")
+        except ValueError:
+            errors.append("ACCESS_TOKEN_EXPIRE_MINUTES must be a valid integer.")
+
+    cp_token_expire = values.get("CONTROL_PLANE_ACCESS_TOKEN_MINUTES")
+    if cp_token_expire:
+        try:
+            cp_mins = int(cp_token_expire.strip())
+            if cp_mins <= 0 or cp_mins > 60:
+                errors.append("CONTROL_PLANE_ACCESS_TOKEN_MINUTES must be between 1 and 60 minutes in production.")
+        except ValueError:
+            errors.append("CONTROL_PLANE_ACCESS_TOKEN_MINUTES must be a valid integer.")
+
+    # Database TLS settings: reject disabled TLS in production
+    pg_sslmode = values.get("POSTGRES_SSLMODE")
+    if pg_sslmode:
+        if pg_sslmode.strip().lower() in {"disable", "allow"}:
+            errors.append("POSTGRES_SSLMODE must not disable TLS in production (use prefer, require, verify-ca, or verify-full).")
+
+    # Metrics scrape token entropy check
+    metrics_token = values.get("METRICS_SCRAPE_TOKEN", "")
+    if metrics_token and len(metrics_token.strip()) < 16:
+        errors.append("METRICS_SCRAPE_TOKEN must contain at least 16 characters.")
 
     populated_secrets = {}
     for name in REQUIRED_PRODUCTION_SECRETS + OPTIONAL_PRODUCTION_SECRETS:

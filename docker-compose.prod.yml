@@ -4,6 +4,9 @@ services:
     restart: unless-stopped
     security_opt:
       - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    read_only: true
     environment:
       - CONTAINERS=1
     volumes:
@@ -26,6 +29,10 @@ services:
     restart: unless-stopped
     security_opt:
       - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     command:
       - "--providers.docker=true"
       - "--providers.docker.endpoint=tcp://docker-proxy:2375"
@@ -122,6 +129,8 @@ services:
     restart: unless-stopped
     security_opt:
       - "no-new-privileges:true"
+    cap_drop:
+      - ALL
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
       REDIS_PORT: ${REDIS_PORT:?REDIS_PORT is required}
@@ -352,6 +361,145 @@ services:
       - internal-net
       - public-net
 
+  prometheus:
+    image: prom/prometheus:v2.53.3
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    user: "65534:65534"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./deployments/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deployments/prometheus-alerts.yml:/etc/prometheus/prometheus-alerts.yml:ro
+      - hms_prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 -O- http://localhost:9090/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1024M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+    networks:
+      - internal-net
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    user: "65534:65534"
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    volumes:
+      - ./deployments/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - hms_alertmanager_data:/alertmanager
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 -O- http://localhost:9093/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal-net
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:${POSTGRES_PORT:-5432}/${POSTGRES_DB:?POSTGRES_DB is required}?sslmode=disable"
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal-net
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.61.0-alpine
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    environment:
+      REDIS_ADDR: "redis:${REDIS_PORT:-6379}"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal-net
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/host/root"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+      - "--collector.textfile.directory=/var/lib/node_exporter/textfile_collector"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+      - hms_node_exporter_textfile:/var/lib/node_exporter/textfile_collector:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal-net
+
 networks:
   public-net:
     driver: bridge
@@ -370,3 +518,6 @@ volumes:
   hms_backups:
   traefik_certificates:
   hms_clamav_db:
+  hms_prometheus_data:
+  hms_alertmanager_data:
+  hms_node_exporter_textfile:

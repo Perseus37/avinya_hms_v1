@@ -1,0 +1,49 @@
+# =============================================================================
+# Avinya HMS Production Alertmanager Configuration
+# =============================================================================
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: "${SMTP_HOST:-localhost}:${SMTP_PORT:-587}"
+  smtp_from: "${ALERT_EMAIL_FROM:-alerts@avinya-hms.local}"
+  smtp_auth_username: "${SMTP_USER:-}"
+  smtp_auth_password: "${SMTP_PASSWORD:-}"
+  smtp_require_tls: true
+
+route:
+  group_by: ["alertname", "cluster", "service", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: "default-receiver"
+  routes:
+    - match:
+        severity: critical
+      receiver: "critical-receiver"
+      repeat_interval: 1h
+    - match:
+        severity: warning
+      receiver: "warning-receiver"
+      repeat_interval: 6h
+
+receivers:
+  - name: "default-receiver"
+    webhook_configs:
+      - url: "${ALERT_WEBHOOK_URL:-http://localhost:5001/alerts/fallback}"
+        send_resolved: true
+
+  - name: "critical-receiver"
+    webhook_configs:
+      - url: "${ALERT_CRITICAL_WEBHOOK_URL:-http://localhost:5001/alerts/critical}"
+        send_resolved: true
+
+  - name: "warning-receiver"
+    webhook_configs:
+      - url: "${ALERT_WARNING_WEBHOOK_URL:-http://localhost:5001/alerts/warning}"
+        send_resolved: true
+
+inhibit_rules:
+  - source_match:
+      severity: "critical"
+    target_match:
+      severity: "warning"
+    equal: ["alertname", "service"]

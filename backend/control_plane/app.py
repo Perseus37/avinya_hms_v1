@@ -4,7 +4,10 @@ import asyncio
 import logging
 import traceback
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, BackgroundTasks, status
+from fastapi import FastAPI, Request, BackgroundTasks, status, HTTPException, Response
+import secrets
+from backend.core.metrics import get_prometheus_metrics_bytes
+from prometheus_client import CONTENT_TYPE_LATEST
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import event
 
@@ -225,6 +228,42 @@ async def receive_global_webhook(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={"message": "Invalid JSON payload."}
         )
+# -------------------------------------------------------------------------
+# PROMETHEUS TELEMETRY & HEALTH PROBES (N-83)
+# -------------------------------------------------------------------------
+
+@app.get("/health", tags=["System Health"])
+def liveness_check():
+    """Lightweight liveness probe for container orchestrators."""
+    return {"success": True, "status": "healthy", "service": "control-plane"}
+
+
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics(request: Request):
+    """Exposes Control Plane application and runtime metrics in Prometheus text format."""
+    required_token = settings.METRICS_SCRAPE_TOKEN
+    if required_token:
+        auth_header = request.headers.get("Authorization", "")
+        token = ""
+        if auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1].strip()
+        elif request.headers.get("X-Metrics-Token"):
+            token = request.headers.get("X-Metrics-Token", "").strip()
+
+        if not token or not secrets.compare_digest(token, required_token):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Unauthorized: valid metrics scrape token required.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    elif settings.is_production():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: METRICS_SCRAPE_TOKEN must be configured in production environments.",
+        )
+    return Response(content=get_prometheus_metrics_bytes(), media_type=CONTENT_TYPE_LATEST)
+
+
 # -------------------------------------------------------------------------
 # STATIC SPA MOUNTING & CONFINED FILE RESOLUTION (N-75)
 # -------------------------------------------------------------------------

@@ -89,13 +89,32 @@ for database in "${databases[@]}"; do
   fi
 done
 
+start_epoch="$(date +%s)"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 backup_name="avinya-pg17-${stamp}-$$"
 staging_dir="$(mktemp -d "$BACKUP_ROOT/.${backup_name}.partial.XXXXXX")"
 final_dir="$BACKUP_ROOT/$backup_name"
 cleanup() {
+  local exit_code=$?
   if [[ -n "${staging_dir:-}" && -d "$staging_dir" ]]; then
     rm -rf -- "$staging_dir"
+  fi
+  if [[ $exit_code -ne 0 ]]; then
+    local fail_time
+    fail_time="$(date +%s)"
+    local textfile_dir="${NODE_EXPORTER_TEXTFILE_DIR:-/var/lib/node_exporter/textfile_collector}"
+    if [[ -d "$textfile_dir" || -n "${NODE_EXPORTER_TEXTFILE_DIR:-}" ]]; then
+      mkdir -p -- "$textfile_dir" 2>/dev/null || true
+      cat <<EOF > "$textfile_dir/.backup_postgres.prom.$$" 2>/dev/null || true
+# HELP backup_last_status Exit status of the last PostgreSQL backup attempt (1 = success, 0 = failure).
+# TYPE backup_last_status gauge
+backup_last_status 0
+# HELP backup_last_failure_timestamp_seconds Time of last failed PostgreSQL backup attempt in epoch seconds.
+# TYPE backup_last_failure_timestamp_seconds gauge
+backup_last_failure_timestamp_seconds $fail_time
+EOF
+      mv -f -- "$textfile_dir/.backup_postgres.prom.$$" "$textfile_dir/backup_postgres.prom" 2>/dev/null || true
+    fi
   fi
 }
 trap cleanup EXIT
@@ -149,6 +168,26 @@ fi
 mv -- "$staging_dir" "$final_dir"
 staging_dir=""
 echo "Encrypted PostgreSQL backup completed: $final_dir"
+
+# Publish completion metrics for Prometheus node_exporter textfile collector (N-79)
+end_epoch="$(date +%s)"
+duration_seconds=$(( end_epoch - start_epoch ))
+textfile_dir="${NODE_EXPORTER_TEXTFILE_DIR:-/var/lib/node_exporter/textfile_collector}"
+if [[ -d "$textfile_dir" || -n "${NODE_EXPORTER_TEXTFILE_DIR:-}" ]]; then
+  mkdir -p -- "$textfile_dir" 2>/dev/null || true
+  cat <<EOF > "$textfile_dir/.backup_postgres.prom.$$"
+# HELP backup_last_completion_timestamp_seconds Time of last successful PostgreSQL backup completion in epoch seconds.
+# TYPE backup_last_completion_timestamp_seconds gauge
+backup_last_completion_timestamp_seconds $end_epoch
+# HELP backup_last_duration_seconds Duration of last successful PostgreSQL backup in seconds.
+# TYPE backup_last_duration_seconds gauge
+backup_last_duration_seconds $duration_seconds
+# HELP backup_last_status Exit status of the last PostgreSQL backup attempt (1 = success, 0 = failure).
+# TYPE backup_last_status gauge
+backup_last_status 1
+EOF
+  mv -f -- "$textfile_dir/.backup_postgres.prom.$$" "$textfile_dir/backup_postgres.prom"
+fi
 
 if [[ -n "${BACKUP_REMOTE_DEST:-}" ]]; then
   command -v rsync >/dev/null 2>&1 || {

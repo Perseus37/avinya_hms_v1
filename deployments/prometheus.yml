@@ -6,6 +6,12 @@ global:
   evaluation_interval: 15s
   scrape_timeout: 10s
 
+alerting:
+  alertmanagers:
+    - scheme: "http"
+      static_configs:
+        - targets: ["alertmanager:9093"]
+
 rule_files:
   - "prometheus-alerts.yml"
 
@@ -25,11 +31,21 @@ scrape_configs:
   - job_name: "avinya-onboarding"
     metrics_path: "/metrics"
     scheme: "http"
+    authorization:
+      type: "Bearer"
+      credentials_file: "/etc/prometheus/metrics_scrape_token.txt"
     static_configs:
       - targets: ["onboarding-portal:8080"]
         labels:
           environment: "production"
           service: "avinya-control-plane"
+
+  - job_name: "alertmanager"
+    static_configs:
+      - targets: ["alertmanager:9093"]
+        labels:
+          environment: "production"
+          service: "alertmanager"
 
   - job_name: "postgres"
     static_configs:

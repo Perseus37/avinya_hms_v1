@@ -116,3 +116,46 @@ def test_wider_production_configuration_validation(tmp_path):
     assert any("SEED_ADMIN_EMAIL" in error for error in errors)
     assert any("POSTGRES_USER" in error for error in errors)
 
+def test_production_env_rejects_known_default_salt_and_weak_salts(tmp_path):
+    values = _valid_env_values()
+    values["ENVELOPE_ENCRYPTION_SALT"] = "avinya_secure_salt_2026"
+    values["BACKUP_ENCRYPTION_SALT"] = "too-short"
+    env_file = tmp_path / ".env.production"
+    _write_env_file(env_file, values)
+
+    errors = validate_production_env(env_file)
+    assert any("ENVELOPE_ENCRYPTION_SALT must not use known default salt" in error for error in errors)
+    assert any("BACKUP_ENCRYPTION_SALT must contain at least 16 characters" in error for error in errors)
+
+
+def test_production_env_enforces_token_lifetime_limits(tmp_path):
+    values = _valid_env_values()
+    values["ACCESS_TOKEN_EXPIRE_MINUTES"] = "120"
+    values["CONTROL_PLANE_ACCESS_TOKEN_MINUTES"] = "0"
+    env_file = tmp_path / ".env.production"
+    _write_env_file(env_file, values)
+
+    errors = validate_production_env(env_file)
+    assert any("ACCESS_TOKEN_EXPIRE_MINUTES must be between 1 and 60 minutes" in error for error in errors)
+    assert any("CONTROL_PLANE_ACCESS_TOKEN_MINUTES must be between 1 and 60 minutes" in error for error in errors)
+
+
+def test_production_env_rejects_disabled_database_tls(tmp_path):
+    values = _valid_env_values()
+    values["POSTGRES_SSLMODE"] = "disable"
+    env_file = tmp_path / ".env.production"
+    _write_env_file(env_file, values)
+
+    errors = validate_production_env(env_file)
+    assert any("POSTGRES_SSLMODE must not disable TLS in production" in error for error in errors)
+
+
+def test_production_env_requires_secure_metrics_scrape_token(tmp_path):
+    values = _valid_env_values()
+    values["METRICS_SCRAPE_TOKEN"] = "short"
+    env_file = tmp_path / ".env.production"
+    _write_env_file(env_file, values)
+
+    errors = validate_production_env(env_file)
+    assert any("METRICS_SCRAPE_TOKEN must contain at least 16 characters" in error for error in errors)
+

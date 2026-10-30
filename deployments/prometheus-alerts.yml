@@ -13,6 +13,24 @@ groups:
           summary: "Avinya HMS API service is down"
           description: "API instance {{ $labels.instance }} has been unreachable for more than 2 minutes."
 
+      - alert: ControlPlaneServiceDown
+        expr: up{job="avinya-onboarding"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Avinya Control Plane service is down"
+          description: "Control plane instance {{ $labels.instance }} has been unreachable for more than 2 minutes."
+
+      - alert: AlertmanagerDown
+        expr: up{job="alertmanager"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Alertmanager service is down"
+          description: "Alertmanager instance {{ $labels.instance }} is unreachable. Alert notification routing is impaired."
+
       - alert: HighHttp5xxErrorRate
         expr: >-
           (sum(rate(avinya_http_requests_total{status=~"5.."}[5m]))
@@ -83,10 +101,22 @@ groups:
           description: "Mountpoint {{ $labels.mountpoint }} has less than 15% disk space remaining. DB write halts risk imminent."
 
       - alert: BackupFreshnessWarning
-        expr: (time() - backup_last_completion_timestamp_seconds) > 93600
+        expr: >-
+          absent(backup_last_completion_timestamp_seconds) == 1
+          or
+          (time() - backup_last_completion_timestamp_seconds) > 93600
         for: 30m
         labels:
           severity: critical
         annotations:
-          summary: "Database backup overdue (> 26 hours)"
-          description: "No verified database backup has completed within the last 26 hours. Recovery Point Objective (RPO) is breached."
+          summary: "Database backup overdue or metric missing (> 26 hours)"
+          description: "No verified database backup metric is available or backup has not completed within the last 26 hours. Recovery Point Objective (RPO) is breached."
+
+      - alert: BackupRunFailed
+        expr: backup_last_status == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database backup execution failed"
+          description: "The most recent PostgreSQL backup script execution exited with a non-zero status code."
