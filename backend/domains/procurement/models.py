@@ -98,7 +98,7 @@ class PurchaseOrder(AuditMixin, Base):
     delivery_due_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     payment_terms: Mapped[str] = mapped_column(String(255), nullable=False)
     total_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    approved_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    approved_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     vendor: Mapped["VendorMaster"] = relationship()
@@ -115,8 +115,8 @@ class PurchaseOrderItem(AuditMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    po_id: Mapped[int] = mapped_column(ForeignKey("procurement_purchase_orders.id", ondelete="CASCADE"), nullable=False)
-    medication_id: Mapped[Optional[int]] = mapped_column(ForeignKey("medication_master.id"), nullable=True)
+    po_id: Mapped[int] = mapped_column(ForeignKey("procurement_purchase_orders.id", ondelete="CASCADE"), nullable=False, index=True)
+    medication_id: Mapped[Optional[int]] = mapped_column(ForeignKey("medication_master.id"), nullable=True, index=True)
     item_description: Mapped[str] = mapped_column(String(200), nullable=False)
     quantity_ordered: Mapped[int] = mapped_column(Integer, nullable=False)
     quantity_received: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -140,7 +140,7 @@ class GoodsReceiptNote(AuditMixin, Base):
     invoice_number: Mapped[str] = mapped_column(String(100), nullable=False)
     invoice_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[GRNStatusEnum] = mapped_column(default=GRNStatusEnum.PENDING_INSPECTION, nullable=False)
-    inspected_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    inspected_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     inspection_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     purchase_order: Mapped["PurchaseOrder"] = relationship()
@@ -158,8 +158,8 @@ class GoodsReceiptItem(AuditMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    grn_id: Mapped[int] = mapped_column(ForeignKey("procurement_grn.id", ondelete="CASCADE"), nullable=False)
-    po_item_id: Mapped[int] = mapped_column(ForeignKey("procurement_po_items.id"), nullable=False)
+    grn_id: Mapped[int] = mapped_column(ForeignKey("procurement_grn.id", ondelete="CASCADE"), nullable=False, index=True)
+    po_item_id: Mapped[int] = mapped_column(ForeignKey("procurement_po_items.id"), nullable=False, index=True)
     batch_number: Mapped[str] = mapped_column(String(50), nullable=False)
     expiry_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     received_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -167,7 +167,7 @@ class GoodsReceiptItem(AuditMixin, Base):
     rejected_quantity: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     rejection_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     unit_price_paise: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_batch_id: Mapped[Optional[int]] = mapped_column(ForeignKey("inventory_batches.id"), nullable=True)
+    created_batch_id: Mapped[Optional[int]] = mapped_column(ForeignKey("inventory_batches.id"), nullable=True, index=True)
 
     grn: Mapped["GoodsReceiptNote"] = relationship(back_populates="items")
     po_item: Mapped["PurchaseOrderItem"] = relationship()
@@ -180,13 +180,13 @@ class StoreIndent(AuditMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     indent_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
-    requesting_department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
+    requesting_department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False, index=True)
 
-    encounter_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patient_encounters.id"), nullable=True)
+    encounter_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patient_encounters.id"), nullable=True, index=True)
 
     status: Mapped[IndentStatusEnum] = mapped_column(default=IndentStatusEnum.PENDING, nullable=False)
-    requested_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
-    approved_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    requested_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    approved_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     remarks: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     encounter: Mapped[Optional["PatientEncounter"]] = relationship()
@@ -207,8 +207,8 @@ class StoreIndentItem(AuditMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    indent_id: Mapped[int] = mapped_column(ForeignKey("procurement_indents.id", ondelete="CASCADE"), nullable=False)
-    medication_id: Mapped[int] = mapped_column(ForeignKey("medication_master.id"), nullable=False)
+    indent_id: Mapped[int] = mapped_column(ForeignKey("procurement_indents.id", ondelete="CASCADE"), nullable=False, index=True)
+    medication_id: Mapped[int] = mapped_column(ForeignKey("medication_master.id"), nullable=False, index=True)
     requested_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     issued_quantity: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
@@ -225,9 +225,9 @@ class VendorInvoice(AuditMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    vendor_id: Mapped[int] = mapped_column(ForeignKey("procurement_vendors.id"), nullable=False)
-    po_id: Mapped[Optional[int]] = mapped_column(ForeignKey("procurement_purchase_orders.id"), nullable=True)
-    grn_id: Mapped[Optional[int]] = mapped_column(ForeignKey("procurement_grn.id"), nullable=True)
+    vendor_id: Mapped[int] = mapped_column(ForeignKey("procurement_vendors.id"), nullable=False, index=True)
+    po_id: Mapped[Optional[int]] = mapped_column(ForeignKey("procurement_purchase_orders.id"), nullable=True, index=True)
+    grn_id: Mapped[Optional[int]] = mapped_column(ForeignKey("procurement_grn.id"), nullable=True, index=True)
 
     invoice_number: Mapped[str] = mapped_column(String(100), nullable=False)
     invoice_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -244,9 +244,9 @@ class VendorInvoice(AuditMixin, Base):
     document_file_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    verified_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    verified_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    linked_expense_id: Mapped[Optional[int]] = mapped_column(ForeignKey("finance_expenses.id"), nullable=True)
+    linked_expense_id: Mapped[Optional[int]] = mapped_column(ForeignKey("finance_expenses.id"), nullable=True, index=True)
 
     vendor: Mapped["VendorMaster"] = relationship()
     purchase_order: Mapped[Optional["PurchaseOrder"]] = relationship()
@@ -290,9 +290,9 @@ class VendorInvoiceItem(AuditMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    invoice_id: Mapped[int] = mapped_column(ForeignKey("procurement_vendor_invoices.id", ondelete="CASCADE"), nullable=False)
-    po_item_id: Mapped[Optional[int]] = mapped_column(ForeignKey("procurement_po_items.id"), nullable=True)
-    medication_id: Mapped[Optional[int]] = mapped_column(ForeignKey("medication_master.id"), nullable=True)
+    invoice_id: Mapped[int] = mapped_column(ForeignKey("procurement_vendor_invoices.id", ondelete="CASCADE"), nullable=False, index=True)
+    po_item_id: Mapped[Optional[int]] = mapped_column(ForeignKey("procurement_po_items.id"), nullable=True, index=True)
+    medication_id: Mapped[Optional[int]] = mapped_column(ForeignKey("medication_master.id"), nullable=True, index=True)
 
     item_description: Mapped[str] = mapped_column(String(200), nullable=False)
     batch_number: Mapped[str] = mapped_column(String(50), nullable=False)

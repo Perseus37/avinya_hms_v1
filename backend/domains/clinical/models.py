@@ -102,7 +102,7 @@ class ClinicalNote(AuditMixin, Base):
 
     is_signed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     signed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    signed_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    signed_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
 
     encounter: Mapped["PatientEncounter"] = relationship()
     signed_by: Mapped[Optional["User"]] = relationship(foreign_keys=[signed_by_id])
@@ -140,7 +140,7 @@ class FluidBalanceLog(AuditMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id", ondelete="CASCADE"), nullable=False)
-    recorded_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    recorded_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
 
     direction: Mapped[FluidDirectionEnum] = mapped_column(nullable=False)
     fluid_type: Mapped[str] = mapped_column(String(100), nullable=False)  # e.g., "Normal Saline 0.9%", "Urine (Foley)"
@@ -165,7 +165,7 @@ class ERTriageAssessment(AuditMixin, Base):
     encounter_id: Mapped[int] = mapped_column(
         ForeignKey("patient_encounters.id", ondelete="CASCADE"), unique=True, nullable=False, index=True
     )
-    triaged_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    triaged_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
 
     acuity_level: Mapped[TriageAcuityEnum] = mapped_column(nullable=False)
     chief_complaint: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -192,7 +192,7 @@ class MedicoLegalCase(AuditMixin, Base):
         ForeignKey("patient_encounters.id", ondelete="RESTRICT"), unique=True, nullable=False, index=True
     )
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False, index=True)
-    registered_by_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    registered_by_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
 
     cause_of_injury: Mapped[MLCCauseEnum] = mapped_column(nullable=False)
     alleged_history: Mapped[str] = mapped_column(Text, nullable=False)
@@ -221,8 +221,8 @@ class PatientComorbidity(AuditMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
-    comorbidity_id: Mapped[int] = mapped_column(ForeignKey("comorbidities_master.id", ondelete="RESTRICT"), nullable=False)
-    recorded_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    comorbidity_id: Mapped[int] = mapped_column(ForeignKey("comorbidities_master.id", ondelete="RESTRICT"), nullable=False, index=True)
+    recorded_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     clinical_remarks: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
@@ -240,8 +240,8 @@ class EncounterPhysicalExam(AuditMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id", ondelete="CASCADE"), nullable=False)
-    exam_master_id: Mapped[int] = mapped_column(ForeignKey("physical_examinations_master.id", ondelete="RESTRICT"), nullable=False)
-    recorded_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    exam_master_id: Mapped[int] = mapped_column(ForeignKey("physical_examinations_master.id", ondelete="RESTRICT"), nullable=False, index=True)
+    recorded_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     is_normal: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     findings_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
@@ -264,7 +264,7 @@ class BirthRecord(AuditMixin, Base):
     mother_encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id"), nullable=False, index=True)
     mother_patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False, index=True)
     newborn_patient_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patients.id"), nullable=True, index=True)
-    attending_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    attending_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
 
     baby_full_name: Mapped[str] = mapped_column(String(100), nullable=False)
     baby_gender: Mapped[GenderEnum] = mapped_column(nullable=False)
@@ -291,8 +291,8 @@ class DeathRecord(AuditMixin, Base):
     certificate_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id"), unique=True, nullable=False, index=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), unique=True, nullable=False, index=True)
-    certified_by_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
-    immediate_cause_diagnosis_id: Mapped[int] = mapped_column(ForeignKey("diagnoses_master.id"), nullable=False)
+    certified_by_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    immediate_cause_diagnosis_id: Mapped[int] = mapped_column(ForeignKey("diagnoses_master.id"), nullable=False, index=True)
 
     time_of_death: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     manner_of_death: Mapped[MannerOfDeathEnum] = mapped_column(default=MannerOfDeathEnum.NATURAL, nullable=False)
@@ -350,8 +350,8 @@ class OrderSetItem(AuditMixin, Base):
     )
     item_type: Mapped[OrderSetItemTypeEnum] = mapped_column(nullable=False)
 
-    medication_id: Mapped[Optional[int]] = mapped_column(ForeignKey("medication_master.id"), nullable=True)
-    service_id: Mapped[Optional[int]] = mapped_column(ForeignKey("service_catalog.id"), nullable=True)
+    medication_id: Mapped[Optional[int]] = mapped_column(ForeignKey("medication_master.id"), nullable=True, index=True)
+    service_id: Mapped[Optional[int]] = mapped_column(ForeignKey("service_catalog.id"), nullable=True, index=True)
 
     dosage_instruction: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
@@ -372,9 +372,10 @@ class ClinicalEarlyWarningScore(AuditMixin, Base):
         ForeignKey("patient_encounters.id", ondelete="CASCADE"), nullable=False, index=True
     )
     vital_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("encounter_vitals.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("encounter_vitals.id", ondelete="SET NULL"), nullable=True,
+        index=True,
     )
-    evaluated_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    evaluated_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
 
     news2_score: Mapped[int] = mapped_column(Integer, nullable=False)
     risk_level: Mapped[EarlyWarningRiskEnum] = mapped_column(nullable=False)

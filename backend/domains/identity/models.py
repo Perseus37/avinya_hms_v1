@@ -185,7 +185,8 @@ class UserRole(AuditMixin, Base):
         ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True
     )
     department_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("departments.id", ondelete="SET NULL")
+        ForeignKey("departments.id", ondelete="SET NULL"),
+        index=True,
     )
 
 
@@ -204,7 +205,8 @@ class DoctorProfile(AuditMixin, Base):
     )
     clinical_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     department_id: Mapped[int] = mapped_column(
-        ForeignKey("departments.id"), nullable=False
+        ForeignKey("departments.id"), nullable=False,
+        index=True,
     )
     qualification: Mapped[str] = mapped_column(String(100), nullable=False)
     specialization: Mapped[str] = mapped_column(String(100), nullable=False)

@@ -42,7 +42,7 @@ class ServiceCategory(AuditMixin, Base):
     __tablename__ = "service_categories"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False, index=True)
     code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True)
@@ -56,7 +56,8 @@ class ServiceCatalog(AuditMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     category_id: Mapped[int] = mapped_column(
-        ForeignKey("service_categories.id"), nullable=False
+        ForeignKey("service_categories.id"), nullable=False,
+        index=True,
     )
     code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -126,8 +127,8 @@ class DiagnosticTask(AuditMixin, Base):
         Boolean, default=False, nullable=False, index=True
     )
     rejection_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    performed_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
-    verified_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
+    performed_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), index=True)
+    verified_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), index=True)
     delta_check_flag: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     previous_result_value: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     delta_percentage: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

@@ -76,7 +76,7 @@ class NHCXClaimExchangeLog(AuditMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     transaction_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id", ondelete="CASCADE"), nullable=False)
-    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), nullable=False, index=True)
 
     claim_id: Mapped[Optional[int]] = mapped_column(ForeignKey("insurance_claims.id", ondelete="SET NULL"), nullable=True)
     preauth_id: Mapped[Optional[int]] = mapped_column(ForeignKey("insurance_pre_auths.id", ondelete="SET NULL"), nullable=True)

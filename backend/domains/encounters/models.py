@@ -97,8 +97,8 @@ class InpatientAdmission(AuditMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id", ondelete="CASCADE"), nullable=False, unique=True)
     admission_type: Mapped[AdmissionTypeEnum] = mapped_column(nullable=False)
-    current_bed_id: Mapped[Optional[int]] = mapped_column(ForeignKey("beds_master.id"))
-    admitting_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    current_bed_id: Mapped[Optional[int]] = mapped_column(ForeignKey("beds_master.id"), index=True)
+    admitting_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     discharge_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     discharge_disposition: Mapped[Optional[DischargeDispositionEnum]] = mapped_column(default=None)
     discharge_summary: Mapped[Optional[str]] = mapped_column(Text)
@@ -113,11 +113,11 @@ class BedTransferLog(AuditMixin, Base):
     __tablename__ = "bed_transfer_logs"
     __table_args__ = (Index("ix_bed_transfer_logs_transfer_time", "transfer_time"),)
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    admission_id: Mapped[int] = mapped_column(ForeignKey("inpatient_admissions.id", ondelete="CASCADE"), nullable=False)
-    from_bed_id: Mapped[Optional[int]] = mapped_column(ForeignKey("beds_master.id"))
-    to_bed_id: Mapped[int] = mapped_column(ForeignKey("beds_master.id"), nullable=False)
+    admission_id: Mapped[int] = mapped_column(ForeignKey("inpatient_admissions.id", ondelete="CASCADE"), nullable=False, index=True)
+    from_bed_id: Mapped[Optional[int]] = mapped_column(ForeignKey("beds_master.id"), index=True)
+    to_bed_id: Mapped[int] = mapped_column(ForeignKey("beds_master.id"), nullable=False, index=True)
     transfer_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=func.now(), nullable=False)
-    requested_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    requested_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     transfer_reason: Mapped[Optional[str]] = mapped_column(String(255))
 
     # FIN-002: Lock in historical bed rates at the exact time of transfer to prevent retroactive overcharging
@@ -139,13 +139,13 @@ class Appointment(AuditMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
     doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
-    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False, index=True)
     appointment_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     planned_duration_minutes: Mapped[Optional[int]] = mapped_column(Integer)
     status: Mapped[AppointmentStatusEnum] = mapped_column(default=AppointmentStatusEnum.SCHEDULED, nullable=False)
     token_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     reason_for_visit: Mapped[Optional[str]] = mapped_column(String(255))
-    encounter_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patient_encounters.id"))
+    encounter_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patient_encounters.id"), index=True)
 
     patient: Mapped["Patient"] = relationship()
     doctor: Mapped["User"] = relationship()
@@ -173,7 +173,8 @@ class AppointmentStatusHistory(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     changed_by_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("users.id"), nullable=True
+        ForeignKey("users.id"), nullable=True,
+        index=True,
     )
     reason: Mapped[Optional[str]] = mapped_column(String(500))
 
@@ -219,16 +220,19 @@ class ServiceDemandRequest(AuditMixin, Base):
         default=ServiceDemandStatusEnum.OPEN, nullable=False
     )
     patient_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("patients.id", ondelete="SET NULL")
+        ForeignKey("patients.id", ondelete="SET NULL"),
+        index=True,
     )
     department_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("departments.id", ondelete="SET NULL")
     )
     service_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("service_catalog.id", ondelete="SET NULL")
+        ForeignKey("service_catalog.id", ondelete="SET NULL"),
+        index=True,
     )
     requested_by_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"), nullable=False
+        ForeignKey("users.id"), nullable=False,
+        index=True,
     )
     external_facility_name: Mapped[Optional[str]] = mapped_column(String(200))
     resolution_notes: Mapped[Optional[str]] = mapped_column(String(1000))
@@ -258,7 +262,8 @@ class ServiceDemandStatusHistory(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     changed_by_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"), nullable=False
+        ForeignKey("users.id"), nullable=False,
+        index=True,
     )
     reason: Mapped[Optional[str]] = mapped_column(String(1000))
 
@@ -298,7 +303,8 @@ class AppointmentWaitlistEntry(AuditMixin, Base):
         ForeignKey("users.id"), nullable=False
     )
     department_id: Mapped[int] = mapped_column(
-        ForeignKey("departments.id"), nullable=False
+        ForeignKey("departments.id"), nullable=False,
+        index=True,
     )
     requested_start_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -336,7 +342,8 @@ class AppointmentWaitlistHistory(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     changed_by_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"), nullable=False
+        ForeignKey("users.id"), nullable=False,
+        index=True,
     )
     reason: Mapped[Optional[str]] = mapped_column(String(500))
 

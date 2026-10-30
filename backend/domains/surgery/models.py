@@ -63,7 +63,7 @@ class OperationTheatre(AuditMixin, Base):
     code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     theatre_type: Mapped[OTTheatreTypeEnum] = mapped_column(nullable=False)
-    floor_id: Mapped[Optional[int]] = mapped_column(ForeignKey("floors.id"), nullable=True)
+    floor_id: Mapped[Optional[int]] = mapped_column(ForeignKey("floors.id"), nullable=True, index=True)
     hourly_rate_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
@@ -81,12 +81,12 @@ class SurgicalSchedule(AuditMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     case_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id"), nullable=False)
-    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False, index=True)
     theatre_id: Mapped[int] = mapped_column(ForeignKey("operation_theatres.id"), nullable=False)
-    procedure_service_id: Mapped[int] = mapped_column(ForeignKey("service_catalog.id"), nullable=False)
+    procedure_service_id: Mapped[int] = mapped_column(ForeignKey("service_catalog.id"), nullable=False, index=True)
 
-    lead_surgeon_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
-    anesthetist_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    lead_surgeon_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    anesthetist_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
 
     scheduled_start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     scheduled_end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -121,7 +121,7 @@ class WHOSurgicalSafetyChecklist(AuditMixin, Base):
     surgery_id: Mapped[int] = mapped_column(
         ForeignKey("surgical_schedules.id", ondelete="CASCADE"), unique=True, nullable=False, index=True
     )
-    verified_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    verified_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
 
     # Phase 1 & 2: Sign-In & Time-Out (Mandatory before IN_PROGRESS incision)
     patient_identity_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

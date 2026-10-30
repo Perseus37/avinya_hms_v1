@@ -22,7 +22,8 @@ class EquipmentMaster(AuditMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     department_id: Mapped[int] = mapped_column(
-        ForeignKey("departments.id"), nullable=False
+        ForeignKey("departments.id"), nullable=False,
+        index=True,
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     manufacturer: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -42,7 +43,8 @@ class HL7IntegrationLog(AuditMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     equipment_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("equipment_master.id")
+        ForeignKey("equipment_master.id"),
+        index=True,
     )
     message_control_id: Mapped[str] = mapped_column(String(100), index=True)
     raw_payload: Mapped[str] = mapped_column(Text, nullable=False)

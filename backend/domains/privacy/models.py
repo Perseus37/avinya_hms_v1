@@ -43,7 +43,8 @@ class PatientConsentRecord(Base):
         String(20), nullable=False, default="patient", server_default="patient"
     )
     policy_revision_id: Mapped[int | None] = mapped_column(
-        ForeignKey("privacy_policy_revisions.id", name="fk_consent_policy_revision")
+        ForeignKey("privacy_policy_revisions.id", name="fk_consent_policy_revision"),
+        index=True,
     )
     form_version: Mapped[str | None] = mapped_column(String(100))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -65,7 +66,8 @@ class PrivacyRetentionPolicy(Base):
     approval_reference: Mapped[str] = mapped_column(String(100), nullable=False)
     effective_from: Mapped[date] = mapped_column(Date, nullable=False)
     configured_by_user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"), nullable=False
+        ForeignKey("users.id"), nullable=False,
+        index=True,
     )
     configured_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -125,15 +127,16 @@ class PrivacyPolicyRevision(Base):
         Boolean, nullable=False, default=False, server_default=false()
     )
     configured_by_user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"), nullable=False
+        ForeignKey("users.id"), nullable=False,
+        index=True,
     )
     configured_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    approved_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    approved_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     approval_reference: Mapped[str | None] = mapped_column(String(100))
-    mode_set_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    mode_set_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     mode_set_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     mode_approval_reference: Mapped[str | None] = mapped_column(String(100))
 
@@ -143,9 +146,10 @@ class PrivacyDecisionAudit(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     policy_revision_id: Mapped[int | None] = mapped_column(
-        ForeignKey("privacy_policy_revisions.id")
+        ForeignKey("privacy_policy_revisions.id"),
+        index=True,
     )
-    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     data_use_point: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     purpose_code: Mapped[str | None] = mapped_column(String(64))
     mode: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -181,12 +185,13 @@ class PrivacyLegalHold(Base):
     hold_reference: Mapped[str] = mapped_column(String(100), nullable=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by_user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"), nullable=False
+        ForeignKey("users.id"), nullable=False,
+        index=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    released_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    released_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     release_reference: Mapped[str | None] = mapped_column(String(100))
 
@@ -225,7 +230,8 @@ class PrivacyRetentionRunLedger(Base):
     affected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     approval_reference: Mapped[str] = mapped_column(String(100), nullable=False)
     executed_by_user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"), nullable=False
+        ForeignKey("users.id"), nullable=False,
+        index=True,
     )
     executed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
@@ -245,7 +251,7 @@ class PatientDataRightsRequest(Base):
     sla_deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     response_notes: Mapped[str | None] = mapped_column(Text)
     rejection_reason: Mapped[str | None] = mapped_column(Text)
-    handled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    handled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
@@ -267,5 +273,5 @@ class PrivacyDataBreachIncident(Base):
     reported_to_authority_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notified_subjects_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     resolution_summary: Mapped[str | None] = mapped_column(Text)
-    reported_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    reported_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)

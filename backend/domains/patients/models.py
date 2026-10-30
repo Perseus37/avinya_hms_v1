@@ -43,7 +43,7 @@ class ChiefComplaintMaster(AuditMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False, index=True)
     code: Mapped[str] = mapped_column(String(50), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True)
@@ -56,7 +56,7 @@ class ComorbidityMaster(AuditMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False, index=True)
     code: Mapped[str] = mapped_column(String(50), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     icd10_code: Mapped[Optional[str]] = mapped_column(String(20))
@@ -70,7 +70,7 @@ class AllergyMaster(AuditMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False, index=True)
     code: Mapped[str] = mapped_column(String(50), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     category: Mapped[AllergyCategoryEnum] = mapped_column(
@@ -89,13 +89,14 @@ class DiagnosisMaster(AuditMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False, index=True)
     icd10_code: Mapped[str] = mapped_column(String(20), nullable=False)
     short_description: Mapped[str] = mapped_column(String(100), nullable=False)
     full_description: Mapped[str] = mapped_column(Text, nullable=False)
     is_billable: Mapped[bool] = mapped_column(default=True)
     parent_diagnosis_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("diagnoses_master.id")
+        ForeignKey("diagnoses_master.id"),
+        index=True,
     )
     is_active: Mapped[bool] = mapped_column(default=True)
 
@@ -107,7 +108,7 @@ class PhysicalExaminationMaster(AuditMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=False, index=True)
     body_system: Mapped[BodySystemEnum] = mapped_column(nullable=False)
     code: Mapped[str] = mapped_column(String(50), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -163,7 +164,7 @@ class BreakGlassGrant(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     review_due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    reviewed_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
+    reviewed_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), index=True)
     review_outcome: Mapped[Optional[str]] = mapped_column(String(20))
     review_notes: Mapped[Optional[str]] = mapped_column(Text)
 

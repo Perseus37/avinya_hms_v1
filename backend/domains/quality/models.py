@@ -80,7 +80,8 @@ class ClinicalQualityIncident(AuditMixin, Base):
         ForeignKey("patient_encounters.id", ondelete="SET NULL"), nullable=True, index=True
     )
     ward_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("wards.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("wards.id", ondelete="SET NULL"), nullable=True,
+        index=True,
     )
     device_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)

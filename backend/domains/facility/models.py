@@ -60,9 +60,10 @@ class Ward(AuditMixin, Base):
     __tablename__ = "wards"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    floor_id: Mapped[int] = mapped_column(ForeignKey("floors.id"), nullable=False)
+    floor_id: Mapped[int] = mapped_column(ForeignKey("floors.id"), nullable=False, index=True)
     department_id: Mapped[int] = mapped_column(
-        ForeignKey("departments.id"), nullable=False
+        ForeignKey("departments.id"), nullable=False,
+        index=True,
     )
     code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -79,7 +80,8 @@ class PhysicalRoom(AuditMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     ward_id: Mapped[int] = mapped_column(
-        ForeignKey("wards.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("wards.id", ondelete="CASCADE"), nullable=False,
+        index=True,
     )
     room_number: Mapped[str] = mapped_column(String(20), nullable=False)
     room_type: Mapped[RoomTypeEnum] = mapped_column(nullable=False)
@@ -95,7 +97,8 @@ class Bed(AuditMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     room_id: Mapped[int] = mapped_column(
-        ForeignKey("physical_rooms_master.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("physical_rooms_master.id", ondelete="CASCADE"), nullable=False,
+        index=True,
     )
     bed_number: Mapped[str] = mapped_column(String(20), nullable=False)
     bed_type: Mapped[BedTypeEnum] = mapped_column(nullable=False)
@@ -112,8 +115,8 @@ class NursingShiftAssignment(AuditMixin, Base):
     __tablename__ = "nursing_shift_assignments"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    ward_id: Mapped[int] = mapped_column(ForeignKey("wards.id"), nullable=False)
-    nurse_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    ward_id: Mapped[int] = mapped_column(ForeignKey("wards.id"), nullable=False, index=True)
+    nurse_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     shift_type: Mapped[ShiftTypeEnum] = mapped_column(nullable=False)
     shift_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     handoff_notes: Mapped[Optional[str]] = mapped_column(Text)

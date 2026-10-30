@@ -93,7 +93,7 @@ class Invoice(AuditMixin, Base):
     total_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     discount_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     discount_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    discount_approved_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    discount_approved_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     amount_paid_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     tax_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     cgst_amount_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -176,7 +176,7 @@ class PatientDeposit(AuditMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
-    encounter_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patient_encounters.id"), nullable=True)
+    encounter_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patient_encounters.id"), nullable=True, index=True)
 
     deposit_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -202,14 +202,14 @@ class RefundVoucher(AuditMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     voucher_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
-    deposit_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patient_deposits.id"), nullable=True)
-    invoice_id: Mapped[Optional[int]] = mapped_column(ForeignKey("invoices.id"), nullable=True)
+    deposit_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patient_deposits.id"), nullable=True, index=True)
+    invoice_id: Mapped[Optional[int]] = mapped_column(ForeignKey("invoices.id"), nullable=True, index=True)
 
     refund_amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
     refund_method: Mapped[PaymentMethodEnum] = mapped_column(nullable=False)
     transaction_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     reason: Mapped[str] = mapped_column(String(255), nullable=False)
-    approved_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    approved_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
 
     patient: Mapped["Patient"] = relationship()
     deposit: Mapped[Optional["PatientDeposit"]] = relationship()
@@ -306,12 +306,12 @@ class ChargeCaptureEvent(AuditMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id", ondelete="CASCADE"), nullable=False)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
-    invoice_id: Mapped[int] = mapped_column(ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False)
-    invoice_line_item_id: Mapped[Optional[int]] = mapped_column(ForeignKey("invoice_line_items.id", ondelete="SET NULL"), nullable=True)
+    invoice_id: Mapped[int] = mapped_column(ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False, index=True)
+    invoice_line_item_id: Mapped[Optional[int]] = mapped_column(ForeignKey("invoice_line_items.id", ondelete="SET NULL"), nullable=True, index=True)
 
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)
     source_reference: Mapped[str] = mapped_column(String(100), nullable=False)  # e.g. SURGERY-12, CENSUS-4-2026-10-25
-    service_id: Mapped[Optional[int]] = mapped_column(ForeignKey("service_catalog.id", ondelete="SET NULL"), nullable=True)
+    service_id: Mapped[Optional[int]] = mapped_column(ForeignKey("service_catalog.id", ondelete="SET NULL"), nullable=True, index=True)
     description: Mapped[str] = mapped_column(String(255), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     unit_price_paise: Mapped[int] = mapped_column(Integer, nullable=False)

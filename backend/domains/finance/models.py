@@ -52,7 +52,7 @@ class ExpenseRecord(AuditMixin, Base):
         default=ExpenseStatusEnum.PENDING_APPROVAL,
         nullable=False,
     )
-    approved_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
+    approved_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), index=True)
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     rejection_reason: Mapped[Optional[str]] = mapped_column(String(255))
     due_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -62,7 +62,8 @@ class ExpenseRecord(AuditMixin, Base):
     vendor_name: Mapped[Optional[str]] = mapped_column(String(150))
     receipt_reference: Mapped[Optional[str]] = mapped_column(String(100))
     recurring_template_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("finance_recurring_expenses.id", ondelete="SET NULL")
+        ForeignKey("finance_recurring_expenses.id", ondelete="SET NULL"),
+        index=True,
     )
 
     approved_by: Mapped[Optional["User"]] = relationship(

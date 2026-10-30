@@ -92,13 +92,13 @@ class BloodCrossMatchOrder(AuditMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id"), nullable=False)
-    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False)
-    blood_bag_id: Mapped[int] = mapped_column(ForeignKey("blood_bag_inventory.id"), nullable=False)
-    ordered_by_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
-    cross_matched_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), nullable=False, index=True)
+    blood_bag_id: Mapped[int] = mapped_column(ForeignKey("blood_bag_inventory.id"), nullable=False, index=True)
+    ordered_by_doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    cross_matched_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
 
     issued_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    issued_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    issued_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
 
     reaction_type: Mapped[TransfusionReactionTypeEnum] = mapped_column(
         default=TransfusionReactionTypeEnum.NONE, nullable=False

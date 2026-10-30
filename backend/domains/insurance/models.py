@@ -112,7 +112,7 @@ class InsurancePlanTariff(AuditMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     plan_id: Mapped[int] = mapped_column(ForeignKey("insurance_plans.id", ondelete="CASCADE"), nullable=False)
-    service_id: Mapped[int] = mapped_column(ForeignKey("service_catalog.id", ondelete="CASCADE"), nullable=False)
+    service_id: Mapped[int] = mapped_column(ForeignKey("service_catalog.id", ondelete="CASCADE"), nullable=False, index=True)
     tariff_price_paise: Mapped[int] = mapped_column(Integer, nullable=False)
     is_covered: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
@@ -132,8 +132,8 @@ class PatientInsurancePolicy(AuditMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
-    provider_id: Mapped[int] = mapped_column(ForeignKey("insurance_providers.id"), nullable=False)
-    plan_id: Mapped[Optional[int]] = mapped_column(ForeignKey("insurance_plans.id"), nullable=True)
+    provider_id: Mapped[int] = mapped_column(ForeignKey("insurance_providers.id"), nullable=False, index=True)
+    plan_id: Mapped[Optional[int]] = mapped_column(ForeignKey("insurance_plans.id"), nullable=True, index=True)
 
     policy_number: Mapped[str] = mapped_column(String(100), nullable=False)
     member_id: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -160,8 +160,8 @@ class InsurancePreAuth(AuditMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     encounter_id: Mapped[int] = mapped_column(ForeignKey("patient_encounters.id"), nullable=False)
-    policy_id: Mapped[int] = mapped_column(ForeignKey("patient_insurance_policies.id"), nullable=False)
-    primary_diagnosis_id: Mapped[int] = mapped_column(ForeignKey("diagnoses_master.id"), nullable=False)
+    policy_id: Mapped[int] = mapped_column(ForeignKey("patient_insurance_policies.id"), nullable=False, index=True)
+    primary_diagnosis_id: Mapped[int] = mapped_column(ForeignKey("diagnoses_master.id"), nullable=False, index=True)
 
     preauth_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     status: Mapped[PreAuthStatusEnum] = mapped_column(default=PreAuthStatusEnum.SUBMITTED, nullable=False)
@@ -189,8 +189,8 @@ class InsuranceClaim(AuditMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     invoice_id: Mapped[int] = mapped_column(ForeignKey("invoices.id"), unique=True, nullable=False)
-    policy_id: Mapped[int] = mapped_column(ForeignKey("patient_insurance_policies.id"), nullable=False)
-    preauth_id: Mapped[Optional[int]] = mapped_column(ForeignKey("insurance_pre_auths.id"), nullable=True)
+    policy_id: Mapped[int] = mapped_column(ForeignKey("patient_insurance_policies.id"), nullable=False, index=True)
+    preauth_id: Mapped[Optional[int]] = mapped_column(ForeignKey("insurance_pre_auths.id"), nullable=True, index=True)
 
     claim_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     status: Mapped[ClaimStatusEnum] = mapped_column(default=ClaimStatusEnum.SUBMITTED, nullable=False)

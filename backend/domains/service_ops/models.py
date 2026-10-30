@@ -27,7 +27,7 @@ class AmbulanceDispatch(AuditMixin, Base):
     __tablename__ = "ambulance_dispatches"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    patient_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patients.id"))
+    patient_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patients.id"), index=True)
     vehicle_id: Mapped[int] = mapped_column(
         ForeignKey("ambulance_vehicles.id"), nullable=False, index=True
     )
@@ -113,7 +113,7 @@ class ServiceWorkflowEvent(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     domain: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     record_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    actor_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     from_status: Mapped[Optional[str]] = mapped_column(String(20))
     to_status: Mapped[str] = mapped_column(String(20), nullable=False)
     note: Mapped[Optional[str]] = mapped_column(Text)
@@ -158,7 +158,7 @@ class BiomedicalWasteManifest(AuditMixin, Base):
     red_weight_grams: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     white_weight_grams: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     blue_weight_grams: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    supervisor_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    supervisor_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     pickup_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -192,7 +192,7 @@ class BiomedicalWasteBag(AuditMixin, Base):
         ForeignKey("biomedical_waste_manifests.id"), index=True
     )
     waste_description: Mapped[Optional[str]] = mapped_column(Text)
-    logged_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    logged_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     logged_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )

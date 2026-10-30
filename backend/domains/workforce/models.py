@@ -47,7 +47,7 @@ class LeaveRequest(AuditMixin, Base):
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
     decision_notes: Mapped[str | None] = mapped_column(Text)
-    decided_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    decided_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -62,7 +62,7 @@ class SalaryProfile(Base):
     monthly_fixed_paise: Mapped[int] = mapped_column(Integer, nullable=False)
     effective_from: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     note: Mapped[str] = mapped_column(Text, nullable=False)
-    created_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -78,11 +78,11 @@ class PayrollPeriod(Base):
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
     working_days: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="OPEN")
-    created_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    finalized_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    finalized_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -98,7 +98,8 @@ class PayrollLine(AuditMixin, Base):
     )
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     salary_profile_id: Mapped[int] = mapped_column(
-        ForeignKey("salary_profiles.id"), nullable=False
+        ForeignKey("salary_profiles.id"), nullable=False,
+        index=True,
     )
     monthly_fixed_paise: Mapped[int] = mapped_column(Integer, nullable=False)
     paid_days: Mapped[Decimal] = mapped_column(Numeric(7, 2), nullable=False)
@@ -130,7 +131,7 @@ class PayrollCalculationEvent(Base):
     line_id: Mapped[int] = mapped_column(
         ForeignKey("payroll_lines.id"), nullable=False, index=True
     )
-    actor_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     input_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
     output_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(
