@@ -31,6 +31,7 @@ def test_named_operator_mfa_login_auths_control_plane_and_logout_revokes(
             ControlPlaneOperator(
                 email="operator@example.com",
                 full_name="Test Operator",
+                role="superadmin",
                 password_hash=pwd_context.hash("OperatorPass123!"),
             )
         )

@@ -20,7 +20,7 @@ def render_alertmanager_config(env_file: Path | None = None, output_file: Path |
         env_values = dotenv_values(env_file, interpolate=False)
 
     def get_val(key: str, default: str) -> str:
-        val = os.getenv(key) or env_values.get(key)
+        val = env_values.get(key) or os.getenv(key)
         return val.strip() if val and val.strip() else default
 
     # 1. Resolve SMTP host and port
