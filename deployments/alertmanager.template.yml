@@ -1,0 +1,49 @@
+# =============================================================================
+# Avinya HMS Production Alertmanager Configuration Template
+# Render with: python backend/scripts/render_alertmanager_config.py
+# =============================================================================
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: "${ALERT_SMTP_SMARTHOST}"
+  smtp_from: "${ALERT_SMTP_FROM}"
+  smtp_require_tls: true
+
+route:
+  group_by: ["alertname", "cluster", "service", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: "default-receiver"
+  routes:
+    - match:
+        severity: critical
+      receiver: "critical-receiver"
+      repeat_interval: 1h
+    - match:
+        severity: warning
+      receiver: "warning-receiver"
+      repeat_interval: 6h
+
+receivers:
+  - name: "default-receiver"
+    webhook_configs:
+      - url: "${ALERT_DEFAULT_WEBHOOK_URL}"
+        send_resolved: true
+
+  - name: "critical-receiver"
+    webhook_configs:
+      - url: "${ALERT_CRITICAL_WEBHOOK_URL}"
+        send_resolved: true
+
+  - name: "warning-receiver"
+    webhook_configs:
+      - url: "${ALERT_WARNING_WEBHOOK_URL}"
+        send_resolved: true
+
+inhibit_rules:
+  - source_match:
+      severity: "critical"
+    target_match:
+      severity: "warning"
+    equal: ["alertname", "service"]
+

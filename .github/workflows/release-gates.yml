@@ -129,6 +129,12 @@ jobs:
           cp .env.production.example .env.production
           docker compose --env-file .env.production -f docker-compose.prod.yml config --quiet
 
+      - name: Validate Prometheus and Alertmanager configurations
+        run: |
+          docker run --rm -v "$(pwd)/deployments:/deployments" prom/prometheus:v2.53.3 promtool check config /deployments/prometheus.yml
+          docker run --rm -v "$(pwd)/deployments:/deployments" prom/prometheus:v2.53.3 promtool check rules /deployments/prometheus-alerts.yml
+          docker run --rm -v "$(pwd)/deployments:/deployments" prom/alertmanager:v0.27.0 amtool check-config /deployments/alertmanager.yml
+
   production-image:
     name: Build production API image
     runs-on: ubuntu-latest

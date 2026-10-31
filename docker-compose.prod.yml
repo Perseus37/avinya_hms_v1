@@ -367,6 +367,9 @@ services:
     security_opt:
       - "no-new-privileges:true"
     user: "65534:65534"
+    cap_drop:
+      - ALL
+    read_only: true
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -400,6 +403,9 @@ services:
     security_opt:
       - "no-new-privileges:true"
     user: "65534:65534"
+    cap_drop:
+      - ALL
+    read_only: true
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
       - "--storage.path=/alertmanager"
@@ -429,6 +435,10 @@ services:
     restart: unless-stopped
     security_opt:
       - "no-new-privileges:true"
+    user: "65534:65534"
+    cap_drop:
+      - ALL
+    read_only: true
     environment:
       DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:${POSTGRES_PORT:-5432}/${POSTGRES_DB:?POSTGRES_DB is required}?sslmode=disable"
     depends_on:
@@ -452,6 +462,10 @@ services:
     restart: unless-stopped
     security_opt:
       - "no-new-privileges:true"
+    user: "65534:65534"
+    cap_drop:
+      - ALL
+    read_only: true
     environment:
       REDIS_ADDR: "redis:${REDIS_PORT:-6379}"
       REDIS_PASSWORD: "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"
@@ -476,6 +490,10 @@ services:
     restart: unless-stopped
     security_opt:
       - "no-new-privileges:true"
+    user: "65534:65534"
+    cap_drop:
+      - ALL
+    read_only: true
     command:
       - "--path.procfs=/host/proc"
       - "--path.sysfs=/host/sys"
@@ -486,7 +504,7 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/host/root:ro
-      - hms_node_exporter_textfile:/var/lib/node_exporter/textfile_collector:ro
+      - ${NODE_EXPORTER_TEXTFILE_HOST_PATH:-/var/lib/node_exporter/textfile_collector}:/var/lib/node_exporter/textfile_collector:ro
     deploy:
       resources:
         limits:
@@ -520,4 +538,3 @@ volumes:
   hms_clamav_db:
   hms_prometheus_data:
   hms_alertmanager_data:
-  hms_node_exporter_textfile:

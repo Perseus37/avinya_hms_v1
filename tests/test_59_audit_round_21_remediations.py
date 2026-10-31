@@ -17,6 +17,7 @@ Verifies remediations for findings identified in external auditor report (Round 
    - Guarantees database session cleanup via finally block.
 """
 
+from pathlib import Path
 import jwt
 from starlette.testclient import TestClient
 
@@ -382,4 +383,119 @@ def test_control_plane_metrics_and_health_endpoint(monkeypatch):
     assert valid_res.status_code == 200
     assert "process_cpu_seconds_total" in valid_res.text or "python_info" in valid_res.text or len(valid_res.text) > 0
 
+def test_n85_alertmanager_static_syntax_and_renderer(tmp_path):
+    """
+    N-85: Alertmanager syntax must be strictly valid static YAML without raw shell ${VAR} strings.
+    The renderer backend.scripts.render_alertmanager_config must substitute variables and validate URLs.
+    """
+    import re
+    import yaml
+    import pytest
+    from backend.scripts.render_alertmanager_config import render_alertmanager_config
 
+    am_path = Path("deployments/alertmanager.yml")
+    assert am_path.is_file()
+    raw_text = am_path.read_text(encoding="utf-8")
+
+    # 1. Statically committed alertmanager.yml must have zero unexpanded placeholders
+    placeholders = re.findall(r"\$\{[^}]+\}", raw_text)
+    assert not placeholders, f"Unexpanded placeholders found in alertmanager.yml: {placeholders}"
+
+    # 2. Must parse cleanly as YAML
+    data = yaml.safe_load(raw_text)
+    assert "route" in data
+    assert "receivers" in data
+    assert "smtp_smarthost" in data.get("global", {})
+    # SMTP smarthost must have host:port format without extra colons
+    smarthost = data["global"]["smtp_smarthost"]
+    assert smarthost.count(":") == 1
+
+    # 3. All receiver webhooks must have valid URLs
+    for receiver in data["receivers"]:
+        for webhook in receiver.get("webhook_configs", []):
+            url = webhook["url"]
+            assert url.startswith("http://") or url.startswith("https://")
+            assert not url.startswith("${")
+
+    # 4. Test render_alertmanager_config function with custom env file
+    custom_env = tmp_path / "custom.env"
+    custom_env.write_text(
+        "SMTP_HOST=mail.hospital.org\n"
+        "SMTP_PORT=25\n"
+        "ALERT_EMAIL_FROM=noc@hospital.org\n"
+        "ALERT_DEFAULT_WEBHOOK_URL=https://api.hospital.org/alerts/ingress\n",
+        encoding="utf-8",
+    )
+    rendered_output = tmp_path / "alertmanager.rendered.yml"
+    render_alertmanager_config(env_file=custom_env, output_file=rendered_output)
+
+    rendered_data = yaml.safe_load(rendered_output.read_text(encoding="utf-8"))
+    assert rendered_data["global"]["smtp_smarthost"] == "mail.hospital.org:25"
+    assert rendered_data["global"]["smtp_from"] == "noc@hospital.org"
+    assert rendered_data["receivers"][0]["webhook_configs"][0]["url"] == "https://api.hospital.org/alerts/ingress"
+    assert rendered_data["receivers"][1]["webhook_configs"][0]["url"] == "https://api.hospital.org/alerts/ingress?severity=critical"
+
+    # 5. Invalid URL in env file raises ValueError
+    bad_env = tmp_path / "bad.env"
+    bad_env.write_text("ALERT_DEFAULT_WEBHOOK_URL=not-a-valid-url\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Invalid URL"):
+        render_alertmanager_config(env_file=bad_env, output_file=rendered_output)
+
+
+def test_n86_n87_compose_production_monitoring_hardening():
+    """
+    N-86 & N-87:
+    - node-exporter must bind-mount host textfile directory via NODE_EXPORTER_TEXTFILE_HOST_PATH,
+      not an isolated Docker named volume.
+    - All monitoring services (prometheus, alertmanager, postgres-exporter, redis-exporter, node-exporter)
+      must have security hardening: user 65534:65534, cap_drop ALL, and read_only true.
+    """
+    import yaml
+
+    prod_compose_path = Path("docker-compose.prod.yml")
+    assert prod_compose_path.is_file()
+    compose = yaml.safe_load(prod_compose_path.read_text(encoding="utf-8"))
+
+    # N-86: node-exporter volume
+    node_exp = compose["services"]["node-exporter"]
+    node_volumes = node_exp["volumes"]
+    assert any("NODE_EXPORTER_TEXTFILE_HOST_PATH" in v and "/var/lib/node_exporter/textfile_collector:ro" in v for v in node_volumes)
+    assert "hms_node_exporter_textfile" not in compose.get("volumes", {})
+
+    # N-87: exporter hardening
+    monitoring_services = [
+        "prometheus",
+        "alertmanager",
+        "postgres-exporter",
+        "redis-exporter",
+        "node-exporter",
+    ]
+    for name in monitoring_services:
+        svc = compose["services"][name]
+        assert svc.get("user") == "65534:65534", f"{name} must run as user 65534:65534"
+        assert svc.get("read_only") is True, f"{name} must have read_only: true"
+        assert svc.get("cap_drop") == ["ALL"], f"{name} must have cap_drop: [ALL]"
+        assert svc.get("security_opt") == ["no-new-privileges:true"], f"{name} must have no-new-privileges:true"
+
+
+def test_n88_backup_metric_preservation_separation():
+    """
+    N-88: PostgreSQL backup script must separate completion metric from status metric.
+    - backup_postgres_last_success.prom must ONLY be written on success so that subsequent
+      failures do NOT clobber backup_last_completion_timestamp_seconds.
+    - backup_postgres_status.prom must record backup_last_status (0 on failure, 1 on success).
+    """
+    backup_sh = Path("deployments/backup-postgres.sh").read_text(encoding="utf-8")
+
+    # In cleanup / failure handler
+    assert "backup_postgres_status.prom" in backup_sh
+    assert "backup_last_status 0" in backup_sh
+    # Failure handler must NOT overwrite or remove backup_postgres_last_success.prom
+    cleanup_func = backup_sh[backup_sh.find("cleanup()"):backup_sh.find("trap cleanup EXIT")]
+    assert "backup_postgres_last_success.prom" not in cleanup_func
+
+    # In success block
+    success_block = backup_sh[backup_sh.find("Publish completion metrics"):backup_sh.find("if [[ -n \"${BACKUP_REMOTE_DEST:-}\" ]]")]
+    assert "backup_postgres_last_success.prom" in success_block
+    assert "backup_last_completion_timestamp_seconds" in success_block
+    assert "backup_last_status 1" in success_block

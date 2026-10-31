@@ -1,12 +1,11 @@
 # =============================================================================
-# Avinya HMS Production Alertmanager Configuration
+# Avinya HMS Production Alertmanager Configuration Template
+# Render with: python backend/scripts/render_alertmanager_config.py
 # =============================================================================
 global:
   resolve_timeout: 5m
-  smtp_smarthost: "${SMTP_HOST:-localhost}:${SMTP_PORT:-587}"
-  smtp_from: "${ALERT_EMAIL_FROM:-alerts@avinya-hms.local}"
-  smtp_auth_username: "${SMTP_USER:-}"
-  smtp_auth_password: "${SMTP_PASSWORD:-}"
+  smtp_smarthost: "smtp.example.com:587"
+  smtp_from: "alerts@avinya-hms.local"
   smtp_require_tls: true
 
 route:
@@ -28,17 +27,17 @@ route:
 receivers:
   - name: "default-receiver"
     webhook_configs:
-      - url: "${ALERT_WEBHOOK_URL:-http://localhost:5001/alerts/fallback}"
+      - url: "http://api:8000/api/v1/alerts/ingress"
         send_resolved: true
 
   - name: "critical-receiver"
     webhook_configs:
-      - url: "${ALERT_CRITICAL_WEBHOOK_URL:-http://localhost:5001/alerts/critical}"
+      - url: "http://api:8000/api/v1/alerts/ingress?severity=critical"
         send_resolved: true
 
   - name: "warning-receiver"
     webhook_configs:
-      - url: "${ALERT_WARNING_WEBHOOK_URL:-http://localhost:5001/alerts/warning}"
+      - url: "http://api:8000/api/v1/alerts/ingress?severity=warning"
         send_resolved: true
 
 inhibit_rules:
