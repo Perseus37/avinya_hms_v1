@@ -84,3 +84,26 @@ def test_foreign_key_migration_e1a3c7b5d902_matches_metadata():
                 os.remove(temp_db_path)
             except Exception:
                 pass
+
+def test_concurrent_index_generation_sql_and_cli():
+    """
+    N-84: Verify generate_concurrent_index_sqls outputs valid CREATE INDEX CONCURRENTLY statements
+    and honors existing index sets without generating duplicates.
+    """
+    from backend.scripts.build_indexes_concurrently import generate_concurrent_index_sqls
+
+    # Empty existing set should produce statements for all indexed columns
+    all_stmts = generate_concurrent_index_sqls(Base.metadata, set())
+    assert len(all_stmts) >= 134
+    for idx_name, table_name, sql in all_stmts:
+        assert sql.startswith("CREATE INDEX CONCURRENTLY IF NOT EXISTS") or sql.startswith(
+            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS"
+        )
+        assert f'"{idx_name}"' in sql
+        assert f'"{table_name}"' in sql
+        assert sql.endswith(");")
+
+    # If all index names are in existing set, 0 statements generated
+    existing_all = {idx_name.lower() for idx_name, _, _ in all_stmts}
+    remaining = generate_concurrent_index_sqls(Base.metadata, existing_all)
+    assert remaining == []

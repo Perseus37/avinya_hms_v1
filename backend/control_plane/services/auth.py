@@ -15,15 +15,15 @@ from backend.core import database
 from backend.core.config import settings
 from backend.core.database import get_control_db
 from backend.core.dependencies import RateLimiter
-
-ControlSessionLocal = database.ControlSessionLocal
 from backend.control_plane.models import (
     ControlPlaneOperator,
     ControlPlaneOperatorSession,
 )
 from backend.domains.identity.passwords import pwd_context
 from backend.security.envelope import decrypt_tenant_secret, encrypt_tenant_secret
-from backend.security.totp import matching_totp_counter, totp_code
+from backend.security.totp import matching_totp_counter
+
+ControlSessionLocal = database.ControlSessionLocal
 
 control_plane_actor: ContextVar[Optional[str]] = ContextVar(
     "control_plane_actor", default=None
@@ -147,7 +147,7 @@ def authenticate_operator_token(token: str) -> Optional[dict[str, object]]:
         return {
             "id": operator.id,
             "email": operator.email,
-            "role": getattr(operator, "role", "superadmin"),
+            "role": getattr(operator, "role", "viewer"),
             "token_id": token_id,
         }
 

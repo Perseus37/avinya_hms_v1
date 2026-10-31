@@ -5,7 +5,6 @@ from backend.scripts.generate_key import generate_keys
 from backend.scripts.create_control_plane_operator import _validate_password, main as operator_main
 from backend.scripts.bootstrap import main as bootstrap_main
 from backend.scripts.migrate import main as migrate_main
-from backend.scripts.seed import main as seed_main
 
 
 def test_generate_key_entropy_and_lengths():
@@ -93,6 +92,42 @@ def test_create_control_plane_operator_duplicate_rejection():
                 "--password", "AdminPassword123!",
                 "--role", "ops"
             ])
+
+
+def test_create_control_plane_operator_update_role():
+    """Verify --update-role updates an existing operator's role without requiring passwords."""
+    from unittest.mock import MagicMock, patch
+    from backend.control_plane.models import ControlPlaneOperator
+
+    mock_db = MagicMock()
+    existing_operator = ControlPlaneOperator(
+        id=42,
+        email="operator@avinya-hms.com",
+        full_name="Existing Operator",
+        role="superadmin",
+        password_hash="dummy_hash",
+    )
+    mock_db.execute.return_value.scalar_one_or_none.return_value = existing_operator
+
+    with patch("backend.scripts.create_control_plane_operator.ControlSessionLocal") as mock_session_ctx:
+        mock_session_ctx.return_value.__enter__.return_value = mock_db
+        ret = operator_main([
+            "--email", "operator@avinya-hms.com",
+            "--role", "viewer",
+            "--update-role",
+        ])
+        assert ret == 0
+        assert existing_operator.role == "viewer"
+        assert mock_db.commit.called
+
+
+def test_control_plane_operator_model_defaults_to_viewer():
+    """N-36: ControlPlaneOperator model must default to least-privilege 'viewer' role, not superadmin."""
+    from backend.control_plane.models import ControlPlaneOperator
+
+    role_col = ControlPlaneOperator.__table__.c.role
+    assert role_col.default.arg == "viewer"
+    assert "viewer" in str(role_col.server_default.arg)
 
 
 def test_migrate_cli_accepts_all_tenants_alias(monkeypatch):

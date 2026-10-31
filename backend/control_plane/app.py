@@ -126,9 +126,9 @@ async def operator_session_middleware(request: Request, call_next):
     request.state.operator_email = identity["email"] if identity else None
     request.state.operator_id = identity["id"] if identity else None
     request.state.operator_token_id = identity["token_id"] if identity else None
-    request.state.operator_role = str(identity.get("role", "superadmin")) if identity else None
+    request.state.operator_role = str(identity.get("role", "viewer")) if identity else None
     actor_token = control_plane_actor.set(str(identity["email"])) if identity else None
-    role_token = control_plane_operator_role.set(str(identity.get("role", "superadmin"))) if identity else None
+    role_token = control_plane_operator_role.set(str(identity.get("role", "viewer"))) if identity else None
     try:
         return await call_next(request)
     finally:

@@ -10,13 +10,13 @@ _REPO_DIR = _BACKEND_DIR.parent
 if str(_REPO_DIR) not in sys.path:
     sys.path.insert(0, str(_REPO_DIR))
 
-from pydantic import EmailStr, TypeAdapter
-from sqlalchemy import select
-from sqlalchemy.exc import OperationalError
+from pydantic import EmailStr, TypeAdapter  # noqa: E402
+from sqlalchemy import select  # noqa: E402
+from sqlalchemy.exc import OperationalError  # noqa: E402
 
-from backend.core.database import ControlSessionLocal
-from backend.control_plane.models import ControlPlaneOperator
-from backend.domains.identity.passwords import pwd_context
+from backend.core.database import ControlSessionLocal  # noqa: E402
+from backend.control_plane.models import ControlPlaneOperator  # noqa: E402
+from backend.domains.identity.passwords import pwd_context  # noqa: E402
 
 
 def _validate_password(password: str) -> None:
@@ -51,6 +51,11 @@ def main(argv: list[str] | None = None) -> int:
         choices=["superadmin", "ops", "support", "billing", "viewer"],
         help="Operator RBAC role (default: viewer)",
     )
+    parser.add_argument(
+        "--update-role",
+        action="store_true",
+        help="Update role of an existing operator without requiring password re-entry",
+    )
     args = parser.parse_args(argv)
     raw_email = args.email.strip().lower()
     try:
@@ -66,6 +71,28 @@ def main(argv: list[str] | None = None) -> int:
         if args.name and args.name.strip()
         else email.split("@")[0].replace(".", " ").title()
     ) or "Administrator"
+
+    if args.update_role:
+        try:
+            with ControlSessionLocal() as db:
+                operator = db.execute(
+                    select(ControlPlaneOperator).where(
+                        ControlPlaneOperator.email == email
+                    )
+                ).scalar_one_or_none()
+                if not operator:
+                    parser.error(f"Cannot update role: no operator found with email '{email}'.")
+                old_role = operator.role
+                operator.role = args.role
+                db.commit()
+                print(f"Updated operator {email} role from '{old_role}' to '{args.role}'.")
+                return 0
+        except OperationalError:
+            print(
+                "Could not update operator; verify the control-plane database is available.",
+                file=sys.stderr,
+            )
+            return 1
 
     if args.password is not None:
         from backend.core.config import settings
